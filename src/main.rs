@@ -11,10 +11,14 @@
 //!                              edge map, and print the top edges.
 
 mod analytics_kernel;
+mod circuit_breaker;
 mod config;
 mod costs;
+mod execution_staging;
 mod ingestion_engine;
+mod journal_sync;
 mod news_engine;
+mod portfolio_analytics;
 mod regime;
 mod risk_manager;
 mod server;
@@ -22,6 +26,7 @@ mod stats;
 mod storage_kernel;
 mod strategy_engine;
 mod suggestion_engine;
+mod swing_analyzer;
 mod types;
 mod validation;
 
@@ -286,6 +291,15 @@ fn run_serve(raw: &[String]) -> Result<()> {
         "replay",
     )));
     let notify = Arc::new(tokio::sync::Notify::new());
+    // Trading Desk: signal-freeze state + manual-validation journal (DuckDB file).
+    std::fs::create_dir_all("data/journals").ok();
+    let journal_conn = journal_sync::open_journal(std::path::Path::new(
+        "data/journals/journal_2026.duckdb",
+    ))?;
+    let freeze = Arc::new(std::sync::RwLock::new(types::FreezeState::active(
+        config::CAPITAL_POOL,
+        config::DRAWDOWN_FREEZE_PCT,
+    )));
     let state = server::AppState {
         packet: packet.clone(),
         settings: settings.clone(),
@@ -293,6 +307,8 @@ fn run_serve(raw: &[String]) -> Result<()> {
         static_dir: std::path::PathBuf::from("ui"),
         root: root.clone(),
         scanner: Arc::new(std::sync::RwLock::new(None)),
+        freeze: freeze.clone(),
+        journal: Arc::new(std::sync::Mutex::new(journal_conn)),
     };
 
     // Ingestion thread: replay the latest session.

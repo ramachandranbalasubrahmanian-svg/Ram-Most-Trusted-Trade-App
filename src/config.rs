@@ -138,6 +138,45 @@ pub const RISK_DEFAULT_PCT: f64 = 0.01;
 /// MIS intraday leverage cap used for the budget → max-notional guard.
 pub const LEVERAGE: f64 = 5.0;
 
+// --- Trading Desk: capital pool, risk tiers, circuit breaker ---------------
+
+/// Liquid trading capital pool for the Trading Desk (₹10,00,000).
+pub const CAPITAL_POOL: f64 = 1_000_000.0;
+/// Scalable ceiling for the capital pool (₹15,00,000).
+pub const CAPITAL_POOL_MAX: f64 = 1_500_000.0;
+
+/// Three selectable manual risk tiers (fraction of capital risked per signal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RiskTier {
+    Conservative,
+    Moderate,
+    Aggressive,
+}
+
+impl RiskTier {
+    pub fn pct(self) -> f64 {
+        match self {
+            RiskTier::Conservative => 0.005,
+            RiskTier::Moderate => 0.01,
+            RiskTier::Aggressive => 0.02,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RiskTier::Conservative => "Conservative",
+            RiskTier::Moderate => "Moderate",
+            RiskTier::Aggressive => "Aggressive",
+        }
+    }
+}
+
+/// Daily synthetic-drawdown limit: a paper loss beyond −2% of the capital pool
+/// triggers a system-wide Signal Freeze for the rest of the session.
+pub const DRAWDOWN_FREEZE_PCT: f64 = 0.02;
+
+/// ATR multiple for the SEBI-compliance limit buffer: `limit = LTP ± ATR×0.1`.
+pub const STAGING_LIMIT_ATR_MULT: f64 = 0.1;
+
 /// Live UI-controlled settings. Always clamped to safe bounds on construction.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct UserSettings {

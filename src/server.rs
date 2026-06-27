@@ -49,6 +49,11 @@ pub struct AppState {
     pub root: PathBuf,
     /// Cached 10-Buy / 10-Sell scanner result (computed lazily on first request).
     pub scanner: Arc<RwLock<Option<crate::types::ScanResult>>>,
+    /// Signal-freeze state (manual button or synthetic-drawdown circuit breaker).
+    pub freeze: Arc<RwLock<crate::types::FreezeState>>,
+    /// Manual-validation journal (file-based DuckDB), behind a Mutex for the
+    /// async handlers (each op runs on spawn_blocking).
+    pub journal: Arc<std::sync::Mutex<duckdb::Connection>>,
 }
 
 /// Run the Axum server until the process exits.

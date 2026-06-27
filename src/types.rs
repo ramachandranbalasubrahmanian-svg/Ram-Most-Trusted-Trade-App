@@ -493,6 +493,181 @@ pub struct FinderResult {
     pub built_ist: String,
 }
 
+// ===========================================================================
+// Trading Desk: signal staging, journal, circuit breaker, swing, portfolio
+// ===========================================================================
+
+/// A synthetic, SEBI-2026-compliant Bracket Order payload — generated for manual
+/// copy/paste, NEVER sent to a broker. All prices are LIMIT (no naked market).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BracketOrder {
+    pub symbol: String,
+    pub instrument_token: u32,
+    pub side: String, // "BUY" | "SELL"
+    pub qty: i64,
+    /// LTP ± ATR×0.1 (compliance buffer): the staged limit entry.
+    pub limit_price: f64,
+    pub stop_loss: f64,
+    pub take_profit: f64,
+    /// Trailing distance in price (ATR-scaled).
+    pub trailing: f64,
+    pub variety: String, // "BO"
+}
+
+/// One row of the Intraday Staging Console: a ready-to-copy staged signal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagedSignal {
+    pub symbol: String,
+    pub instrument_token: u32,
+    pub side: String,
+    pub ltp: f64,
+    pub atr: f64,
+    pub limit_price: f64,
+    pub stop_loss: f64,
+    pub take_profit: f64,
+    pub qty: i64,
+    pub notional: f64,
+    pub bracket: BracketOrder,
+    /// One-line copy/paste execution text.
+    pub copy_text: String,
+}
+
+/// Lifecycle state of a generated signal in the manual journal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SignalState {
+    Generated,
+    ManuallyAccepted,
+    ManuallyRejected,
+    Skipped,
+}
+
+impl SignalState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SignalState::Generated => "Generated",
+            SignalState::ManuallyAccepted => "Manually_Accepted",
+            SignalState::ManuallyRejected => "Manually_Rejected",
+            SignalState::Skipped => "Skipped",
+        }
+    }
+    pub fn from_str(s: &str) -> SignalState {
+        match s {
+            "Manually_Accepted" => SignalState::ManuallyAccepted,
+            "Manually_Rejected" => SignalState::ManuallyRejected,
+            "Skipped" => SignalState::Skipped,
+            _ => SignalState::Generated,
+        }
+    }
+}
+
+/// One row of `manual_validation_journal_2026`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JournalEntry {
+    pub id: i64,
+    pub generated_ist: String,
+    pub entry_ist: Option<String>,
+    pub exit_ist: Option<String>,
+    pub instrument_token: u32,
+    pub symbol: String,
+    pub direction: String,
+    pub strategy: String,
+    pub alpha_trigger: String,
+    pub intended_price: f64,
+    /// User-entered actual fill (to compute true manual slippage).
+    pub actual_fill_price: Option<f64>,
+    pub exit_price: Option<f64>,
+    pub qty: i64,
+    pub state: String,
+    pub pnl: Option<f64>,
+    /// actual_fill − intended (signed by direction), in ₹/share.
+    pub slippage: Option<f64>,
+    pub sector: Option<String>,
+}
+
+/// Inbound payload to log/update a signal from the UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JournalUpdate {
+    pub id: i64,
+    pub state: String,
+    pub actual_fill_price: Option<f64>,
+    pub exit_price: Option<f64>,
+}
+
+/// Synthetic drawdown / signal-freeze state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FreezeState {
+    pub frozen: bool,
+    pub reason: String,
+    /// Today's synthetic mark-to-market PnL across accepted trades (₹).
+    pub daily_pnl: f64,
+    /// The -2% capital threshold in ₹ (negative).
+    pub threshold: f64,
+    pub capital_pool: f64,
+}
+
+impl FreezeState {
+    pub fn active(capital_pool: f64, threshold_pct: f64) -> Self {
+        FreezeState {
+            frozen: false,
+            reason: String::new(),
+            daily_pnl: 0.0,
+            threshold: -capital_pool * threshold_pct,
+            capital_pool,
+        }
+    }
+}
+
+/// One multi-day swing setup in the daily catalog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwingSetup {
+    pub symbol: String,
+    /// "volume_delivery_breakout" | "mean_reversion_200ema"
+    pub kind: String,
+    pub side: String,
+    pub last_close: f64,
+    pub ema200: f64,
+    /// Latest volume / 50-day average volume.
+    pub vol_ratio: f64,
+    pub support: f64,
+    pub resistance: f64,
+    pub atr: f64,
+    pub note: String,
+    pub score: f64,
+}
+
+/// The pre-market Swing Trades Catalog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwingCatalog {
+    pub setups: Vec<SwingSetup>,
+    pub scanned: usize,
+    pub built_ist: String,
+}
+
+/// Per-group performance attribution row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttributionRow {
+    pub key: String,
+    pub trades: usize,
+    pub win_rate: f64,
+    pub profit_factor: f64,
+    pub pnl: f64,
+}
+
+/// Post-trade portfolio analytics from the journal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortfolioMetrics {
+    pub trades: usize,
+    pub win_rate: f64,
+    pub profit_factor: f64,
+    pub sharpe: f64,
+    pub max_drawdown: f64,
+    pub total_pnl: f64,
+    /// Cumulative equity curve points: (label, cumulative_pnl).
+    pub equity_curve: Vec<(String, f64)>,
+    pub by_strategy: Vec<AttributionRow>,
+    pub by_sector: Vec<AttributionRow>,
+}
+
 /// NIFTY regime + market breadth context (display-only; never changes a score).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegimeInfo {
