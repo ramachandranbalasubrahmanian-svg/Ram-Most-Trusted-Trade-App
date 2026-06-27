@@ -305,6 +305,14 @@ pub struct SetupCard {
     pub exp_ci_high: f64,
     pub exp_shrunk: f64,      // Bayesian-shrunk expectancy
 
+    // honesty stats (display-only; never feed Confidence)
+    #[serde(default)]
+    pub ambiguous_frac: f64,  // frac of exits on bars that spanned BOTH stop+target
+    #[serde(default)]
+    pub exp_2x_slip: f64,     // net expectancy (R) if slippage is 2× the model
+    #[serde(default)]
+    pub exp_3x_slip: f64,     // net expectancy (R) if slippage is 3× the model
+
     // probability / confidence / conviction
     pub prob_score: f64,      // win chance 0-100 (historical win rate)
     pub prob_floor: f64,      // 95% Wilson lower bound on win rate
@@ -419,6 +427,12 @@ pub struct ScannerRow {
     pub profit_factor: f64,
     pub n_trades: usize,
     pub entry: f64,
+    /// Reliability provenance of this row's Confidence. The scanner gates over a
+    /// lighter 3-interval (15m/30m/60m) DSR trial set; the per-stock deep-dive
+    /// searches 6 intervals and is the stricter, authoritative number. "scan"
+    /// here tells the UI to footnote "open the deep-dive for the final score".
+    #[serde(default)]
+    pub reliability: String,
 }
 
 /// The scanner result: top-N best Buy and Sell setups across the universe.
@@ -675,4 +689,9 @@ pub struct RegimeInfo {
     pub breadth_up: usize,
     pub breadth_down: usize,
     pub breadth_label: String, // "narrow" | "broad" | "neutral"
+    /// When this snapshot was computed (IST "YYYY-MM-DD HH:MM:SS"). Display-only,
+    /// so a cached/stale regime is never presented as live. Defaults empty for
+    /// back-compat with any older serialized payloads.
+    #[serde(default)]
+    pub built_ist: String,
 }

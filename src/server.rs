@@ -30,9 +30,10 @@ use serde::Deserialize;
 use tokio::sync::Notify;
 use tracing::{info, warn};
 
+use crate::cache::{CapRiskKey, Cached, KeyedCache};
 use crate::config::UserSettings;
 use crate::types::{
-    FinderResult, FreezeState, JournalEntry, JournalUpdate, PortfolioMetrics, RegimeInfo,
+    FinderResult, JournalEntry, JournalUpdate, PortfolioMetrics, RegimeInfo,
     ScanResult, SignalPacket, StockSuggestion, SwingCatalog,
 };
 
@@ -50,8 +51,14 @@ pub struct AppState {
     pub static_dir: PathBuf,
     /// Parquet archive root, for on-demand suggestion analysis.
     pub root: PathBuf,
-    /// Cached 10-Buy / 10-Sell scanner result (computed lazily on first request).
-    pub scanner: Arc<RwLock<Option<crate::types::ScanResult>>>,
+    /// Warm, stale-while-revalidate caches for the heavy universe scans. Each is
+    /// served instantly and refreshed in the background (see [`read_through`]).
+    pub scanner: Arc<Cached<ScanResult>>,
+    pub regime: Arc<Cached<RegimeInfo>>,
+    pub swing: Arc<Cached<SwingCatalog>>,
+    /// Capital+risk-keyed cache for the finder (and the desk's staging console,
+    /// which reuses the same keys at the pool capital × risk tier).
+    pub finder: Arc<KeyedCache<FinderResult>>,
     /// Signal-freeze state (manual button or synthetic-drawdown circuit breaker).
     pub freeze: Arc<RwLock<crate::types::FreezeState>>,
     /// Manual-validation journal (file-based DuckDB), behind a Mutex for the
@@ -182,44 +189,103 @@ async fn suggest_handler(
     }
 }
 
-/// `GET /api/scanner` — the Top-10 Buy / Sell scanner. The ~minute-long scan
-/// runs once and is cached in `state.scanner`; subsequent requests serve the
-/// cached result. Never holds a sync lock across an `.await`.
+/// Stale-while-revalidate read-through over a [`Cached`] slot.
+///
+/// - **Fresh hit** → return it immediately.
+/// - **Stale hit** → return the stale value now *and* kick a detached background
+///   refresh (only if we win the single-flight race). The request never waits.
+/// - **Cold miss** → if we win single-flight, compute inline once and store;
+///   otherwise wait for the in-flight winner (startup warm / another request) so
+///   the universe scan runs at most once.
+///
+/// `compute` is the heavy synchronous work; it runs on `spawn_blocking`, so the
+/// async runtime is never blocked, and no lock is ever held across an `.await`
+/// (every guard lives entirely inside a `Cached` method call).
+async fn read_through<T, F>(
+    cache: Arc<Cached<T>>,
+    label: &'static str,
+    compute: F,
+    built_ist_of: fn(&T) -> String,
+) -> Option<T>
+where
+    T: Clone + Send + Sync + 'static,
+    F: Fn() -> Option<T> + Send + Sync + Clone + 'static,
+{
+    let look = cache.lookup();
+    if let Some(value) = look.value {
+        if look.stale && cache.try_begin_refresh() {
+            let cache2 = cache.clone();
+            let compute2 = compute.clone();
+            tokio::spawn(async move {
+                let t0 = std::time::Instant::now();
+                let computed =
+                    tokio::task::spawn_blocking(move || compute2()).await.ok().flatten();
+                match computed {
+                    Some(val) => {
+                        let stamp = built_ist_of(&val);
+                        cache2.store(val, stamp);
+                        info!("api={label} cache=refresh compute_ms={}", t0.elapsed().as_millis());
+                    }
+                    None => cache2.abort_refresh(),
+                }
+            });
+        }
+        return Some(value);
+    }
+
+    // Cold miss.
+    if cache.try_begin_refresh() {
+        let t0 = std::time::Instant::now();
+        let compute2 = compute.clone();
+        let computed = tokio::task::spawn_blocking(move || compute2()).await.ok().flatten();
+        match computed {
+            Some(val) => {
+                cache.store(val.clone(), built_ist_of(&val));
+                info!("api={label} cache=miss compute_ms={}", t0.elapsed().as_millis());
+                Some(val)
+            }
+            None => {
+                cache.abort_refresh();
+                None
+            }
+        }
+    } else {
+        // Someone else (startup warm or a concurrent request) owns the compute.
+        // Wait for it rather than duplicating the ~minute-long scan.
+        for _ in 0..1800 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if let Some(v) = cache.lookup().value {
+                info!("api={label} cache=wait-hit");
+                return Some(v);
+            }
+        }
+        // Winner stalled/died: fall back to computing inline.
+        let compute2 = compute.clone();
+        tokio::task::spawn_blocking(move || compute2()).await.ok().flatten()
+    }
+}
+
+/// `GET /api/scanner` — the Top-10 Buy / Sell scanner. The ~minute-long universe
+/// scan is warmed at startup and refreshed in the background; requests serve the
+/// cached result instantly. Never holds a sync lock across an `.await`.
 async fn scanner_handler(
     State(state): State<AppState>,
     Query(params): Query<SuggestParams>,
 ) -> Response {
-    // Fast path: return the cached scan if present. Clone out of the guard so we
-    // never hold the std RwLock across the response.
-    if let Ok(guard) = state.scanner.read() {
-        if let Some(cached) = guard.clone() {
-            return Json(cached).into_response();
-        }
-    }
-
     let root = state.root.clone();
     let capital = params.capital.unwrap_or(100000.0);
     let risk = params.risk.unwrap_or(2.5) / 100.0;
-
-    let scan: Result<ScanResult> = tokio::task::spawn_blocking(move || {
+    let compute = move || {
         let symbols = crate::storage_kernel::discover_symbols(&root).unwrap_or_default();
-        Ok(crate::suggestion_engine::scan_universe(&root, &symbols, capital, risk))
+        Some(crate::suggestion_engine::scan_universe(&root, &symbols, capital, risk))
+    };
+    match read_through(state.scanner.clone(), "scanner", compute, |r: &ScanResult| {
+        r.built_ist.clone()
     })
     .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!("scanner task panicked: {e}")));
-
-    match scan {
-        Ok(result) => {
-            // Store into the cache for subsequent requests.
-            if let Ok(mut guard) = state.scanner.write() {
-                *guard = Some(result.clone());
-            }
-            Json(result).into_response()
-        }
-        Err(e) => {
-            warn!("scan_universe failed: {e:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
-        }
+    {
+        Some(r) => Json(r).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "scan_universe failed").into_response(),
     }
 }
 
@@ -233,39 +299,32 @@ async fn finder_handler(
     let root = state.root.clone();
     let capital = params.capital.unwrap_or(100000.0);
     let risk = params.risk.unwrap_or(2.5) / 100.0;
-
-    let result: Result<FinderResult> = tokio::task::spawn_blocking(move || {
+    let slot = state.finder.slot(CapRiskKey::new(capital, risk));
+    let compute = move || {
         let symbols = crate::storage_kernel::discover_symbols(&root).unwrap_or_default();
-        Ok(crate::suggestion_engine::find_capital_fit(&root, &symbols, capital, risk))
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!("finder task panicked: {e}")));
-
-    match result {
-        Ok(r) => Json(r).into_response(),
-        Err(e) => {
-            warn!("find_capital_fit failed: {e:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
-        }
+        Some(crate::suggestion_engine::find_capital_fit(&root, &symbols, capital, risk))
+    };
+    match read_through(slot, "finder", compute, |r: &FinderResult| r.built_ist.clone()).await {
+        Some(r) => Json(r).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "find_capital_fit failed").into_response(),
     }
 }
 
 /// `GET /api/regime` — NIFTY regime + market breadth (display-only context).
+/// Warmed at startup, refreshed in the background; served instantly.
 async fn regime_handler(State(state): State<AppState>) -> Response {
     let root = state.root.clone();
-    let regime: Result<RegimeInfo> = tokio::task::spawn_blocking(move || {
+    let compute = move || {
         let symbols = crate::storage_kernel::discover_symbols(&root).unwrap_or_default();
-        Ok(crate::suggestion_engine::compute_regime(&root, &symbols))
+        Some(crate::suggestion_engine::compute_regime(&root, &symbols))
+    };
+    match read_through(state.regime.clone(), "regime", compute, |r: &RegimeInfo| {
+        r.built_ist.clone()
     })
     .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!("regime task panicked: {e}")));
-
-    match regime {
-        Ok(r) => Json(r).into_response(),
-        Err(e) => {
-            warn!("compute_regime failed: {e:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
-        }
+    {
+        Some(r) => Json(r).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "compute_regime failed").into_response(),
     }
 }
 
@@ -428,49 +487,65 @@ async fn staging_handler(State(state): State<AppState>, Query(q): Query<StagingQ
     let capital = crate::config::CAPITAL_POOL;
     let risk_pct = tier.pct();
 
-    let resp = tokio::task::spawn_blocking(move || {
-        let symbols = crate::storage_kernel::discover_symbols(&root).unwrap_or_default();
-        let fit = crate::suggestion_engine::find_capital_fit(&root, &symbols, capital, risk_pct);
-        let mut longs = Vec::new();
-        let mut shorts = Vec::new();
-        for row in fit.rows.iter() {
-            let dir = if row.side == "BUY" {
-                crate::config::Direction::Long
-            } else {
-                crate::config::Direction::Short
-            };
-            let staged = crate::execution_staging::stage_signal(
-                &row.symbol, 0, dir, row.entry, row.atr, row.shares,
-                crate::config::SL_ATR_MULT, crate::config::DEFAULT_RR,
-            );
-            if dir == crate::config::Direction::Long {
-                if longs.len() < 5 { longs.push(staged); }
-            } else if shorts.len() < 5 {
-                shorts.push(staged);
-            }
-            if longs.len() >= 5 && shorts.len() >= 5 { break; }
+    // Reuse the finder cache: the desk's three tiers all map to (CAPITAL_POOL ×
+    // tier.pct()), so a warm finder key serves staging instantly too.
+    let slot = state.finder.slot(CapRiskKey::new(capital, risk_pct));
+    let compute = {
+        let root = root.clone();
+        move || {
+            let symbols = crate::storage_kernel::discover_symbols(&root).unwrap_or_default();
+            Some(crate::suggestion_engine::find_capital_fit(&root, &symbols, capital, risk_pct))
         }
-        StagingResp { top_long: longs, top_short: shorts, capital, risk_tier: tier.as_str().to_string() }
-    })
-    .await;
+    };
+    let fit = match read_through(slot, "staging", compute, |r: &FinderResult| r.built_ist.clone()).await {
+        Some(f) => f,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, "staging fit failed").into_response(),
+    };
 
-    match resp {
-        Ok(r) => Json(r).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("staging task panicked: {e}")).into_response(),
+    // Cheap synchronous transform: turn fit rows into staged bracket orders.
+    let mut longs = Vec::new();
+    let mut shorts = Vec::new();
+    for row in fit.rows.iter() {
+        let dir = if row.side == "BUY" {
+            crate::config::Direction::Long
+        } else {
+            crate::config::Direction::Short
+        };
+        let staged = crate::execution_staging::stage_signal(
+            &row.symbol, 0, dir, row.entry, row.atr, row.shares,
+            crate::config::SL_ATR_MULT, crate::config::DEFAULT_RR,
+        );
+        if dir == crate::config::Direction::Long {
+            if longs.len() < 5 { longs.push(staged); }
+        } else if shorts.len() < 5 {
+            shorts.push(staged);
+        }
+        if longs.len() >= 5 && shorts.len() >= 5 { break; }
     }
+    Json(StagingResp {
+        top_long: longs,
+        top_short: shorts,
+        capital,
+        risk_tier: tier.as_str().to_string(),
+    })
+    .into_response()
 }
 
 /// `GET /api/swing` — multi-day Swing Trades Catalog (DuckDB daily scan).
+/// Warmed at startup, refreshed in the background; served instantly.
 async fn swing_handler(State(state): State<AppState>) -> Response {
     let root = state.root.clone();
-    let cat = tokio::task::spawn_blocking(move || {
+    let compute = move || {
         let symbols = crate::storage_kernel::discover_symbols(&root).unwrap_or_default();
-        crate::swing_analyzer::scan_swing(&root, &symbols)
+        Some(crate::swing_analyzer::scan_swing(&root, &symbols))
+    };
+    match read_through(state.swing.clone(), "swing", compute, |c: &SwingCatalog| {
+        c.built_ist.clone()
     })
-    .await;
-    match cat {
-        Ok(c) => Json::<SwingCatalog>(c).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("swing task panicked: {e}")).into_response(),
+    .await
+    {
+        Some(c) => Json(c).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "scan_swing failed").into_response(),
     }
 }
 

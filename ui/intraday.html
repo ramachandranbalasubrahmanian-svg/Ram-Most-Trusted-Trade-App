@@ -605,6 +605,20 @@
         signedFixed(c.exp_shrunk, 2) + 'R ' +
         '<span class="text-slate-600">(bootstrap, display only)</span></p>';
 
+      // slippage stress band (honesty stat): is the edge still +EV if fills slip
+      // 2–3× worse than modelled? plus the share of exits on same-bar SL+target.
+      var exp3 = num(c.exp_3x_slip);
+      var slipClass = exp3 > 0.05 ? 'text-emerald-400' : (exp3 > 0 ? 'text-amber-400' : 'text-rose-400');
+      var slipLabel = exp3 > 0.05 ? 'robust to 3× slip' : (exp3 > 0 ? 'thin at 3× slip' : 'negative under stress');
+      html += '<p class="text-[11px] text-slate-400 num">' +
+        'Slippage stress ' + signedFixed(c.expectancy_r, 2) + 'R (1×) → ' +
+        signedFixed(c.exp_2x_slip, 2) + 'R (2×) → ' + signedFixed(c.exp_3x_slip, 2) + 'R (3×) · ' +
+        '<span class="' + slipClass + '">' + slipLabel + '</span>' +
+        (num(c.ambiguous_frac) > 0
+          ? ' · <span class="text-slate-500">' + fixed(num(c.ambiguous_frac) * 100, 0) + '% ambiguous-bar exits</span>'
+          : '') +
+        '</p>';
+
       // probability line
       html += '<p class="text-[11px] text-slate-400 num">' +
         'Probability ' + fixed(c.prob_score, 0) + '/100 — best estimate this trade ends in profit (historical win rate) · ' +

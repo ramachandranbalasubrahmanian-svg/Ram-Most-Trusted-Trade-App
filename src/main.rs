@@ -11,6 +11,7 @@
 //!                              edge map, and print the top edges.
 
 mod analytics_kernel;
+mod cache;
 mod circuit_breaker;
 mod config;
 mod costs;
@@ -70,6 +71,24 @@ fn now_ist_string() -> String {
         .with_timezone(&config::IST)
         .format("%Y-%m-%d %H:%M:%S")
         .to_string()
+}
+
+/// If `cache` is stale and no refresh is already in flight, recompute it on a
+/// detached thread (single-flight is enforced by the cache). `compute` returns
+/// the new value and its IST build-stamp. Runs entirely off the request path —
+/// used by the desk scheduler to keep the warm caches fresh during market hours.
+fn maybe_refresh<T, F>(cache: &Arc<cache::Cached<T>>, compute: F)
+where
+    T: Clone + Send + Sync + 'static,
+    F: FnOnce() -> (T, String) + Send + 'static,
+{
+    if cache.lookup().stale && cache.try_begin_refresh() {
+        let cache = cache.clone();
+        std::thread::spawn(move || {
+            let (val, stamp) = compute();
+            cache.store(val, stamp);
+        });
+    }
 }
 
 /// Parse a timeframe token (e.g. `5min`, `15min`, `1day`); `None` if not one.
@@ -301,16 +320,98 @@ fn run_serve(raw: &[String]) -> Result<()> {
         config::DRAWDOWN_FREEZE_PCT,
     )));
     let journal_arc = Arc::new(std::sync::Mutex::new(journal_conn));
+
+    // Warm, stale-while-revalidate caches for the heavy universe scans. TTLs are
+    // chosen so a market-hours scheduler keeps them fresh without churning.
+    use std::time::Duration;
+    let scanner = Arc::new(cache::Cached::<types::ScanResult>::new(Duration::from_secs(180)));
+    let regime = Arc::new(cache::Cached::<types::RegimeInfo>::new(Duration::from_secs(120)));
+    let swing = Arc::new(cache::Cached::<types::SwingCatalog>::new(Duration::from_secs(300)));
+    let finder = Arc::new(cache::KeyedCache::<types::FinderResult>::new(Duration::from_secs(180), 16));
+
     let state = server::AppState {
         packet: packet.clone(),
         settings: settings.clone(),
         notify: notify.clone(),
         static_dir: std::path::PathBuf::from("ui"),
         root: root.clone(),
-        scanner: Arc::new(std::sync::RwLock::new(None)),
+        scanner: scanner.clone(),
+        regime: regime.clone(),
+        swing: swing.clone(),
+        finder: finder.clone(),
         freeze: freeze.clone(),
         journal: journal_arc.clone(),
     };
+
+    // Startup precompute: warm all heavy caches in parallel so the first page
+    // open is instant instead of paying a 30–60s universe scan on the request
+    // path. Each thread claims the cache's single-flight slot, so a user request
+    // arriving mid-warm waits for (rather than duplicates) the scan.
+    {
+        let (root, sc, rg, sw, fd) =
+            (root.clone(), scanner.clone(), regime.clone(), swing.clone(), finder.clone());
+        std::thread::spawn(move || {
+            let warm: Vec<std::thread::JoinHandle<()>> = vec![
+                {
+                    let (root, sc) = (root.clone(), sc.clone());
+                    std::thread::spawn(move || {
+                        if sc.try_begin_refresh() {
+                            let syms = storage_kernel::discover_symbols(&root).unwrap_or_default();
+                            let r = suggestion_engine::scan_universe(&root, &syms, 100_000.0, 0.025);
+                            let stamp = r.built_ist.clone();
+                            sc.store(r, stamp);
+                            eprintln!("warm: scanner ready");
+                        }
+                    })
+                },
+                {
+                    let (root, rg) = (root.clone(), rg.clone());
+                    std::thread::spawn(move || {
+                        if rg.try_begin_refresh() {
+                            let syms = storage_kernel::discover_symbols(&root).unwrap_or_default();
+                            let r = suggestion_engine::compute_regime(&root, &syms);
+                            let stamp = r.built_ist.clone();
+                            rg.store(r, stamp);
+                            eprintln!("warm: regime ready");
+                        }
+                    })
+                },
+                {
+                    let (root, sw) = (root.clone(), sw.clone());
+                    std::thread::spawn(move || {
+                        if sw.try_begin_refresh() {
+                            let syms = storage_kernel::discover_symbols(&root).unwrap_or_default();
+                            let r = swing_analyzer::scan_swing(&root, &syms);
+                            let stamp = r.built_ist.clone();
+                            sw.store(r, stamp);
+                            eprintln!("warm: swing ready");
+                        }
+                    })
+                },
+                {
+                    let (root, fd) = (root.clone(), fd.clone());
+                    std::thread::spawn(move || {
+                        // Default key = pool capital × Moderate tier; this also
+                        // warms the desk's Moderate staging console.
+                        let cap = config::CAPITAL_POOL;
+                        let risk = config::RiskTier::Moderate.pct();
+                        let slot = fd.slot(cache::CapRiskKey::new(cap, risk));
+                        if slot.try_begin_refresh() {
+                            let syms = storage_kernel::discover_symbols(&root).unwrap_or_default();
+                            let r = suggestion_engine::find_capital_fit(&root, &syms, cap, risk);
+                            let stamp = r.built_ist.clone();
+                            slot.store(r, stamp);
+                            eprintln!("warm: finder (default key) ready");
+                        }
+                    })
+                },
+            ];
+            for h in warm {
+                let _ = h.join();
+            }
+            eprintln!("warm: all caches ready");
+        });
+    }
 
     // Ingestion thread: replay the latest session.
     let ing = {
@@ -401,36 +502,96 @@ fn run_serve(raw: &[String]) -> Result<()> {
         })
     };
 
-    // Desk scheduler: synthetic-drawdown circuit breaker + 15:45 IST CSV export.
+    // Desk scheduler: circuit breaker + 15:45 CSV export + warm-cache refresh.
     let sched = {
         let (journal, freeze, stop) = (journal_arc.clone(), freeze.clone(), stop.clone());
+        let (root, scanner, regime, swing, finder) =
+            (root.clone(), scanner.clone(), regime.clone(), swing.clone(), finder.clone());
         std::thread::spawn(move || {
             let mut exported_date = String::new();
             let marks: HashMap<String, f64> = HashMap::new(); // no live marks in replay
+            let mut tick: u64 = 0;
             loop {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_secs(3));
+                tick += 1;
 
-                // Circuit breaker: evaluate synthetic MTM of accepted trades.
-                if let Ok(conn) = journal.lock() {
-                    if let Ok(entries) = journal_sync::all_entries(&conn) {
-                        let fs = circuit_breaker::evaluate(
-                            &entries,
-                            config::CAPITAL_POOL,
-                            config::DRAWDOWN_FREEZE_PCT,
-                            &marks,
-                        );
-                        if let Ok(mut g) = freeze.write() {
-                            g.daily_pnl = fs.daily_pnl;
-                            // Auto-freeze on breach; never auto-clear a freeze
-                            // (only the manual Unfreeze button clears it).
-                            if fs.frozen && !g.frozen {
-                                g.frozen = true;
-                                g.reason = fs.reason;
+                // Circuit breaker: evaluate synthetic MTM of accepted trades. Run
+                // every ~15s (not every 3s) — that's plenty for a synthetic MTM and
+                // cuts journal-lock pressure ~80% (writers are human-paced anyway).
+                if tick % 5 == 0 {
+                    if let Ok(conn) = journal.lock() {
+                        if let Ok(entries) = journal_sync::all_entries(&conn) {
+                            let fs = circuit_breaker::evaluate(
+                                &entries,
+                                config::CAPITAL_POOL,
+                                config::DRAWDOWN_FREEZE_PCT,
+                                &marks,
+                            );
+                            if let Ok(mut g) = freeze.write() {
+                                g.daily_pnl = fs.daily_pnl;
+                                // Auto-freeze on breach; never auto-clear a freeze
+                                // (only the manual Unfreeze button clears it).
+                                if fs.frozen && !g.frozen {
+                                    g.frozen = true;
+                                    g.reason = fs.reason;
+                                }
                             }
                         }
+                    }
+                }
+
+                // Warm-cache refresh: only during/around market hours, so we don't
+                // burn cycles re-scanning 1500 symbols overnight. Each refresh is
+                // single-flight and TTL-gated, so this 3s poll recomputes a cache
+                // at most once per its TTL.
+                let now = chrono::Utc::now().with_timezone(&config::IST);
+                let t = now.time();
+                if t >= config::premarket_start() && t <= config::session_close() {
+                    {
+                        let (root, syms_root) = (root.clone(), root.clone());
+                        maybe_refresh(&scanner, move || {
+                            let syms = storage_kernel::discover_symbols(&syms_root).unwrap_or_default();
+                            let r = suggestion_engine::scan_universe(&root, &syms, 100_000.0, 0.025);
+                            let s = r.built_ist.clone();
+                            (r, s)
+                        });
+                    }
+                    {
+                        let root = root.clone();
+                        maybe_refresh(&regime, move || {
+                            let syms = storage_kernel::discover_symbols(&root).unwrap_or_default();
+                            let r = suggestion_engine::compute_regime(&root, &syms);
+                            let s = r.built_ist.clone();
+                            (r, s)
+                        });
+                    }
+                    {
+                        let root = root.clone();
+                        maybe_refresh(&swing, move || {
+                            let syms = storage_kernel::discover_symbols(&root).unwrap_or_default();
+                            let r = swing_analyzer::scan_swing(&root, &syms);
+                            let s = r.built_ist.clone();
+                            (r, s)
+                        });
+                    }
+                    // Finder: refresh the two well-known keys (default page + the
+                    // Moderate staging tier). Ad-hoc user keys just expire and
+                    // recompute on demand.
+                    for (cap, risk) in [
+                        (100_000.0_f64, 0.025_f64),
+                        (config::CAPITAL_POOL, config::RiskTier::Moderate.pct()),
+                    ] {
+                        let slot = finder.slot(cache::CapRiskKey::new(cap, risk));
+                        let root = root.clone();
+                        maybe_refresh(&slot, move || {
+                            let syms = storage_kernel::discover_symbols(&root).unwrap_or_default();
+                            let r = suggestion_engine::find_capital_fit(&root, &syms, cap, risk);
+                            let s = r.built_ist.clone();
+                            (r, s)
+                        });
                     }
                 }
 
@@ -505,6 +666,18 @@ fn run_suggest(raw: &[String]) -> Result<()> {
                 "   win {:.1}% · PF {:.2} · exp {:+.2}R · n={} · Sharpe {:.2} · Calmar {:.2} · MC P(profit) {:.0}% · DSR {:.0}%",
                 c.win_rate, c.profit_factor, c.expectancy_r, c.n_trades, c.sharpe, c.calmar,
                 c.mc_prob_profit, c.dsr * 100.0
+            );
+            // Honesty stats: slippage stress band + same-bar ambiguity share.
+            let stress = if c.exp_3x_slip > 0.05 {
+                "robust to 3× slip"
+            } else if c.exp_3x_slip > 0.0 {
+                "thin at 3× slip"
+            } else {
+                "negative under stress"
+            };
+            println!(
+                "   slippage band: exp {:+.2}R (1×) → {:+.2}R (2×) → {:+.2}R (3×) — {} · ambiguous-bar exits {:.0}%",
+                c.expectancy_r, c.exp_2x_slip, c.exp_3x_slip, stress, c.ambiguous_frac * 100.0
             );
             match c.confidence {
                 Some(conf) => println!(

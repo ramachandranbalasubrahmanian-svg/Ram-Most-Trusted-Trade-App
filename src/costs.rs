@@ -77,6 +77,18 @@ pub fn backtest_roundtrip_pct() -> f64 {
     c.total / REF_LEG_NOTIONAL
 }
 
+/// Round-trip cost fraction with the **slippage** allowance scaled by `mult`
+/// (1×/2×/3×) while the statutory charges (brokerage/STT/exchange/SEBI/GST/stamp)
+/// stay fixed. Powers the backtest's slippage stress band: "is the edge still
+/// positive if fills slip 2–3× worse than assumed?". `mult == 1.0` returns
+/// exactly [`backtest_roundtrip_pct`].
+pub fn backtest_roundtrip_pct_scaled(mult: f64) -> f64 {
+    let base = round_trip(REF_LEG_NOTIONAL, REF_LEG_NOTIONAL).total;
+    let turnover = REF_LEG_NOTIONAL + REF_LEG_NOTIONAL;
+    let extra_slip = SLIPPAGE_PCT_EACH_WAY * turnover * (mult - 1.0);
+    (base + extra_slip) / REF_LEG_NOTIONAL
+}
+
 /// Net P&L (INR) for a sized position at the given fill prices, after exact
 /// round-trip costs. `qty` shares, `entry`/`exit` prices, `long` direction.
 /// Returns `(net_pnl, cost_breakdown)`.
@@ -108,6 +120,17 @@ mod tests {
         let p = backtest_roundtrip_pct();
         // Itemized round-trip should land near ~0.13% of one-leg notional.
         assert!(p > 0.0009 && p < 0.0020, "pct={p}");
+    }
+
+    #[test]
+    fn slippage_band_is_monotone_and_1x_equals_baseline() {
+        let base = backtest_roundtrip_pct();
+        // 1× must be byte-identical to the unscaled cost (preserves the anchor).
+        assert_eq!(backtest_roundtrip_pct_scaled(1.0).to_bits(), base.to_bits());
+        // More slippage only ever costs more.
+        let p2 = backtest_roundtrip_pct_scaled(2.0);
+        let p3 = backtest_roundtrip_pct_scaled(3.0);
+        assert!(p2 > base && p3 > p2, "base={base} 2x={p2} 3x={p3}");
     }
 
     #[test]

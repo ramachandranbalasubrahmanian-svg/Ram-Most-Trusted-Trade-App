@@ -23,7 +23,9 @@ use crate::stats::{
 };
 #[allow(unused_imports)]
 use crate::storage_kernel::{self, Candle, discover_symbols, load_candles, open_conn};
-use crate::strategy_engine::{Indicators, compute_indicators, simulate_detailed};
+use crate::strategy_engine::{
+    Indicators, SimConfig, compute_indicators, run_fill, simulate_detailed,
+};
 use crate::types::{
     ConvictionDelta, FinderResult, FinderRow, RegimeInfo, ScanResult, ScannerRow, SetupCard,
     StockSuggestion, StrategyBlock, SuggestStrategy,
@@ -315,6 +317,15 @@ struct ConfigStat {
     robustness_pct: f64,
     regime_consistent: Option<bool>,
 
+    // honesty stats (display-only — NEVER enter ConfInput / Confidence)
+    // Fraction of trades whose exit bar's range spanned BOTH stop and target
+    // (resolved pessimistically as a stop). High ⇒ the edge leans on the fill
+    // assumption. Slippage stress band: net expectancy at 2×/3× the slippage
+    // allowance — "is it still +EV if fills are worse than modelled?".
+    ambiguous_frac: f64,
+    exp_2x_slip: f64,
+    exp_3x_slip: f64,
+
     // confidence (computed lazily during selection)
     confidence: Option<u32>,
     confidence_band: String,
@@ -419,6 +430,11 @@ fn build_config_stat(
         dsr: 1.0,            // neutral until the reliability pre-pass fills it
         robustness_pct: 1.0, // neutral until the reliability pre-pass fills it
         regime_consistent: None,
+        // Honesty stats filled by the deep-dive loop (which has the bars); default
+        // to the baseline expectancy / zero-ambiguity for paths that don't set them.
+        ambiguous_frac: 0.0,
+        exp_2x_slip: expectancy,
+        exp_3x_slip: expectancy,
         confidence: None,
         confidence_band: String::new(),
         wilson_low: 0.0,
@@ -632,6 +648,10 @@ trade only minimum size.",
         exp_ci_high,
         exp_shrunk: shrunk,
 
+        ambiguous_frac: cs.ambiguous_frac,
+        exp_2x_slip: cs.exp_2x_slip,
+        exp_3x_slip: cs.exp_3x_slip,
+
         prob_score,
         prob_floor,
         confidence: cs.confidence,
@@ -799,56 +819,133 @@ pub fn analyze_symbol(
     let mut tf_dates: std::collections::HashMap<Timeframe, Vec<String>> =
         std::collections::HashMap::new();
 
-    // All configs, grouped by strategy. Also collect every config's sharpe for DSR.
+    // The per-interval config sweep (6 intervals × 4 strat × 2 dir × 5 R:R = 240
+    // configs) is the dominant cost (~4s sequential). Each interval is fully
+    // independent — its own candle load, indicators, and simulations — so we run
+    // them in parallel, one DuckDB connection per rayon worker (the same
+    // thread-local pattern the scanner/finder use). The outputs are merged back in
+    // `SUGGEST_INTERVALS` order so `trial_sharpes` and `by_strategy` end up in the
+    // exact same sequence as the old sequential loop ⇒ byte-identical results
+    // (the regression-anchor invariant). The NIFTY regime map is read once, above,
+    // before this region — the parallel tasks never touch the outer `conn`.
+    struct IntervalOut {
+        tf: Timeframe,
+        dates: Option<Vec<String>>,
+        by_strategy: [Vec<ConfigStat>; 4],
+        sharpes: Vec<f64>,
+        used: bool,
+    }
+    thread_local! {
+        static ANALYZE_CONN: std::cell::RefCell<Option<duckdb::Connection>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    let parts: Vec<IntervalOut> = SUGGEST_INTERVALS
+        .par_iter()
+        .map(|&tf| {
+            let mut out = IntervalOut {
+                tf,
+                dates: None,
+                by_strategy: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+                sharpes: Vec::new(),
+                used: false,
+            };
+            ANALYZE_CONN.with(|cell| {
+                let mut slot = cell.borrow_mut();
+                if slot.is_none() {
+                    *slot = open_conn().ok();
+                }
+                let conn = match slot.as_ref() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let path = config::parquet_path(root, symbol, tf);
+                if !path.exists() {
+                    return;
+                }
+                let bars = match load_candles(conn, root, symbol, tf) {
+                    Ok(b) if b.len() >= 2 => b,
+                    _ => return,
+                };
+                out.used = true;
+                if let Ok(d) = storage_kernel::load_candle_dates(conn, root, symbol, tf) {
+                    out.dates = Some(d);
+                }
+
+                let ind = compute_indicators(&bars, tf.minutes());
+                let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
+                let (prior_hi, prior_lo) = prior_day_high_low(&bars);
+                let last_close = *closes.last().unwrap();
+                let last_atr = last_finite_atr(&ind.atr);
+                let total_bars = bars.len();
+
+                for (si, strat) in SuggestStrategy::all().into_iter().enumerate() {
+                    for dir in [Direction::Long, Direction::Short] {
+                        let entries =
+                            strategy_signals(strat, dir, &bars, &ind, &closes, &prior_hi, &prior_lo);
+                        if entries.is_empty() {
+                            continue;
+                        }
+                        for &(sl_mult, rr) in RR_CONFIGS.iter() {
+                            // Run the fill core directly so we can read the same-bar
+                            // ambiguity flags (which `simulate_detailed` hides).
+                            let cost1 = crate::costs::backtest_roundtrip_pct();
+                            let outs = run_fill(
+                                &bars, &ind.atr, &entries, dir, &SimConfig::legacy(sl_mult, rr, cost1),
+                            );
+                            if outs.is_empty() {
+                                continue;
+                            }
+                            let trades: Vec<(usize, f64)> =
+                                outs.iter().map(|o| (o.entry_idx, o.r)).collect();
+                            let ambiguous_frac =
+                                outs.iter().filter(|o| o.ambiguous).count() as f64 / outs.len() as f64;
+                            let mut cs = build_config_stat(
+                                strat, tf, dir, sl_mult, rr, &trades, total_bars, last_close, last_atr,
+                            );
+                            cs.ambiguous_frac = ambiguous_frac;
+                            // Every config's sharpe feeds the DSR trial set.
+                            out.sharpes.push(cs.sharpe);
+                            if cs.n >= PROVISIONAL_MIN {
+                                // Slippage stress band: re-fill at 2×/3× the slippage
+                                // allowance (exit decisions are identical; only the
+                                // per-trade cost changes) and record net expectancy.
+                                let mean = |o: &[crate::strategy_engine::TradeOutcome]| {
+                                    if o.is_empty() { 0.0 } else { o.iter().map(|x| x.r).sum::<f64>() / o.len() as f64 }
+                                };
+                                let c2 = crate::costs::backtest_roundtrip_pct_scaled(2.0);
+                                let c3 = crate::costs::backtest_roundtrip_pct_scaled(3.0);
+                                cs.exp_2x_slip = mean(&run_fill(
+                                    &bars, &ind.atr, &entries, dir, &SimConfig::legacy(sl_mult, rr, c2),
+                                ));
+                                cs.exp_3x_slip = mean(&run_fill(
+                                    &bars, &ind.atr, &entries, dir, &SimConfig::legacy(sl_mult, rr, c3),
+                                ));
+                                out.by_strategy[si].push(cs);
+                            }
+                        }
+                    }
+                }
+            });
+            out
+        })
+        .collect();
+
+    // Deterministic merge (par_iter preserves SUGGEST_INTERVALS order) — this
+    // reproduces the sequential push order exactly.
     let mut by_strategy: Vec<Vec<ConfigStat>> = vec![Vec::new(); 4];
     let mut trial_sharpes: Vec<f64> = Vec::new();
     let mut intervals_used = 0usize;
-
-    for &tf in SUGGEST_INTERVALS.iter() {
-        let path = config::parquet_path(root, symbol, tf);
-        if !path.exists() {
-            continue;
+    for part in parts {
+        if part.used {
+            intervals_used += 1;
         }
-        let bars = match load_candles(&conn, root, symbol, tf) {
-            Ok(b) if b.len() >= 2 => b,
-            _ => continue,
-        };
-        intervals_used += 1;
-        if let Ok(d) = storage_kernel::load_candle_dates(&conn, root, symbol, tf) {
-            tf_dates.insert(tf, d);
+        if let Some(d) = part.dates {
+            tf_dates.insert(part.tf, d);
         }
-
-        let ind = compute_indicators(&bars, tf.minutes());
-        let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
-        let (prior_hi, prior_lo) = prior_day_high_low(&bars);
-        let last_close = *closes.last().unwrap();
-        let last_atr = last_finite_atr(&ind.atr);
-        let total_bars = bars.len();
-
-        for (si, strat) in SuggestStrategy::all().into_iter().enumerate() {
-            for dir in [Direction::Long, Direction::Short] {
-                let entries =
-                    strategy_signals(strat, dir, &bars, &ind, &closes, &prior_hi, &prior_lo);
-                if entries.is_empty() {
-                    continue;
-                }
-                for &(sl_mult, rr) in RR_CONFIGS.iter() {
-                    let trades = simulate_detailed(
-                        &bars, &ind.atr, &entries, dir, sl_mult, rr, crate::costs::backtest_roundtrip_pct(),
-                    );
-                    if trades.is_empty() {
-                        continue;
-                    }
-                    let cs = build_config_stat(
-                        strat, tf, dir, sl_mult, rr, &trades, total_bars, last_close, last_atr,
-                    );
-                    // Every config's sharpe feeds the DSR trial set.
-                    trial_sharpes.push(cs.sharpe);
-                    if cs.n >= PROVISIONAL_MIN {
-                        by_strategy[si].push(cs);
-                    }
-                }
-            }
+        trial_sharpes.extend(part.sharpes);
+        for (si, group) in part.by_strategy.into_iter().enumerate() {
+            by_strategy[si].extend(group);
         }
     }
 
@@ -963,8 +1060,14 @@ struct ScanBest {
 fn scan_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> (Option<ScanBest>, Option<ScanBest>) {
     const LIGHT_TFS: [Timeframe; 3] = [Timeframe::Min15, Timeframe::Min30, Timeframe::Min60];
 
-    let mut best_buy: Option<ScanBest> = None;
-    let mut best_sell: Option<ScanBest> = None;
+    // First pass: collect candidate configs per side AND every config's sharpe
+    // (the multiple-testing trial set), exactly as the deep-dive does. The old
+    // code scored each config with the neutral `dsr = 1.0`, so the DSR gate never
+    // fired in the scanner — that's why a name could read 89 here but 59 in its
+    // deep-dive. We now apply the gate over the trial set below.
+    let mut buy_cands: Vec<ConfigStat> = Vec::new();
+    let mut sell_cands: Vec<ConfigStat> = Vec::new();
+    let mut trial_sharpes: Vec<f64> = Vec::new();
 
     for &tf in LIGHT_TFS.iter() {
         let path = config::parquet_path(root, symbol, tf);
@@ -980,6 +1083,7 @@ fn scan_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> (Option<
         let (prior_hi, prior_lo) = prior_day_high_low(&bars);
         let last_close = *closes.last().unwrap();
         let total_bars = bars.len();
+        let last_atr = last_finite_atr(&ind.atr);
 
         for strat in SuggestStrategy::all() {
             for dir in [Direction::Long, Direction::Short] {
@@ -995,47 +1099,61 @@ fn scan_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> (Option<
                     if trades.is_empty() {
                         continue;
                     }
-                    let mut cs = build_config_stat(
-                        strat, tf, dir, sl_mult, rr, &trades, total_bars, last_close,
-                        last_finite_atr(&ind.atr),
+                    let cs = build_config_stat(
+                        strat, tf, dir, sl_mult, rr, &trades, total_bars, last_close, last_atr,
                     );
+                    // Every config feeds the DSR trial set (matches the deep-dive).
+                    trial_sharpes.push(cs.sharpe);
                     if cs.n < PROVISIONAL_MIN {
                         continue;
                     }
-                    ensure_confidence(&mut cs);
-                    let Some(conf) = cs.confidence else { continue };
-                    if conf < 50 {
-                        continue;
-                    }
-                    let cand = ScanBest {
-                        strat,
-                        tf,
-                        rr,
-                        confidence: conf,
-                        expectancy: cs.expectancy,
-                        win_rate: cs.win_rate,
-                        profit_factor: cs.profit_factor,
-                        n: cs.n,
-                        entry: last_close,
-                    };
-                    let slot = match dir {
-                        Direction::Long => &mut best_buy,
-                        Direction::Short => &mut best_sell,
-                    };
-                    let better = match slot {
-                        None => true,
-                        Some(b) => {
-                            (conf, cs.expectancy) > (b.confidence, b.expectancy)
-                        }
-                    };
-                    if better {
-                        *slot = Some(cand);
+                    match dir {
+                        Direction::Long => buy_cands.push(cs),
+                        Direction::Short => sell_cands.push(cs),
                     }
                 }
             }
         }
     }
-    (best_buy, best_sell)
+
+    // Second pass: deflate each candidate's Sharpe against the full trial set,
+    // score it through the same `build_confidence` gate the deep-dive uses, then
+    // pick the best per side. The scanner can no longer present an ungated number.
+    (gate_and_pick(buy_cands, &trial_sharpes), gate_and_pick(sell_cands, &trial_sharpes))
+}
+
+/// Apply the DSR gate over `trial_sharpes` to each candidate, score it, and
+/// return the best (by Confidence, then expectancy) that clears Confidence ≥ 50.
+/// This is the scanner's counterpart to the deep-dive's reliability pre-pass.
+fn gate_and_pick(cands: Vec<ConfigStat>, trial_sharpes: &[f64]) -> Option<ScanBest> {
+    let mut best: Option<ScanBest> = None;
+    for mut cs in cands {
+        cs.dsr = deflated_sharpe(cs.sharpe, cs.n, trial_sharpes);
+        ensure_confidence(&mut cs);
+        let Some(conf) = cs.confidence else { continue };
+        if conf < 50 {
+            continue;
+        }
+        let cand = ScanBest {
+            strat: cs.strat,
+            tf: cs.tf,
+            rr: cs.rr,
+            confidence: conf,
+            expectancy: cs.expectancy,
+            win_rate: cs.win_rate,
+            profit_factor: cs.profit_factor,
+            n: cs.n,
+            entry: cs.entry,
+        };
+        let better = match &best {
+            None => true,
+            Some(b) => (conf, cs.expectancy) > (b.confidence, b.expectancy),
+        };
+        if better {
+            best = Some(cand);
+        }
+    }
+    best
 }
 
 fn scan_best_to_row(symbol: &str, side: &str, b: &ScanBest) -> ScannerRow {
@@ -1051,6 +1169,7 @@ fn scan_best_to_row(symbol: &str, side: &str, b: &ScanBest) -> ScannerRow {
         profit_factor: b.profit_factor,
         n_trades: b.n,
         entry: b.entry,
+        reliability: "scan".to_string(),
     }
 }
 
@@ -1373,6 +1492,10 @@ pub fn compute_regime(root: &Path, symbols: &[String]) -> RegimeInfo {
         breadth_up: 0,
         breadth_down: 0,
         breadth_label: "neutral".to_string(),
+        built_ist: chrono::Utc::now()
+            .with_timezone(&crate::config::IST)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string(),
     };
 
     let conn = match open_conn() {
@@ -1468,6 +1591,43 @@ mod tests {
         assert!(!cross_up(&xn, &yn, 1));
         // i==0 never crosses.
         assert!(!cross_up(&x, &y, 0));
+    }
+
+    /// P4 reconciliation: the scanner now applies the DSR gate (it used to score
+    /// with the neutral `dsr = 1.0`, so a name could read a higher *pre-gate*
+    /// Confidence in the scanner than in its own 6-interval deep-dive). A config
+    /// that scores well in isolation must be capped to ≤59 once its Sharpe is
+    /// unexceptional against a high-dispersion trial set.
+    #[test]
+    fn scanner_gate_and_pick_applies_dsr_cap() {
+        let strat = SuggestStrategy::all().into_iter().next().unwrap();
+        // 51 trades, clean positive edge, no long loss streak (W W L pattern).
+        let trades: Vec<(usize, f64)> =
+            (0..51).map(|i| (i, if i % 3 == 2 { -1.0 } else { 1.0 })).collect();
+        let mk = || {
+            build_config_stat(
+                strat, Timeframe::Min30, Direction::Long, 1.0, 2.0, &trades, 500, 100.0, 2.0,
+            )
+        };
+
+        // Light trial set (one trial) ⇒ this config looks unique ⇒ high DSR ⇒ ungated.
+        let weak = gate_and_pick(vec![mk()], &[mk().sharpe]).expect("weak scores");
+        // High-dispersion trial set ⇒ a strong Sharpe was easy to find by luck ⇒
+        // DSR < 0.5 ⇒ build_confidence caps the Confidence at 59.
+        let strong_trials: Vec<f64> = (0..240).map(|i| -0.5 + (i as f64) / 240.0 * 1.5).collect();
+        let strong = gate_and_pick(vec![mk()], &strong_trials).expect("strong still clears ≥50");
+
+        assert!(
+            strong.confidence <= 59,
+            "DSR gate must cap scanner Confidence ≤59, got {}",
+            strong.confidence
+        );
+        assert!(
+            strong.confidence < weak.confidence,
+            "gate must lower it: ungated {} vs gated {}",
+            weak.confidence,
+            strong.confidence
+        );
     }
 
     #[test]
@@ -1573,6 +1733,9 @@ mod tests {
             exp_ci_low: 0.0,
             exp_ci_high: 0.0,
             exp_shrunk: 0.0,
+            ambiguous_frac: 0.0,
+            exp_2x_slip: 0.0,
+            exp_3x_slip: 0.0,
             prob_score: 0.0,
             prob_floor: 0.0,
             confidence: None,

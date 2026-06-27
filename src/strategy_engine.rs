@@ -639,19 +639,92 @@ pub fn registry() -> Vec<Box<dyn Strategy>> {
 // Simulator + metrics
 // ===========================================================================
 
-/// Simulate one direction's worth of entries with ATR stops/targets and an
-/// intraday-only exit. Returns the realised R-multiple of each trade, net of a
-/// round-trip cost. One position at a time (later signals while in a trade are
-/// ignored), same-day square-off at the day's final bar.
-pub fn simulate(
+/// How the simulator resolves a bar whose OHLC range spans BOTH the stop and the
+/// target. `PessimisticStopFirst` (the default) reproduces the legacy behaviour
+/// exactly — the stop wins on a spanning bar, the worst-case for the trade — so
+/// every cached edge map stays byte-identical. `IntrabarResolved` drops to
+/// finer-resolution data to learn which level actually printed first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AmbiguityPolicy {
+    #[default]
+    PessimisticStopFirst,
+    IntrabarResolved,
+}
+
+/// Simulation knobs. `SimConfig::legacy(k, rr, cost)` is byte-for-byte identical
+/// to the historical model (pessimistic stop-first, no finer data). `cost` is the
+/// *effective* round-trip cost in fraction-of-notional — the slippage stress band
+/// re-runs with a scaled `cost`, so this struct never needs a slippage multiplier.
+pub struct SimConfig<'a> {
+    pub k: f64,
+    pub rr: f64,
+    pub cost: f64,
+    pub ambiguity: AmbiguityPolicy,
+    /// Finer-tf bars for the SAME symbol, used only when `ambiguity ==
+    /// IntrabarResolved`. `None` ⇒ fall back to pessimistic accounting.
+    pub finer: Option<&'a [Candle]>,
+}
+
+impl SimConfig<'_> {
+    /// The exact legacy model: pessimistic stop-first, no intrabar resolution.
+    pub fn legacy(k: f64, rr: f64, cost: f64) -> SimConfig<'static> {
+        SimConfig { k, rr, cost, ambiguity: AmbiguityPolicy::PessimisticStopFirst, finer: None }
+    }
+}
+
+/// Full per-trade detail emitted by the fill core. `simulate`/`simulate_detailed`
+/// project the subset they need, so their public signatures are unchanged.
+#[derive(Debug, Clone, Copy)]
+pub struct TradeOutcome {
+    pub entry_idx: usize,
+    pub exit_idx: usize,
+    /// Realised R-multiple, net of round-trip cost.
+    pub r: f64,
+    /// True when the exit bar's range spanned BOTH the stop and the target.
+    pub ambiguous: bool,
+    /// True when finer-resolution data actually decided the order (not assumed).
+    pub intrabar_resolved: bool,
+}
+
+/// Resolve a same-bar SL/target ambiguity using finer-resolution bars of `day`.
+/// Returns the resolved exit price, or `None` when finer data can't disambiguate
+/// (caller then falls back to pessimistic accounting). Wired by the `--intrabar`
+/// path; with `finer == None` this is never reached.
+fn resolve_intrabar(
+    finer: &[Candle],
+    day: u32,
+    dir: Direction,
+    sl: f64,
+    tgt: f64,
+) -> Option<f64> {
+    for b in finer.iter().filter(|b| b.day == day) {
+        let (hit_sl, hit_tgt) = match dir {
+            Direction::Long => (b.low <= sl, b.high >= tgt),
+            Direction::Short => (b.high >= sl, b.low <= tgt),
+        };
+        // A finer bar that still straddles both is itself ambiguous → stop-first.
+        if hit_sl {
+            return Some(sl);
+        }
+        if hit_tgt {
+            return Some(tgt);
+        }
+    }
+    None
+}
+
+/// The single fill core. Simulates one direction's worth of entries with
+/// ATR-scaled stops/targets and an intraday-only exit (square-off at the day's
+/// last bar), one position at a time. Returns each trade's full [`TradeOutcome`],
+/// net of `cfg.cost`. With `SimConfig::legacy(..)` the realised R is byte-for-byte
+/// identical to the historical `simulate`.
+pub fn run_fill(
     bars: &[Candle],
     atr: &[f64],
     entries: &[usize],
     dir: Direction,
-    k: f64,
-    rr: f64,
-    cost: f64,
-) -> Vec<f64> {
+    cfg: &SimConfig,
+) -> Vec<TradeOutcome> {
     let n = bars.len();
     let s = dir.sign();
     let mut trades = Vec::new();
@@ -669,40 +742,49 @@ pub fn simulate(
             continue; // no room to manage the trade intraday
         }
         let entry = bars[idx].close;
-        let risk = k * a;
+        let risk = cfg.k * a;
         let sl = entry - s * risk;
-        let tgt = entry + s * rr * risk;
+        let tgt = entry + s * cfg.rr * risk;
 
         let mut exit: Option<f64> = None;
         let mut exit_idx = idx;
+        let mut ambiguous = false;
+        let mut intrabar_resolved = false;
         let mut j = idx + 1;
         while j < n && bars[j].day == day {
             let b = &bars[j];
-            match dir {
-                Direction::Long => {
-                    if b.low <= sl {
-                        exit = Some(sl);
-                        exit_idx = j;
-                        break;
+            let (hit_sl, hit_tgt) = match dir {
+                Direction::Long => (b.low <= sl, b.high >= tgt),
+                Direction::Short => (b.high >= sl, b.low <= tgt),
+            };
+            if hit_sl && hit_tgt {
+                // Same-bar ambiguity: legacy takes the stop. Intrabar mode tries
+                // finer data; either path keeps the stop-first worst case if it
+                // can't prove the target printed first.
+                ambiguous = true;
+                let resolved = match cfg.ambiguity {
+                    AmbiguityPolicy::PessimisticStopFirst => None,
+                    AmbiguityPolicy::IntrabarResolved => {
+                        cfg.finer.and_then(|f| resolve_intrabar(f, day, dir, sl, tgt))
                     }
-                    if b.high >= tgt {
-                        exit = Some(tgt);
-                        exit_idx = j;
-                        break;
+                };
+                match resolved {
+                    Some(p) => {
+                        exit = Some(p);
+                        intrabar_resolved = true;
                     }
+                    None => exit = Some(sl),
                 }
-                Direction::Short => {
-                    if b.high >= sl {
-                        exit = Some(sl);
-                        exit_idx = j;
-                        break;
-                    }
-                    if b.low <= tgt {
-                        exit = Some(tgt);
-                        exit_idx = j;
-                        break;
-                    }
-                }
+                exit_idx = j;
+                break;
+            } else if hit_sl {
+                exit = Some(sl);
+                exit_idx = j;
+                break;
+            } else if hit_tgt {
+                exit = Some(tgt);
+                exit_idx = j;
+                break;
             }
             j += 1;
         }
@@ -714,17 +796,40 @@ pub fn simulate(
             }
         };
         let gross = s * (exit_price - entry) / risk;
-        let cost_r = cost * entry / risk; // round-trip cost expressed in R
-        trades.push(gross - cost_r);
+        let cost_r = cfg.cost * entry / risk; // round-trip cost expressed in R
+        trades.push(TradeOutcome {
+            entry_idx: idx,
+            exit_idx: eidx,
+            r: gross - cost_r,
+            ambiguous,
+            intrabar_resolved,
+        });
         free_from = eidx + 1;
     }
     trades
 }
 
+/// Simulate one direction's worth of entries with ATR stops/targets and an
+/// intraday-only exit. Returns the realised R-multiple of each trade, net of a
+/// round-trip cost. Thin shim over [`run_fill`] in the exact legacy model.
+pub fn simulate(
+    bars: &[Candle],
+    atr: &[f64],
+    entries: &[usize],
+    dir: Direction,
+    k: f64,
+    rr: f64,
+    cost: f64,
+) -> Vec<f64> {
+    run_fill(bars, atr, entries, dir, &SimConfig::legacy(k, rr, cost))
+        .into_iter()
+        .map(|o| o.r)
+        .collect()
+}
+
 /// Like [`simulate`], but returns each trade's `(entry_bar_index, R)` so callers
-/// can split trades into in-sample / out-of-sample by position in history.
-/// Same model: ATR-scaled SL/target, intraday-only exit, one position at a time,
-/// net of round-trip cost.
+/// can split trades into in-sample / out-of-sample by position in history. Thin
+/// shim over [`run_fill`] in the exact legacy model.
 pub fn simulate_detailed(
     bars: &[Candle],
     atr: &[f64],
@@ -734,73 +839,10 @@ pub fn simulate_detailed(
     rr: f64,
     cost: f64,
 ) -> Vec<(usize, f64)> {
-    let n = bars.len();
-    let s = dir.sign();
-    let mut trades = Vec::new();
-    let mut free_from = 0usize;
-    for &idx in entries {
-        if idx < free_from || idx + 1 >= n {
-            continue;
-        }
-        let a = atr[idx];
-        if !a.is_finite() || a <= 0.0 {
-            continue;
-        }
-        let day = bars[idx].day;
-        if bars[idx + 1].day != day {
-            continue;
-        }
-        let entry = bars[idx].close;
-        let risk = k * a;
-        let sl = entry - s * risk;
-        let tgt = entry + s * rr * risk;
-
-        let mut exit: Option<f64> = None;
-        let mut exit_idx = idx;
-        let mut j = idx + 1;
-        while j < n && bars[j].day == day {
-            let b = &bars[j];
-            match dir {
-                Direction::Long => {
-                    if b.low <= sl {
-                        exit = Some(sl);
-                        exit_idx = j;
-                        break;
-                    }
-                    if b.high >= tgt {
-                        exit = Some(tgt);
-                        exit_idx = j;
-                        break;
-                    }
-                }
-                Direction::Short => {
-                    if b.high >= sl {
-                        exit = Some(sl);
-                        exit_idx = j;
-                        break;
-                    }
-                    if b.low <= tgt {
-                        exit = Some(tgt);
-                        exit_idx = j;
-                        break;
-                    }
-                }
-            }
-            j += 1;
-        }
-        let (exit_price, eidx) = match exit {
-            Some(p) => (p, exit_idx),
-            None => {
-                let last = j - 1;
-                (bars[last].close, last)
-            }
-        };
-        let gross = s * (exit_price - entry) / risk;
-        let cost_r = cost * entry / risk;
-        trades.push((idx, gross - cost_r));
-        free_from = eidx + 1;
-    }
-    trades
+    run_fill(bars, atr, entries, dir, &SimConfig::legacy(k, rr, cost))
+        .into_iter()
+        .map(|o| (o.entry_idx, o.r))
+        .collect()
 }
 
 /// Aggregate trade statistics for one (symbol, strategy, direction).
@@ -1040,5 +1082,58 @@ mod tests {
         assert_eq!(m.win_pct, 50.0);
         assert!((m.expectancy - 0.5).abs() < 1e-9);
         assert!((m.profit_factor - 2.0).abs() < 1e-9);
+    }
+
+    /// ANCHOR GUARD: `SimConfig::legacy` must be byte-for-byte identical to the
+    /// historical `simulate`. Drive a varied multi-day, multi-entry sequence
+    /// through both the shim and a direct `run_fill(legacy)` and assert exact
+    /// equality — this is what protects the cached edge maps from drifting.
+    #[test]
+    fn legacy_simconfig_matches_old_simulate() {
+        let bars = vec![
+            bar(0, 100.0, 100.0, 100.0, 100.0),
+            bar(0, 100.0, 107.0, 99.0, 106.0), // target
+            bar(0, 106.0, 106.0, 96.0, 100.0),
+            bar(1, 100.0, 101.0, 95.0, 96.0), // stop next day
+            bar(1, 96.0, 99.0, 95.5, 98.0),
+            bar(1, 98.0, 98.0, 98.0, 98.0),
+            bar(2, 98.0, 98.0, 98.0, 98.0), // square-off (neither hit)
+            bar(2, 98.0, 99.0, 97.5, 98.5),
+        ];
+        let atr = vec![2.0; bars.len()];
+        let entries = [0usize, 3, 6];
+        for dir in [Direction::Long, Direction::Short] {
+            for &(k, rr, cost) in &[(1.5, 2.0, 0.0), (1.0, 3.0, 0.0012), (2.0, 1.0, 0.0006)] {
+                let old = simulate(&bars, &atr, &entries, dir, k, rr, cost);
+                let new: Vec<f64> = run_fill(&bars, &atr, &entries, dir, &SimConfig::legacy(k, rr, cost))
+                    .into_iter()
+                    .map(|o| o.r)
+                    .collect();
+                assert_eq!(old.len(), new.len(), "trade count {dir:?} k{k} rr{rr}");
+                for (a, b) in old.iter().zip(&new) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "R bits differ {dir:?} k{k} rr{rr}");
+                }
+            }
+        }
+    }
+
+    /// A bar whose range spans BOTH the stop and the target is flagged
+    /// `ambiguous`, and under the (default) pessimistic policy resolves to the
+    /// stop (−1R), with `intrabar_resolved == false`.
+    #[test]
+    fn ambiguous_bar_flagged_and_pessimistic() {
+        // Long entry at 100, atr=2, k=1.5 ⇒ risk 3, SL 95.5, target 106.
+        // bar1 low 95 (≤SL) AND high 107 (≥target) ⇒ ambiguous, pessimistic = stop.
+        let bars = vec![
+            bar(0, 100.0, 100.0, 100.0, 100.0),
+            bar(0, 100.0, 107.0, 95.0, 100.0),
+            bar(0, 100.0, 100.0, 100.0, 100.0),
+        ];
+        let atr = vec![2.0; bars.len()];
+        let out = run_fill(&bars, &atr, &[0], Direction::Long, &SimConfig::legacy(1.5, 2.0, 0.0));
+        assert_eq!(out.len(), 1);
+        assert!(out[0].ambiguous, "should flag the spanning bar");
+        assert!(!out[0].intrabar_resolved);
+        assert!((out[0].r + 1.0).abs() < 1e-9, "pessimistic ⇒ −1R, got {}", out[0].r);
     }
 }
