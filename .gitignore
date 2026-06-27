@@ -1,0 +1,21 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Secrets / credentials — NEVER commit
+.env
+*.token
+kite_token.json
+nse_instruments_cache.json
+
+# Huge local data archive (~14GB) — never commit
+/1500-Stocks-Parquest/
+
+# Generated caches (edge map, instruments, pre-market state)
+/cache/
+/data_out/
+
+# macOS
+.DS_Store
+**/.DS_Store
