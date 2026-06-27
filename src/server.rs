@@ -36,8 +36,12 @@ pub struct AppState {
     pub settings: Arc<RwLock<UserSettings>>,
     /// Fired whenever `packet` is refreshed, to wake WS pushers.
     pub notify: Arc<Notify>,
-    /// Directory containing `index.html`.
+    /// Directory containing `index.html` / `intraday.html`.
     pub static_dir: PathBuf,
+    /// Parquet archive root, for on-demand suggestion analysis.
+    pub root: PathBuf,
+    /// Cached 10-Buy / 10-Sell scanner result (computed lazily on first request).
+    pub scanner: Arc<RwLock<Option<crate::types::ScanResult>>>,
 }
 
 /// Run the Axum server until the process exits.

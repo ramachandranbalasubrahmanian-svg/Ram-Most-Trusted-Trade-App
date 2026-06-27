@@ -16,8 +16,10 @@ mod ingestion_engine;
 mod news_engine;
 mod risk_manager;
 mod server;
+mod stats;
 mod storage_kernel;
 mod strategy_engine;
+mod suggestion_engine;
 mod types;
 
 use std::collections::HashMap;
@@ -37,16 +39,18 @@ fn main() -> Result<()> {
         "premarket" => run_premarket(&args[2..]),
         "backtest" => run_backtest(&args[2..]),
         "serve" => run_serve(&args[2..]),
+        "suggest" => run_suggest(&args[2..]),
         "" | "help" | "-h" | "--help" => {
             println!("RAM_ISTP — local intraday backtest + signal engine (signals only).");
             println!("usage:");
             println!("  ram_istp premarket [SYMBOL ...]         pre-market historical scan");
             println!("  ram_istp backtest [TF] [SYMBOL ...]     backtest + build edge map");
             println!("  ram_istp serve [TF]                     run replay + dashboard server");
+            println!("  ram_istp suggest SYMBOL                 per-stock intraday suggestion");
             Ok(())
         }
         other => {
-            eprintln!("unknown command: {other:?}  (try `premarket`, `backtest`, or `serve`)");
+            eprintln!("unknown command: {other:?}  (try `premarket`, `backtest`, `serve`, `suggest`)");
             std::process::exit(2);
         }
     }
@@ -284,6 +288,8 @@ fn run_serve(raw: &[String]) -> Result<()> {
         settings: settings.clone(),
         notify: notify.clone(),
         static_dir: std::path::PathBuf::from("ui"),
+        root: root.clone(),
+        scanner: Arc::new(std::sync::RwLock::new(None)),
     };
 
     // Ingestion thread: replay the latest session.
@@ -364,4 +370,54 @@ fn run_serve(raw: &[String]) -> Result<()> {
     let _ = ing.join();
     let _ = ana.join();
     res
+}
+
+/// `suggest SYMBOL` — print the per-stock intraday suggestion (CLI view of what
+/// the `/intraday` page renders).
+fn run_suggest(raw: &[String]) -> Result<()> {
+    let root = config::data_root();
+    if !root.exists() {
+        anyhow::bail!("data root {} not found", root.display());
+    }
+    let symbol = match raw.first() {
+        Some(s) => s.to_uppercase(),
+        None => anyhow::bail!("usage: ram_istp suggest SYMBOL"),
+    };
+    let settings = config::UserSettings::default();
+    let s = suggestion_engine::analyze_symbol(&root, &symbol, &settings)?;
+
+    println!("\n⚡ Intraday Suggestion — {}", s.symbol);
+    println!(
+        "intervals: {} · {} trading days · last {} ({}d old) · {} configs tested",
+        s.intervals_available.join(", "),
+        s.trading_days,
+        s.last_date,
+        s.days_old,
+        s.total_configs
+    );
+    if let Some(best) = &s.best_overall {
+        println!("🏆 Best: {best}");
+    }
+    for b in &s.blocks {
+        println!("\n{} {} — {}", b.emoji, b.name, b.verdict_text);
+        if let Some(c) = &b.best {
+            println!(
+                "   {} {} {} · R:R {} · entry ₹{:.2} SL ₹{:.2} tgt ₹{:.2} · qty {}",
+                c.side, c.symbol, c.interval, c.rr_label, c.entry, c.sl, c.target, c.quantity
+            );
+            println!(
+                "   win {:.1}% · PF {:.2} · exp {:+.2}R · n={} · Sharpe {:.2} · Calmar {:.2} · MC P(profit) {:.0}% · DSR {:.0}%",
+                c.win_rate, c.profit_factor, c.expectancy_r, c.n_trades, c.sharpe, c.calmar,
+                c.mc_prob_profit, c.dsr * 100.0
+            );
+            match c.confidence {
+                Some(conf) => println!(
+                    "   Confidence {}/100 ({}) · t={:.2} p≈{:.3} · Conviction {}/100 ({})",
+                    conf, c.confidence_band, c.t_stat, c.p_value, c.conviction, c.conviction_label
+                ),
+                None => println!("   Confidence — {} · Conviction {}/100", c.confidence_band, c.conviction),
+            }
+        }
+    }
+    Ok(())
 }

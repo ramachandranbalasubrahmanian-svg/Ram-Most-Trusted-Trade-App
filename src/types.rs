@@ -246,3 +246,191 @@ pub struct SettingsMsg {
     pub budget: f64,
     pub risk_pct: f64,
 }
+
+// ===========================================================================
+// Intraday Suggestion page (per-stock deep-dive + scanner)
+// ===========================================================================
+
+/// One conviction sub-score component, e.g. ("mc_prob_profit", 15.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvictionDelta {
+    pub name: String,
+    pub points: f64,
+}
+
+/// The full statistics + sizing for a single (symbol, strategy, interval, side,
+/// R:R) setup — everything one strategy card renders. Honesty-first: all R / P&L
+/// figures are net of round-trip cost.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupCard {
+    pub symbol: String,
+    pub side: String,         // "BUY" | "SELL"
+    pub interval: String,     // "1 Hour", "30 Minutes", ...
+    pub rr: f64,              // reward:risk (target_mult / sl_mult)
+    pub rr_label: String,     // "1 : 3.0"
+    pub timeframes_agree: u32, // "✓ N timeframes"
+
+    // entry / stop / target
+    pub entry: f64,           // last close (approximate, pre-market)
+    pub last_close: f64,
+    pub sl: f64,
+    pub sl_atr_mult: f64,
+    pub target: f64,
+    pub target_atr_mult: f64,
+    pub atr: f64,
+
+    // sizing (under current capital + risk%)
+    pub quantity: i64,
+    pub risk_pct: f64,
+    pub max_risk: f64,
+    pub max_reward: f64,
+
+    // core backtest stats (net of cost)
+    pub win_rate: f64,
+    pub profit_factor: f64,
+    pub expectancy_r: f64,
+    pub n_trades: usize,
+    pub sharpe: f64,
+    pub calmar: f64,
+
+    // robustness
+    pub mc_prob_profit: f64,  // % of bootstrap paths ending positive
+    pub mc_p95_dd_r: f64,     // 95th-pct max drawdown (R)
+    pub dsr: f64,             // deflated Sharpe (overfit-adj.), 0..1
+    pub exp_ci_low: f64,      // 90% bootstrap CI on expectancy
+    pub exp_ci_high: f64,
+    pub exp_shrunk: f64,      // Bayesian-shrunk expectancy
+
+    // probability / confidence / conviction
+    pub prob_score: f64,      // win chance 0-100 (historical win rate)
+    pub prob_floor: f64,      // 95% Wilson lower bound on win rate
+    pub confidence: Option<u32>,
+    pub confidence_band: String,
+    pub t_stat: f64,
+    pub p_value: f64,
+    pub provisional: bool,
+    pub conviction: u32,
+    pub conviction_label: String,
+    pub conviction_deltas: Vec<ConvictionDelta>,
+
+    // honest caveats
+    pub selection_artifact: Option<String>, // DSR-based overfit warning
+}
+
+/// The four page strategies, each rendered as a block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SuggestStrategy {
+    VwapTrend,
+    OpeningRange,
+    PrevDayBreakout,
+    GapAndGo,
+}
+
+impl SuggestStrategy {
+    pub fn key(self) -> &'static str {
+        match self {
+            SuggestStrategy::VwapTrend => "vwap_trend",
+            SuggestStrategy::OpeningRange => "opening_range",
+            SuggestStrategy::PrevDayBreakout => "prev_day_breakout",
+            SuggestStrategy::GapAndGo => "gap_and_go",
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            SuggestStrategy::VwapTrend => "VWAP Trend",
+            SuggestStrategy::OpeningRange => "Opening Range",
+            SuggestStrategy::PrevDayBreakout => "Prev-Day Breakout",
+            SuggestStrategy::GapAndGo => "Gap-and-Go",
+        }
+    }
+    pub fn emoji(self) -> &'static str {
+        match self {
+            SuggestStrategy::VwapTrend => "🟦",
+            SuggestStrategy::OpeningRange => "🟧",
+            SuggestStrategy::PrevDayBreakout => "🟪",
+            SuggestStrategy::GapAndGo => "🟩",
+        }
+    }
+    pub fn description(self) -> &'static str {
+        match self {
+            SuggestStrategy::VwapTrend => "Enter on a fresh VWAP crossover in the trend direction (mean-anchor continuation).",
+            SuggestStrategy::OpeningRange => "Break of the first-30-min high/low — classic opening-range breakout.",
+            SuggestStrategy::PrevDayBreakout => "Break of the previous day's high/low on volume — momentum continuation.",
+            SuggestStrategy::GapAndGo => "After a gap, ride the gap direction while price holds above/below open & VWAP.",
+        }
+    }
+    pub fn all() -> [SuggestStrategy; 4] {
+        [
+            SuggestStrategy::VwapTrend,
+            SuggestStrategy::OpeningRange,
+            SuggestStrategy::PrevDayBreakout,
+            SuggestStrategy::GapAndGo,
+        ]
+    }
+}
+
+/// One strategy block on the page: either its best setup + verdict, or an
+/// honest "no edge" result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyBlock {
+    pub key: String,
+    pub name: String,
+    pub emoji: String,
+    pub description: String,
+    /// "skip" | "shortlist" | "no_edge" | "tradeable" — drives the badge color.
+    pub verdict: String,
+    pub verdict_text: String,   // the badge line, e.g. "⛔ SKIP — weak / unreliable edge"
+    pub confidence_note: String,
+    pub headline: Option<String>, // "📊 Historically won ~64 of 100 ..."
+    pub best: Option<SetupCard>,
+    pub valid_setups: usize,      // "All N valid {strategy} setups"
+}
+
+/// The full per-stock suggestion payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockSuggestion {
+    pub symbol: String,
+    pub intervals_available: Vec<String>,
+    pub trading_days: usize,
+    pub last_date: String,
+    pub days_old: i64,
+    /// "Gap-and-Go — SELL on 1 Hour (R:R 1:3.0) · Confidence 86/100", or None.
+    pub best_overall: Option<String>,
+    pub blocks: Vec<StrategyBlock>,
+    pub total_configs: usize,
+    pub disclaimer: String,
+}
+
+/// One row of the 10-Buy / 10-Sell scanner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScannerRow {
+    pub symbol: String,
+    pub side: String,
+    pub strategy: String,
+    pub interval: String,
+    pub rr_label: String,
+    pub confidence: u32,
+    pub expectancy_r: f64,
+    pub win_rate: f64,
+    pub profit_factor: f64,
+    pub n_trades: usize,
+    pub entry: f64,
+}
+
+/// The scanner result: top-N best Buy and Sell setups across the universe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanResult {
+    pub top_buy: Vec<ScannerRow>,
+    pub top_sell: Vec<ScannerRow>,
+    pub scanned: usize,
+    pub built_ist: String,
+}
+
+/// NIFTY regime + market breadth context (display-only; never changes a score).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeInfo {
+    pub nifty_regime: String, // "Up" | "Down" | "Flat"
+    pub breadth_up: usize,
+    pub breadth_down: usize,
+    pub breadth_label: String, // "narrow" | "broad" | "neutral"
+}

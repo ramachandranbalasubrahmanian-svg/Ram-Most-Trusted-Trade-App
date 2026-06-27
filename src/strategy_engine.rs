@@ -721,6 +721,88 @@ pub fn simulate(
     trades
 }
 
+/// Like [`simulate`], but returns each trade's `(entry_bar_index, R)` so callers
+/// can split trades into in-sample / out-of-sample by position in history.
+/// Same model: ATR-scaled SL/target, intraday-only exit, one position at a time,
+/// net of round-trip cost.
+pub fn simulate_detailed(
+    bars: &[Candle],
+    atr: &[f64],
+    entries: &[usize],
+    dir: Direction,
+    k: f64,
+    rr: f64,
+    cost: f64,
+) -> Vec<(usize, f64)> {
+    let n = bars.len();
+    let s = dir.sign();
+    let mut trades = Vec::new();
+    let mut free_from = 0usize;
+    for &idx in entries {
+        if idx < free_from || idx + 1 >= n {
+            continue;
+        }
+        let a = atr[idx];
+        if !a.is_finite() || a <= 0.0 {
+            continue;
+        }
+        let day = bars[idx].day;
+        if bars[idx + 1].day != day {
+            continue;
+        }
+        let entry = bars[idx].close;
+        let risk = k * a;
+        let sl = entry - s * risk;
+        let tgt = entry + s * rr * risk;
+
+        let mut exit: Option<f64> = None;
+        let mut exit_idx = idx;
+        let mut j = idx + 1;
+        while j < n && bars[j].day == day {
+            let b = &bars[j];
+            match dir {
+                Direction::Long => {
+                    if b.low <= sl {
+                        exit = Some(sl);
+                        exit_idx = j;
+                        break;
+                    }
+                    if b.high >= tgt {
+                        exit = Some(tgt);
+                        exit_idx = j;
+                        break;
+                    }
+                }
+                Direction::Short => {
+                    if b.high >= sl {
+                        exit = Some(sl);
+                        exit_idx = j;
+                        break;
+                    }
+                    if b.low <= tgt {
+                        exit = Some(tgt);
+                        exit_idx = j;
+                        break;
+                    }
+                }
+            }
+            j += 1;
+        }
+        let (exit_price, eidx) = match exit {
+            Some(p) => (p, exit_idx),
+            None => {
+                let last = j - 1;
+                (bars[last].close, last)
+            }
+        };
+        let gross = s * (exit_price - entry) / risk;
+        let cost_r = cost * entry / risk;
+        trades.push((idx, gross - cost_r));
+        free_from = eidx + 1;
+    }
+    trades
+}
+
 /// Aggregate trade statistics for one (symbol, strategy, direction).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metrics {
