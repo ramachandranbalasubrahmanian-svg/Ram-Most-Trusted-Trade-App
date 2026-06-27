@@ -12,6 +12,7 @@
 
 mod analytics_kernel;
 mod config;
+mod costs;
 mod ingestion_engine;
 mod news_engine;
 mod risk_manager;

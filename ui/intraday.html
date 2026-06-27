@@ -152,6 +152,10 @@
               class="tab-btn rounded-md px-3 py-1.5 text-[12px] font-semibold transition border border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200">
         Top Scanner (10 Buy / 10 Sell)
       </button>
+      <button id="tabFinder" data-tab="finder"
+              class="tab-btn rounded-md px-3 py-1.5 text-[12px] font-semibold transition border border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200">
+        🎯 Capital-Fit Finder
+      </button>
     </section>
 
     <!-- ===================== SINGLE STOCK PANEL ===================== -->
@@ -227,6 +231,35 @@
           </div>
         </div>
       </div>
+    </section>
+
+    <!-- ===================== CAPITAL-FIT FINDER PANEL ===================== -->
+    <section id="panelFinder" class="space-y-3 hidden">
+      <div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3 space-y-2">
+        <p class="text-[11px] leading-relaxed text-slate-400">
+          Stocks sized to <span class="font-semibold text-slate-200">YOUR</span> capital &amp; risk — ranked by
+          fit-adjusted edge (Confidence × how fully your risk budget is deployable). Shows
+          <span class="font-semibold text-slate-200">ALL</span> stocks that fit your numbers, not a fixed Top-10.
+          Net P&amp;L is after broker fees + STT + exchange/SEBI charges + GST + stamp duty + slippage.
+        </p>
+        <div class="flex flex-wrap items-center gap-3">
+          <button id="runFinderBtn"
+                  class="rounded-md bg-sky-600 hover:bg-sky-500 active:scale-[0.99] transition text-white text-sm font-semibold px-4 py-1.5">
+            Find Best-Fit Stocks
+          </button>
+          <span id="finderMeta" class="text-[11px] text-slate-500 num">Not yet run.</span>
+        </div>
+      </div>
+
+      <div class="rounded-lg border border-slate-800 bg-[#0d1320] overflow-hidden">
+        <div class="tbl-wrap max-h-[68vh]">
+          <table>
+            <thead id="finderHead"></thead>
+            <tbody id="finderBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="finderOut"></div>
     </section>
 
     <!-- ===================== DISCLAIMER ===================== -->
@@ -526,10 +559,31 @@
       var riskPctTxt = isFinite(riskPctC) ? (riskPctC * 100).toFixed(2) + "%" : (state.riskPct.toFixed(2) + "%");
       html += '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">' +
         statCell("Quantity @ " + riskPctTxt, intFmt(c.quantity) + " sh", "text-slate-100") +
-        statCell("Max Risk", rupee(c.max_risk), "text-rose-300") +
-        statCell("Max Reward", rupee(c.max_reward), "text-emerald-300") +
+        statCell("Max Risk (gross)", rupee(c.max_risk), "text-rose-300") +
+        statCell("Max Reward (gross)", rupee(c.max_reward), "text-emerald-300") +
         statCell("ATR", price(c.atr), "text-slate-200") +
         '</div>';
+
+      // net-of-cost row (after all costs) — only when present
+      if (isNum(c.net_profit) || isNum(c.net_loss)) {
+        html += '<div class="grid grid-cols-2 gap-2 text-[11px]">' +
+          statCell("Net Reward · after all costs", rupee(c.net_profit), "text-emerald-400") +
+          statCell("Net Risk · after all costs", rupee(c.net_loss), "text-rose-400") +
+          '</div>';
+      }
+
+      // cost-breakdown line (target-hit scenario), display-only, skip if missing
+      var costs = c.costs;
+      if (costs && typeof costs === "object" && isNum(c.net_profit)) {
+        html += '<p class="text-[10px] text-slate-600 num">' +
+          'Costs (if target hits): brokerage ' + rupee(costs.brokerage) +
+          ' · STT ' + rupee(costs.stt) +
+          ' · txn ' + rupee(costs.exchange_txn) +
+          ' · GST ' + rupee(costs.gst) +
+          ' · stamp ' + rupee(costs.stamp) +
+          ' · slippage ' + rupee(costs.slippage) +
+          ' = ' + rupee(costs.total) + '</p>';
+      }
 
       // stat grid
       html += '<div class="grid grid-cols-3 sm:grid-cols-5 gap-2">' +
@@ -795,17 +849,135 @@
     }
 
     // ----------------------------------------------------------------
+    // Capital-Fit Finder rendering
+    // ----------------------------------------------------------------
+    var FINDER_COLS = [
+      { label: "Symbol", align: "left" },
+      { label: "Strategy", align: "left" },
+      { label: "Side", align: "left" },
+      { label: "Interval", align: "left" },
+      { label: "R:R", align: "left" },
+      { label: "Entry", align: "right" },
+      { label: "ATR", align: "right" },
+      { label: "Shares", align: "right" },
+      { label: "Fit", align: "left" },
+      { label: "Cap.Deployed", align: "right" },
+      { label: "Cap.Eff%", align: "right" },
+      { label: "Risk ₹", align: "right" },
+      { label: "Net Profit ₹", align: "right" },
+      { label: "Net Loss ₹", align: "right" },
+      { label: "Conf", align: "right" },
+      { label: "Exp(R)", align: "right" },
+      { label: "Win%", align: "right" },
+      { label: "PF", align: "right" },
+      { label: "n", align: "right" },
+    ];
+
+    function finderHeadHtml() {
+      var h = "<tr>";
+      for (var i = 0; i < FINDER_COLS.length; i++) {
+        h += '<th style="text-align:' + FINDER_COLS[i].align + '">' + esc(FINDER_COLS[i].label) + "</th>";
+      }
+      return h + "</tr>";
+    }
+    function finderEmptyRow() {
+      return '<tr><td colspan="' + FINDER_COLS.length + '" class="text-center text-slate-600 italic py-6 text-[11px]">No stocks fit your capital &amp; risk numbers</td></tr>';
+    }
+    function fitBadge(fit) {
+      var f = str(fit, "").toLowerCase();
+      if (f === "ideal") {
+        return '<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold border border-emerald-700 bg-emerald-950/40 text-emerald-300">ideal</span>';
+      }
+      if (f === "leverage_bound") {
+        return '<span title="Stock too pricey for full risk size at your capital" class="rounded px-1.5 py-0.5 text-[10px] font-semibold border border-amber-700 bg-amber-950/40 text-amber-300">leverage_bound</span>';
+      }
+      return '<span class="text-slate-500">' + esc(str(fit, "—")) + '</span>';
+    }
+    function finderRowHtml(r) {
+      r = r && typeof r === "object" ? r : {};
+      var side = str(r.side, "").toUpperCase();
+      var sideClass = side === "BUY" ? "text-emerald-300" : (side === "SELL" ? "text-rose-300" : "text-slate-300");
+      var cells = "";
+      cells += '<td style="text-align:left"><span class="font-bold text-slate-100">' + esc(str(r.symbol, "—")) + "</span></td>";
+      cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.strategy, "—")) + "</td>";
+      cells += '<td style="text-align:left"><span class="font-semibold ' + sideClass + '">' + esc(side || "—") + "</span></td>";
+      cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.interval, "—")) + "</td>";
+      cells += '<td style="text-align:left" class="text-slate-400 num">' + esc(str(r.rr_label, "—")) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-200">' + price(r.entry) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + price(r.atr) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-100 font-semibold">' + intFmt(r.shares) + "</td>";
+      cells += '<td style="text-align:left">' + fitBadge(r.fit) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + rupee(r.capital_deployed) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.capital_efficiency_pct, 1) + "%</td>";
+      cells += '<td style="text-align:right" class="num text-rose-300">' + rupee(r.risk_taken) + "</td>";
+      cells += '<td style="text-align:right" class="num text-emerald-400 font-semibold">' + rupee(r.net_profit) + "</td>";
+      cells += '<td style="text-align:right" class="num text-rose-400 font-semibold">' + rupee(r.net_loss) + "</td>";
+      cells += '<td style="text-align:right" class="num font-semibold text-sky-300">' + intFmt(r.confidence) + "</td>";
+      cells += '<td style="text-align:right" class="num ' + rClass(r.expectancy_r) + '">' + signedFixed(r.expectancy_r, 2) + "R</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.win_rate, 1) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.profit_factor, 2) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-500">' + intFmt(r.n_trades) + "</td>";
+      return "<tr>" + cells + "</tr>";
+    }
+
+    var finderLoaded = false, finderLoading = false;
+    function runFinder(force) {
+      if (finderLoading) return;
+      if (finderLoaded && !force) return;
+      finderLoading = true;
+      $("finderHead").innerHTML = finderHeadHtml();
+      $("finderBody").innerHTML = finderEmptyRow();
+      $("finderMeta").innerHTML = '<span class="inline-flex items-center gap-1.5"><span class="spin inline-block h-3 w-3 rounded-full border-2 border-slate-600 border-t-sky-400"></span>Scanning the universe and sizing to your capital… ~30-60s first run</span>';
+      $("finderOut").innerHTML = "";
+      var url = "/api/finder?capital=" + encodeURIComponent(state.capital) +
+        "&risk=" + encodeURIComponent(state.riskPct); // server expects a percent (e.g. 2.5)
+      getJson(url).then(function (res) {
+        res = res && typeof res === "object" ? res : {};
+        var rows = arr(res.rows);
+        $("finderHead").innerHTML = finderHeadHtml();
+        if (!rows.length) {
+          $("finderBody").innerHTML = finderEmptyRow();
+        } else {
+          var html = "";
+          for (var i = 0; i < rows.length; i++) {
+            try { html += finderRowHtml(rows[i]); } catch (e) { /* skip malformed row */ }
+          }
+          $("finderBody").innerHTML = html || finderEmptyRow();
+        }
+        var qualifying = intFmt(res.qualifying);
+        var scanned = intFmt(res.scanned);
+        var built = esc(str(res.built_ist, "—"));
+        $("finderMeta").innerHTML =
+          '<span class="text-slate-300">Showing ' + qualifying + ' of ' + scanned + ' scanned</span>' +
+          ' <span class="text-slate-600">· built ' + built + '</span>' +
+          ' <span class="text-slate-600">· ranked by fit-adjusted edge</span>';
+        finderLoaded = true;
+      }).catch(function () {
+        $("finderBody").innerHTML = finderEmptyRow();
+        $("finderMeta").textContent = "";
+        $("finderOut").innerHTML = errorBox("Could not run the Capital-Fit Finder. Check that the server is running and try again.");
+      }).then(function () { finderLoading = false; });
+    }
+
+    // ----------------------------------------------------------------
     // Tabs
     // ----------------------------------------------------------------
+    function tabBtnClass(active) {
+      return "tab-btn rounded-md px-3 py-1.5 text-[12px] font-semibold transition border " +
+        (active ? "border-sky-600 bg-sky-600/20 text-sky-200" : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200");
+    }
     function setTab(tab) {
       var single = tab === "single";
+      var scanner = tab === "scanner";
+      var finder = tab === "finder";
       $("panelSingle").classList.toggle("hidden", !single);
-      $("panelScanner").classList.toggle("hidden", single);
-      $("tabSingle").className = "tab-btn rounded-md px-3 py-1.5 text-[12px] font-semibold transition border " +
-        (single ? "border-sky-600 bg-sky-600/20 text-sky-200" : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200");
-      $("tabScanner").className = "tab-btn rounded-md px-3 py-1.5 text-[12px] font-semibold transition border " +
-        (!single ? "border-sky-600 bg-sky-600/20 text-sky-200" : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200");
-      if (!single) runScan(false); // lazy load on first view
+      $("panelScanner").classList.toggle("hidden", !scanner);
+      $("panelFinder").classList.toggle("hidden", !finder);
+      $("tabSingle").className = tabBtnClass(single);
+      $("tabScanner").className = tabBtnClass(scanner);
+      $("tabFinder").className = tabBtnClass(finder);
+      if (scanner) runScan(false);   // lazy load on first view
+      if (finder) runFinder(false);  // lazy load on first view
     }
 
     // ----------------------------------------------------------------
@@ -841,6 +1013,8 @@
       // Re-run whichever view is active so figures reflect new sizing.
       if (!$("panelScanner").classList.contains("hidden")) {
         runScan(true);
+      } else if (!$("panelFinder").classList.contains("hidden")) {
+        runFinder(true);
       } else if (str($("symbolInput").value, "").trim()) {
         getSuggestion();
       }
@@ -852,9 +1026,11 @@
     });
 
     $("runScanBtn").addEventListener("click", function () { runScan(true); });
+    $("runFinderBtn").addEventListener("click", function () { runFinder(true); });
 
     $("tabSingle").addEventListener("click", function () { setTab("single"); });
     $("tabScanner").addEventListener("click", function () { setTab("scanner"); });
+    $("tabFinder").addEventListener("click", function () { setTab("finder"); });
 
     // ----------------------------------------------------------------
     // Boot

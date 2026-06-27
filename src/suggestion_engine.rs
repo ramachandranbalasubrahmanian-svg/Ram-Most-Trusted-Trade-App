@@ -25,8 +25,8 @@ use crate::stats::{
 use crate::storage_kernel::{self, Candle, discover_symbols, load_candles, open_conn};
 use crate::strategy_engine::{Indicators, compute_indicators, simulate_detailed};
 use crate::types::{
-    ConvictionDelta, RegimeInfo, ScanResult, ScannerRow, SetupCard, StockSuggestion,
-    StrategyBlock, SuggestStrategy,
+    ConvictionDelta, FinderResult, FinderRow, RegimeInfo, ScanResult, ScannerRow, SetupCard,
+    StockSuggestion, StrategyBlock, SuggestStrategy,
 };
 
 /// Intervals scanned per stock (matches the page: 3m/5m/10m/15m/30m/1h).
@@ -548,6 +548,12 @@ fn build_setup_card(
     let max_risk = quantity as f64 * sl_dist;
     let max_reward = quantity as f64 * rr * sl_dist;
 
+    // Net of itemized round-trip costs (broker + STT + exchange/SEBI + GST +
+    // stamp + slippage) for this exact position size.
+    let long = matches!(cs.dir, Direction::Long);
+    let (net_profit, costs_target) = crate::costs::net_pnl(quantity, entry, target, long);
+    let (net_loss, _) = crate::costs::net_pnl(quantity, entry, sl, long);
+
     let prob_score = cs.win_rate;
     let prob_floor = stats::wilson_lower(cs.win_rate / 100.0, cs.n) * 100.0;
 
@@ -583,6 +589,9 @@ trade only minimum size.",
         risk_pct,
         max_risk,
         max_reward,
+        net_profit,
+        net_loss,
+        costs: costs_target,
 
         win_rate: cs.win_rate,
         profit_factor: cs.profit_factor,
@@ -792,7 +801,7 @@ pub fn analyze_symbol(
                 }
                 for &(sl_mult, rr) in RR_CONFIGS.iter() {
                     let trades = simulate_detailed(
-                        &bars, &ind.atr, &entries, dir, sl_mult, rr, SUGGEST_COST,
+                        &bars, &ind.atr, &entries, dir, sl_mult, rr, crate::costs::backtest_roundtrip_pct(),
                     );
                     if trades.is_empty() {
                         continue;
@@ -911,7 +920,7 @@ fn scan_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> (Option<
                 }
                 for &(sl_mult, rr) in RR_CONFIGS.iter() {
                     let trades = simulate_detailed(
-                        &bars, &ind.atr, &entries, dir, sl_mult, rr, SUGGEST_COST,
+                        &bars, &ind.atr, &entries, dir, sl_mult, rr, crate::costs::backtest_roundtrip_pct(),
                     );
                     if trades.is_empty() {
                         continue;
@@ -1024,6 +1033,222 @@ pub fn scan_universe(root: &Path, symbols: &[String], _capital: f64, _risk_pct: 
     ScanResult {
         top_buy,
         top_sell,
+        scanned: symbols.len(),
+        built_ist,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// find_capital_fit (Capital-Fit ATR finder)
+// ---------------------------------------------------------------------------
+
+/// Best single setup for a symbol (any side), carrying the fields sizing needs.
+struct FitBest {
+    strat: SuggestStrategy,
+    tf: Timeframe,
+    dir: Direction,
+    sl_mult: f64,
+    rr: f64,
+    confidence: u32,
+    expectancy: f64,
+    win_rate: f64,
+    profit_factor: f64,
+    n: usize,
+    entry: f64,
+    atr: f64,
+}
+
+/// Light search: the single best setup (either side) for one symbol by
+/// Confidence (>=50), with the ATR / sl_mult / direction needed for sizing.
+fn fit_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> Option<FitBest> {
+    const LIGHT_TFS: [Timeframe; 3] = [Timeframe::Min15, Timeframe::Min30, Timeframe::Min60];
+    let mut best: Option<FitBest> = None;
+    for &tf in LIGHT_TFS.iter() {
+        let path = config::parquet_path(root, symbol, tf);
+        if !path.exists() {
+            continue;
+        }
+        let bars = match load_candles(conn, root, symbol, tf) {
+            Ok(b) if b.len() >= 2 => b,
+            _ => continue,
+        };
+        let ind = compute_indicators(&bars, tf.minutes());
+        let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
+        let (prior_hi, prior_lo) = prior_day_high_low(&bars);
+        let last_close = *closes.last().unwrap();
+        let atr = last_finite_atr(&ind.atr);
+        let oos_start_bar = ((bars.len() as f64) * (1.0 - OOS_FRACTION)).floor() as usize;
+
+        for strat in SuggestStrategy::all() {
+            for dir in [Direction::Long, Direction::Short] {
+                let entries =
+                    strategy_signals(strat, dir, &bars, &ind, &closes, &prior_hi, &prior_lo);
+                if entries.is_empty() {
+                    continue;
+                }
+                for &(sl_mult, rr) in RR_CONFIGS.iter() {
+                    let trades = simulate_detailed(
+                        &bars, &ind.atr, &entries, dir, sl_mult, rr,
+                        crate::costs::backtest_roundtrip_pct(),
+                    );
+                    if trades.is_empty() {
+                        continue;
+                    }
+                    let mut cs = build_config_stat(
+                        strat, tf, dir, sl_mult, rr, &trades, oos_start_bar, last_close, atr,
+                    );
+                    if cs.n < PROVISIONAL_MIN {
+                        continue;
+                    }
+                    ensure_confidence(&mut cs);
+                    let Some(conf) = cs.confidence else { continue };
+                    if conf < 50 {
+                        continue;
+                    }
+                    let better = match &best {
+                        None => true,
+                        Some(b) => (conf, cs.expectancy) > (b.confidence, b.expectancy),
+                    };
+                    if better {
+                        best = Some(FitBest {
+                            strat,
+                            tf,
+                            dir,
+                            sl_mult,
+                            rr,
+                            confidence: conf,
+                            expectancy: cs.expectancy,
+                            win_rate: cs.win_rate,
+                            profit_factor: cs.profit_factor,
+                            n: cs.n,
+                            entry: last_close,
+                            atr,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+/// Capital-Fit ATR finder. For the given `capital` + `risk_pct`, size every
+/// symbol's best edge to YOUR account and return ALL that fit (≥ 1 tradeable
+/// share within 5× buying power), ranked by fit-adjusted edge
+/// (Confidence × deployability). Net P&L is after itemized round-trip costs.
+pub fn find_capital_fit(
+    root: &Path,
+    symbols: &[String],
+    capital: f64,
+    risk_pct: f64,
+) -> FinderResult {
+    thread_local! {
+        static FIT_CONN: RefCell<Option<duckdb::Connection>> = const { RefCell::new(None) };
+    }
+    let bests: Vec<Option<FitBest>> = symbols
+        .par_iter()
+        .map(|sym| {
+            FIT_CONN.with(|cell| {
+                let mut slot = cell.borrow_mut();
+                if slot.is_none() {
+                    *slot = open_conn().ok();
+                }
+                let Some(conn) = slot.as_ref() else { return None };
+                fit_symbol(conn, root, sym)
+            })
+        })
+        .collect();
+
+    let risk_amount = capital * risk_pct;
+    let leverage = config::LEVERAGE;
+    let mut rows: Vec<FinderRow> = Vec::new();
+
+    for (sym, maybe) in symbols.iter().zip(bests.into_iter()) {
+        let Some(b) = maybe else { continue };
+        let sl_dist = b.sl_mult * b.atr;
+        if sl_dist <= 0.0 || b.entry <= 0.0 {
+            continue;
+        }
+        let shares_by_risk = (risk_amount / sl_dist).floor().max(0.0);
+        let max_affordable = (capital * leverage / b.entry).floor().max(0.0);
+        let shares = shares_by_risk.min(max_affordable);
+        if shares < 1.0 {
+            continue; // can't take even one share within buying power → not a fit
+        }
+        let shares_i = shares as i64;
+        let long = matches!(b.dir, Direction::Long);
+        let (sl, target) = if long {
+            (b.entry - sl_dist, b.entry + b.rr * sl_dist)
+        } else {
+            (b.entry + sl_dist, b.entry - b.rr * sl_dist)
+        };
+        let (net_profit, _) = crate::costs::net_pnl(shares_i, b.entry, target, long);
+        let (net_loss, _) = crate::costs::net_pnl(shares_i, b.entry, sl, long);
+
+        let capital_deployed = shares * b.entry;
+        let max_notional = capital * leverage;
+        let capital_efficiency_pct = if max_notional > 0.0 {
+            capital_deployed / max_notional * 100.0
+        } else {
+            0.0
+        };
+        let risk_taken = shares * sl_dist;
+        let deployability = if shares_by_risk > 0.0 {
+            (shares / shares_by_risk).min(1.0)
+        } else {
+            0.0
+        };
+        let fit = if shares_by_risk <= max_affordable {
+            "ideal"
+        } else {
+            "leverage_bound"
+        };
+        let fit_score = b.confidence as f64 * deployability;
+
+        rows.push(FinderRow {
+            symbol: sym.clone(),
+            strategy: b.strat.name().to_string(),
+            side: b.dir.as_str().to_string(),
+            interval: pretty_interval(b.tf).to_string(),
+            rr_label: format!("1 : {:.1}", b.rr),
+            entry: b.entry,
+            atr: b.atr,
+            sl,
+            target,
+            shares: shares_i,
+            shares_by_risk: shares_by_risk as i64,
+            max_affordable: max_affordable as i64,
+            fit: fit.to_string(),
+            capital_deployed,
+            capital_efficiency_pct,
+            risk_taken,
+            net_profit,
+            net_loss,
+            confidence: b.confidence,
+            expectancy_r: b.expectancy,
+            win_rate: b.win_rate,
+            profit_factor: b.profit_factor,
+            n_trades: b.n,
+            fit_score,
+        });
+    }
+
+    rows.sort_by(|a, b| {
+        b.fit_score
+            .partial_cmp(&a.fit_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let qualifying = rows.len();
+    let built_ist = chrono::Utc::now()
+        .with_timezone(&config::IST)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+
+    FinderResult {
+        capital,
+        risk_pct,
+        rows,
+        qualifying,
         scanned: symbols.len(),
         built_ist,
     }
@@ -1263,6 +1488,9 @@ mod tests {
             risk_pct: 0.025,
             max_risk: 0.0,
             max_reward: 0.0,
+            net_profit: 0.0,
+            net_loss: 0.0,
+            costs: crate::types::CostBreakdown::default(),
             win_rate: 0.0,
             profit_factor: 0.0,
             expectancy_r: 0.0,

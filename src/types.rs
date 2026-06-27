@@ -282,8 +282,12 @@ pub struct SetupCard {
     // sizing (under current capital + risk%)
     pub quantity: i64,
     pub risk_pct: f64,
-    pub max_risk: f64,
-    pub max_reward: f64,
+    pub max_risk: f64,    // gross ₹ if stop hits (≈ risk budget)
+    pub max_reward: f64,  // gross ₹ if target hits
+    // net of itemized round-trip costs (broker + taxes + slippage)
+    pub net_profit: f64,  // target hit, after all costs
+    pub net_loss: f64,    // stop hit, after all costs (negative)
+    pub costs: CostBreakdown, // itemized costs for the target-hit scenario
 
     // core backtest stats (net of cost)
     pub win_rate: f64,
@@ -422,6 +426,69 @@ pub struct ScannerRow {
 pub struct ScanResult {
     pub top_buy: Vec<ScannerRow>,
     pub top_sell: Vec<ScannerRow>,
+    pub scanned: usize,
+    pub built_ist: String,
+}
+
+/// Itemized round-trip transaction cost for one intraday equity trade (INR).
+/// Mirrors the Zerodha-style charge stack so net P&L is exact, not blended.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct CostBreakdown {
+    pub brokerage: f64,
+    pub stt: f64,
+    pub exchange_txn: f64,
+    pub sebi: f64,
+    pub gst: f64,
+    pub stamp: f64,
+    pub slippage: f64,
+    pub total: f64,
+}
+
+/// One row of the Capital-Fit ATR finder: a stock sized to YOUR capital + risk,
+/// with a "fit" verdict and net-of-cost projected P&L.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinderRow {
+    pub symbol: String,
+    pub strategy: String,
+    pub side: String,
+    pub interval: String,
+    pub rr_label: String,
+    pub entry: f64,
+    pub atr: f64,
+    pub sl: f64,
+    pub target: f64,
+    /// Shares actually tradeable = min(risk-based, leverage-affordable).
+    pub shares: i64,
+    /// Shares the risk budget alone would buy (before the leverage cap).
+    pub shares_by_risk: i64,
+    /// Shares the 5× buying power can afford at this price.
+    pub max_affordable: i64,
+    /// "ideal" (risk fully deployable) | "leverage_bound" (too pricey for full risk).
+    pub fit: String,
+    pub capital_deployed: f64,
+    pub capital_efficiency_pct: f64,
+    /// Rupees actually at risk if the stop hits (≈ risk budget when ideal).
+    pub risk_taken: f64,
+    /// Net of itemized costs.
+    pub net_profit: f64,
+    pub net_loss: f64,
+    pub confidence: u32,
+    pub expectancy_r: f64,
+    pub win_rate: f64,
+    pub profit_factor: f64,
+    pub n_trades: usize,
+    /// Ranking score = Confidence × deployability.
+    pub fit_score: f64,
+}
+
+/// Result of the Capital-Fit finder: every qualifying stock for the given
+/// capital + risk, ranked by fit-adjusted edge (not a fixed Top-N).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinderResult {
+    pub capital: f64,
+    pub risk_pct: f64,
+    pub rows: Vec<FinderRow>,
+    pub qualifying: usize,
     pub scanned: usize,
     pub built_ist: String,
 }

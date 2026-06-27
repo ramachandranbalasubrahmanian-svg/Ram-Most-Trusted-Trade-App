@@ -892,7 +892,11 @@ pub fn backtest_symbol(
         return Ok(Vec::new());
     }
     let ind = compute_indicators(&bars, tf.minutes());
-    let (k, rr, cost) = (config::SL_ATR_MULT, config::DEFAULT_RR, config::ROUND_TRIP_COST);
+    let (k, rr, cost) = (
+        config::SL_ATR_MULT,
+        config::DEFAULT_RR,
+        crate::costs::backtest_roundtrip_pct(),
+    );
 
     let mut out = Vec::new();
     for strat in registry() {

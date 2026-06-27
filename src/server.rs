@@ -31,7 +31,7 @@ use tokio::sync::Notify;
 use tracing::{info, warn};
 
 use crate::config::UserSettings;
-use crate::types::{RegimeInfo, ScanResult, SignalPacket, StockSuggestion};
+use crate::types::{FinderResult, RegimeInfo, ScanResult, SignalPacket, StockSuggestion};
 
 /// Shared application state handed to the server and updated by the analytics
 /// loop. Cheaply cloneable (all fields are `Arc`).
@@ -60,6 +60,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/symbols", get(symbols_handler))
         .route("/api/suggest/{symbol}", get(suggest_handler))
         .route("/api/scanner", get(scanner_handler))
+        .route("/api/finder", get(finder_handler))
         .route("/api/regime", get(regime_handler))
         .with_state(state);
 
@@ -199,6 +200,33 @@ async fn scanner_handler(
         }
         Err(e) => {
             warn!("scan_universe failed: {e:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
+        }
+    }
+}
+
+/// `GET /api/finder` — Capital-Fit ATR finder. Sizes every symbol's best edge
+/// to the requested capital + risk and returns ALL that fit, ranked by
+/// fit-adjusted edge. Computed on demand (depends on capital/risk), ~30s.
+async fn finder_handler(
+    State(state): State<AppState>,
+    Query(params): Query<SuggestParams>,
+) -> Response {
+    let root = state.root.clone();
+    let capital = params.capital.unwrap_or(100000.0);
+    let risk = params.risk.unwrap_or(2.5) / 100.0;
+
+    let result: Result<FinderResult> = tokio::task::spawn_blocking(move || {
+        let symbols = crate::storage_kernel::discover_symbols(&root).unwrap_or_default();
+        Ok(crate::suggestion_engine::find_capital_fit(&root, &symbols, capital, risk))
+    })
+    .await
+    .unwrap_or_else(|e| Err(anyhow::anyhow!("finder task panicked: {e}")));
+
+    match result {
+        Ok(r) => Json(r).into_response(),
+        Err(e) => {
+            warn!("find_capital_fit failed: {e:#}");
             (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
         }
     }
