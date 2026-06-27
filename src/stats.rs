@@ -11,7 +11,7 @@
 use crate::types::ConvictionDelta;
 
 // Reference scoring constants (must match the Python `core/scoring.py`).
-const MIN_SAMPLE: usize = 30;
+const MIN_SAMPLE: usize = 50;
 const PROVISIONAL_MIN: usize = 20;
 const PROVISIONAL_CAP: f64 = 55.0;
 const HARD_CAP_NORMAL: f64 = 90.0;
@@ -458,6 +458,26 @@ pub struct ConfInput {
     pub oos_expectancy_r: Option<f64>,
     pub max_loss_streak: usize,
     pub t_stat: f64,
+    // --- v2 reliability inputs ---
+    /// Deflated Sharpe (0..1). Drives the multiple-testing GATE.
+    pub dsr: f64,
+    /// Walk-forward fold consistency (0..1): fraction of folds with +EV.
+    pub wf_consistency: f64,
+    /// Parameter robustness (0..1): fraction of R:R configs (same setup) +EV.
+    pub robustness_pct: f64,
+    /// Does the edge hold in BOTH up- and down-NIFTY regimes? None = unknown.
+    pub regime_consistent: Option<bool>,
+}
+
+impl ConfInput {
+    /// Neutral v2 inputs (no extra penalty, gate passes) — used by the light
+    /// scanner/finder search which does not run the full reliability gauntlet.
+    pub fn neutral_v2(&mut self) {
+        self.dsr = 1.0;
+        self.wf_consistency = 1.0;
+        self.robustness_pct = 1.0;
+        self.regime_consistent = None;
+    }
 }
 
 /// Confidence result mirroring the Python `build_confidence` contract.
@@ -474,6 +494,18 @@ pub struct ConfidenceResult {
 }
 
 /// Compute the statistical Confidence (0-100) from a setup's metrics.
+///
+/// v2 reliability hardening (display-honest, multiple-testing aware):
+///   * Full-score floor raised to 50 trades (`MIN_SAMPLE`); 20-49 is provisional
+///     and capped at `PROVISIONAL_CAP` (55). Below 20 trades or non-positive
+///     expectancy => no score at all.
+///   * Three extra behavioural penalties: walk-forward inconsistency, fragile
+///     parameters, and regime-dependence — subtracted with the existing nine
+///     BEFORE the clamp/caps.
+///   * A Deflated-Sharpe GATE: if `dsr < 0.50` the final score is capped at 59
+///     (Low band) to avoid presenting a selection artifact as a real edge. This
+///     is a cap, not a deduction, so it is recorded with 0 points but still
+///     surfaced in `penalties` for the UI. The band is recomputed AFTER the cap.
 pub fn build_confidence(inp: &ConfInput) -> ConfidenceResult {
     let n = inp.n_trades;
     let p_value = t_to_p_onesided(inp.t_stat);
@@ -612,6 +644,45 @@ pub fn build_confidence(inp: &ConfInput) -> ConfidenceResult {
         ));
     }
 
+    // --- v2: walk-forward consistency ---
+    if inp.wf_consistency < 0.6 {
+        penalties.push((
+            "inconsistent_walkforward".to_string(),
+            10,
+            "Edge fails in many walk-forward folds — does not hold up out-of-time.".to_string(),
+        ));
+    } else if inp.wf_consistency < 0.8 {
+        penalties.push((
+            "mild_walkforward_inconsistency".to_string(),
+            5,
+            "Edge is only mildly consistent across walk-forward folds.".to_string(),
+        ));
+    }
+
+    // --- v2: parameter robustness ---
+    if inp.robustness_pct < 0.4 {
+        penalties.push((
+            "fragile_parameters".to_string(),
+            8,
+            "Edge survives in few neighbouring R:R configs — parameters look fragile.".to_string(),
+        ));
+    } else if inp.robustness_pct < 0.6 {
+        penalties.push((
+            "marginal_parameter_robustness".to_string(),
+            4,
+            "Edge holds in only some neighbouring R:R configs — marginal robustness.".to_string(),
+        ));
+    }
+
+    // --- v2: regime dependence ---
+    if inp.regime_consistent == Some(false) {
+        penalties.push((
+            "regime_dependent_edge".to_string(),
+            10,
+            "edge does not hold in both up- and down-NIFTY regimes".to_string(),
+        ));
+    }
+
     let sum_penalties: f64 = penalties.iter().map(|(_, pts, _)| *pts as f64).sum();
     let mut adjusted = (base - sum_penalties).clamp(0.0, 95.0);
 
@@ -630,19 +701,37 @@ pub fn build_confidence(inp: &ConfInput) -> ConfidenceResult {
         adjusted = adjusted.min(PROVISIONAL_CAP);
     }
 
-    let score = adjusted as u32; // truncates like Python int()
+    let mut score = adjusted as u32; // truncates like Python int()
 
+    // --- v2: Deflated-Sharpe GATE (multiple-testing) ---
+    // Applied AFTER penalties and caps: a low DSR means the selected combo's
+    // Sharpe is likely a selection artifact, so we cap the displayed score into
+    // the Low band. Recorded with 0 points (a cap, not a deduction) but still
+    // surfaced so the UI can explain why the score is held down.
+    if inp.dsr < 0.5 {
+        score = score.min(59);
+        penalties.push((
+            "dsr_gate".to_string(),
+            0,
+            format!(
+                "Deflated-Sharpe {:.2} < 0.50 — capped to Low band to avoid a selection artifact",
+                inp.dsr
+            ),
+        ));
+    }
+
+    // --- band recomputed from the FINAL (post-cap) score ---
     let band = if provisional {
-        "Provisional (small sample, 20-29 trades)".to_string()
-    } else if adjusted < 50.0 {
+        "Provisional (small sample, 20-49 trades)".to_string()
+    } else if score < 50 {
         "Weak - NO TRADE".to_string()
-    } else if adjusted < 60.0 {
+    } else if score < 60 {
         "Low confidence".to_string()
-    } else if adjusted < 70.0 {
+    } else if score < 70 {
         "Moderate confidence".to_string()
-    } else if adjusted < 80.0 {
+    } else if score < 80 {
         "Good confidence".to_string()
-    } else if adjusted < 90.0 {
+    } else if score < 90 {
         "Strong confidence".to_string()
     } else {
         "Very strong confidence".to_string()
@@ -867,10 +956,10 @@ mod tests {
         assert!(d1 > 0.99, "high positive sharpe should give high DSR, got {d1}");
     }
 
-    #[test]
-    fn confidence_strong_when_edge_real() {
-        // Construct a set: t≈3 via win-loss mix, pf=2, n=300, oos matches.
-        let inp = ConfInput {
+    /// Helper: a clean, well-validated strong setup with neutral v2 reliability
+    /// inputs (gate passes, no extra penalties) and a configurable DSR.
+    fn strong_inp(dsr: f64) -> ConfInput {
+        ConfInput {
             n_trades: 300,
             win_rate_pct: 60.0,
             expectancy_r: 0.3,
@@ -882,7 +971,18 @@ mod tests {
             oos_expectancy_r: Some(0.28),
             max_loss_streak: 3,
             t_stat: 3.0,
-        };
+            dsr,
+            wf_consistency: 1.0,
+            robustness_pct: 1.0,
+            regime_consistent: None,
+        }
+    }
+
+    #[test]
+    fn confidence_strong_when_edge_real() {
+        // Construct a set: t≈3 via win-loss mix, pf=2, n=300, oos matches.
+        // dsr=0.8 so the multiple-testing gate passes.
+        let inp = strong_inp(0.8);
         let r = build_confidence(&inp);
         let score = r.score.expect("score present");
         // base = 50 + clamp(36,0,45) = 86; no penalties => 86 => "Strong confidence".
@@ -890,6 +990,35 @@ mod tests {
         assert_eq!(r.band, "Strong confidence");
         assert!(!r.provisional);
         assert!(r.p_value < 0.01);
+        // Gate passes => no dsr_gate penalty present.
+        assert!(!r.penalties.iter().any(|(label, _, _)| label == "dsr_gate"));
+    }
+
+    #[test]
+    fn confidence_dsr_gate_caps_to_low() {
+        // Same strong setup but dsr=0.0 (< 0.50) => capped at <=59, "Low confidence".
+        let inp = strong_inp(0.0);
+        let r = build_confidence(&inp);
+        let score = r.score.expect("score present");
+        assert!(score <= 59, "expected dsr gate to cap score, got {score}");
+        assert_eq!(r.band, "Low confidence");
+        let gate = r
+            .penalties
+            .iter()
+            .find(|(label, _, _)| label == "dsr_gate")
+            .expect("dsr_gate penalty present");
+        assert_eq!(gate.1, 0, "dsr_gate is a cap, not a deduction");
+        assert!(gate.2.contains("0.50"), "explanation mentions the threshold");
+    }
+
+    #[test]
+    fn confidence_dsr_gate_passes_when_dsr_high() {
+        // Strong setup with dsr=0.8 (>= 0.50) => gate passes, score stays >= 70.
+        let inp = strong_inp(0.8);
+        let r = build_confidence(&inp);
+        let score = r.score.expect("score present");
+        assert!(score >= 70, "gate should pass and leave score high, got {score}");
+        assert!(!r.penalties.iter().any(|(label, _, _)| label == "dsr_gate"));
     }
 
     #[test]
@@ -906,6 +1035,10 @@ mod tests {
             oos_expectancy_r: None,
             max_loss_streak: 6,
             t_stat: -1.0,
+            dsr: 1.0,
+            wf_consistency: 1.0,
+            robustness_pct: 1.0,
+            regime_consistent: None,
         };
         let r = build_confidence(&inp);
         assert!(r.score.is_none());
@@ -924,8 +1057,9 @@ mod tests {
 
     #[test]
     fn confidence_provisional_capped() {
+        // n=40 is now provisional (20-49) under the raised MIN_SAMPLE=50.
         let inp = ConfInput {
-            n_trades: 25, // 20-29 => provisional
+            n_trades: 40, // 20-49 => provisional
             win_rate_pct: 70.0,
             expectancy_r: 0.5,
             profit_factor: 3.0,
@@ -936,12 +1070,65 @@ mod tests {
             oos_expectancy_r: None,
             max_loss_streak: 1,
             t_stat: 4.0,
+            dsr: 1.0,
+            wf_consistency: 1.0,
+            robustness_pct: 1.0,
+            regime_consistent: None,
         };
         let r = build_confidence(&inp);
         let score = r.score.unwrap();
         assert!(score <= PROVISIONAL_CAP as u32, "score {score} exceeds provisional cap");
-        assert_eq!(r.band, "Provisional (small sample, 20-29 trades)");
+        assert!(r.band.contains("Provisional"), "band was {}", r.band);
         assert!(r.provisional);
+    }
+
+    #[test]
+    fn confidence_walkforward_robustness_penalties() {
+        // A strong base setup, but bad walk-forward + fragile parameters should
+        // drag the score down relative to the clean version.
+        let clean = strong_inp(0.8);
+        let clean_score = build_confidence(&clean).score.unwrap();
+
+        let mut bad = strong_inp(0.8);
+        bad.wf_consistency = 0.5; // < 0.6 => 10 pts
+        bad.robustness_pct = 0.3; // < 0.4 => 8 pts
+        let r = build_confidence(&bad);
+        let bad_score = r.score.unwrap();
+        assert!(bad_score < clean_score, "{bad_score} should be below {clean_score}");
+        assert!(r.penalties.iter().any(|(l, _, _)| l == "inconsistent_walkforward"));
+        assert!(r.penalties.iter().any(|(l, _, _)| l == "fragile_parameters"));
+    }
+
+    #[test]
+    fn confidence_regime_dependence_reduces_score() {
+        // Regime-dependent edge (Some(false)) loses points vs Some(true)/None.
+        let dependent = build_confidence(&{
+            let mut i = strong_inp(0.8);
+            i.regime_consistent = Some(false);
+            i
+        })
+        .score
+        .unwrap();
+
+        let consistent = build_confidence(&{
+            let mut i = strong_inp(0.8);
+            i.regime_consistent = Some(true);
+            i
+        })
+        .score
+        .unwrap();
+
+        let unknown = build_confidence(&{
+            let mut i = strong_inp(0.8);
+            i.regime_consistent = None;
+            i
+        })
+        .score
+        .unwrap();
+
+        assert!(dependent < consistent, "regime-dependent {dependent} < consistent {consistent}");
+        assert!(dependent < unknown, "regime-dependent {dependent} < unknown {unknown}");
+        assert_eq!(consistent, unknown, "Some(true) and None should not penalise");
     }
 
     #[test]

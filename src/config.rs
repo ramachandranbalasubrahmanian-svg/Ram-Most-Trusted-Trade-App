@@ -61,7 +61,7 @@ pub fn data_root() -> PathBuf {
 /// The resolutions available in the archive. `Daily` is the Kite-sourced
 /// `1day/` set (IST tz); `DailyLong` is the Yahoo `daily/` set (~30 yrs,
 /// tz-naive, has an extra `adj close` column).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Timeframe {
     Minute,
     Min3,
@@ -216,7 +216,7 @@ pub const VALUE_AREA_PCT: f64 = 0.70;
 // ---------------------------------------------------------------------------
 
 /// Trade side.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Direction {
     Long,
     Short,

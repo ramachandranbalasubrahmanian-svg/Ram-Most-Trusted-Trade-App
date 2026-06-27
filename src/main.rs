@@ -15,6 +15,7 @@ mod config;
 mod costs;
 mod ingestion_engine;
 mod news_engine;
+mod regime;
 mod risk_manager;
 mod server;
 mod stats;
@@ -22,6 +23,7 @@ mod storage_kernel;
 mod strategy_engine;
 mod suggestion_engine;
 mod types;
+mod validation;
 
 use std::collections::HashMap;
 use std::sync::Arc;

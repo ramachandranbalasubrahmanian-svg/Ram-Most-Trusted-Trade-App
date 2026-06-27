@@ -308,6 +308,13 @@ struct ConfigStat {
     entry: f64,
     atr: f64,
 
+    // v2 reliability inputs
+    trades: Vec<(usize, f64)>,
+    wf_consistency: f64,
+    dsr: f64,
+    robustness_pct: f64,
+    regime_consistent: Option<bool>,
+
     // confidence (computed lazily during selection)
     confidence: Option<u32>,
     confidence_band: String,
@@ -315,6 +322,14 @@ struct ConfigStat {
     p_value: f64,
     provisional: bool,
 }
+
+/// Embargo gap (fraction of bars) purged between in-sample and OOS to kill
+/// boundary look-ahead leakage.
+const EMBARGO_FRACTION: f64 = 0.02;
+/// Walk-forward folds used for the consistency check.
+const WF_FOLDS: usize = 5;
+/// Minimum trades per regime before regime consistency can be judged.
+const REGIME_MIN_EACH: usize = 10;
 
 /// Profit factor over rs: sum(+) / |sum(-)|, capped at 99, inf -> 99.
 fn profit_factor(rs: &[f64]) -> f64 {
@@ -354,16 +369,16 @@ fn build_config_stat(
     sl_mult: f64,
     rr: f64,
     trades: &[(usize, f64)],
-    oos_start_bar: usize,
+    total_bars: usize,
     entry: f64,
     atr: f64,
 ) -> ConfigStat {
     let rs: Vec<f64> = trades.iter().map(|(_, r)| *r).collect();
-    let oos_rs: Vec<f64> = trades
-        .iter()
-        .filter(|(idx, _)| *idx >= oos_start_bar)
-        .map(|(_, r)| *r)
-        .collect();
+    // Purged + embargoed OOS split (removes boundary look-ahead leakage).
+    let (_is_rs, oos_rs) =
+        crate::validation::purged_embargoed_split(trades, total_bars, OOS_FRACTION, EMBARGO_FRACTION);
+    // Walk-forward fold consistency (cheap; computed for every config).
+    let wf_consistency = crate::validation::walkforward_consistency(trades, total_bars, WF_FOLDS);
 
     let n = rs.len();
     let expectancy = stats::mean(&rs);
@@ -399,6 +414,11 @@ fn build_config_stat(
         oos_expectancy,
         entry,
         atr,
+        trades: trades.to_vec(),
+        wf_consistency,
+        dsr: 1.0,            // neutral until the reliability pre-pass fills it
+        robustness_pct: 1.0, // neutral until the reliability pre-pass fills it
+        regime_consistent: None,
         confidence: None,
         confidence_band: String::new(),
         wilson_low: 0.0,
@@ -424,6 +444,10 @@ fn ensure_confidence(cs: &mut ConfigStat) {
             oos_expectancy_r: cs.oos_expectancy,
             max_loss_streak: cs.max_loss_streak,
             t_stat: cs.t_stat,
+            dsr: cs.dsr,
+            wf_consistency: cs.wf_consistency,
+            robustness_pct: cs.robustness_pct,
+            regime_consistent: cs.regime_consistent,
         };
         let conf = build_confidence(&inp);
         cs.confidence = conf.score;
@@ -496,7 +520,8 @@ fn build_setup_card(
     let dsr = deflated_sharpe(cs.sharpe, cs.n, trial_sharpes);
     let mc = monte_carlo(&cs.rs, 5000, 42);
     let ci = expectancy_ci(&cs.rs, 5000, 42);
-    let shrunk = shrunk_expectancy(cs.expectancy, cs.n, 0.0, 20.0);
+    // Harder shrink toward 0 for small samples (prior strength 40 ≈ 40 trades).
+    let shrunk = shrunk_expectancy(cs.expectancy, cs.n, 0.0, 40.0);
 
     let (mc_prob_profit, mc_p95_dd_r) = match mc {
         Some(m) => (m.prob_profit, m.p95_maxdd_r),
@@ -769,6 +794,11 @@ pub fn analyze_symbol(
     let conn = open_conn()?;
     let meta = symbol_meta(root, symbol);
 
+    // NIFTY-regime map (once) + per-interval bar dates, for regime conditioning.
+    let regime_map = crate::regime::nifty_regime_map(&conn);
+    let mut tf_dates: std::collections::HashMap<Timeframe, Vec<String>> =
+        std::collections::HashMap::new();
+
     // All configs, grouped by strategy. Also collect every config's sharpe for DSR.
     let mut by_strategy: Vec<Vec<ConfigStat>> = vec![Vec::new(); 4];
     let mut trial_sharpes: Vec<f64> = Vec::new();
@@ -784,13 +814,16 @@ pub fn analyze_symbol(
             _ => continue,
         };
         intervals_used += 1;
+        if let Ok(d) = storage_kernel::load_candle_dates(&conn, root, symbol, tf) {
+            tf_dates.insert(tf, d);
+        }
 
         let ind = compute_indicators(&bars, tf.minutes());
         let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
         let (prior_hi, prior_lo) = prior_day_high_low(&bars);
         let last_close = *closes.last().unwrap();
         let last_atr = last_finite_atr(&ind.atr);
-        let oos_start_bar = ((bars.len() as f64) * (1.0 - OOS_FRACTION)).floor() as usize;
+        let total_bars = bars.len();
 
         for (si, strat) in SuggestStrategy::all().into_iter().enumerate() {
             for dir in [Direction::Long, Direction::Short] {
@@ -807,7 +840,7 @@ pub fn analyze_symbol(
                         continue;
                     }
                     let cs = build_config_stat(
-                        strat, tf, dir, sl_mult, rr, &trades, oos_start_bar, last_close, last_atr,
+                        strat, tf, dir, sl_mult, rr, &trades, total_bars, last_close, last_atr,
                     );
                     // Every config's sharpe feeds the DSR trial set.
                     trial_sharpes.push(cs.sharpe);
@@ -819,9 +852,46 @@ pub fn analyze_symbol(
         }
     }
 
-    // Score confidence for every kept config.
-    for group in by_strategy.iter_mut() {
+    // --- reliability pre-pass: DSR (multiple-testing), parameter robustness
+    //     across the R:R configs, and NIFTY-regime conditioning — computed before
+    //     confidence scoring so the DSR gate + new penalties can apply. ---
+    let mut group_exp: std::collections::HashMap<(usize, Timeframe, Direction), Vec<f64>> =
+        std::collections::HashMap::new();
+    for (si, group) in by_strategy.iter().enumerate() {
+        for cs in group {
+            group_exp
+                .entry((si, cs.tf, cs.dir))
+                .or_default()
+                .push(cs.expectancy);
+        }
+    }
+    for (si, group) in by_strategy.iter_mut().enumerate() {
         for cs in group.iter_mut() {
+            // DSR over EVERY config searched (the multiple-testing trial set).
+            cs.dsr = deflated_sharpe(cs.sharpe, cs.n, &trial_sharpes);
+            // Robustness across the R:R configs of this (strategy, tf, dir).
+            cs.robustness_pct = crate::validation::parameter_robustness(
+                group_exp
+                    .get(&(si, cs.tf, cs.dir))
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+            );
+            // Regime conditioning: split this config's trades by NIFTY up/down day.
+            if let Some(dates) = tf_dates.get(&cs.tf) {
+                let mut up: Vec<f64> = Vec::new();
+                let mut down: Vec<f64> = Vec::new();
+                for &(idx, r) in &cs.trades {
+                    if let Some(day) = dates.get(idx) {
+                        match regime_map.get(day) {
+                            Some(true) => up.push(r),
+                            Some(false) => down.push(r),
+                            None => {}
+                        }
+                    }
+                }
+                cs.regime_consistent =
+                    crate::regime::regime_consistency(&up, &down, REGIME_MIN_EACH);
+            }
             ensure_confidence(cs);
         }
     }
@@ -909,7 +979,7 @@ fn scan_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> (Option<
         let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
         let (prior_hi, prior_lo) = prior_day_high_low(&bars);
         let last_close = *closes.last().unwrap();
-        let oos_start_bar = ((bars.len() as f64) * (1.0 - OOS_FRACTION)).floor() as usize;
+        let total_bars = bars.len();
 
         for strat in SuggestStrategy::all() {
             for dir in [Direction::Long, Direction::Short] {
@@ -926,7 +996,7 @@ fn scan_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> (Option<
                         continue;
                     }
                     let mut cs = build_config_stat(
-                        strat, tf, dir, sl_mult, rr, &trades, oos_start_bar, last_close,
+                        strat, tf, dir, sl_mult, rr, &trades, total_bars, last_close,
                         last_finite_atr(&ind.atr),
                     );
                     if cs.n < PROVISIONAL_MIN {
@@ -1077,7 +1147,7 @@ fn fit_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> Option<Fi
         let (prior_hi, prior_lo) = prior_day_high_low(&bars);
         let last_close = *closes.last().unwrap();
         let atr = last_finite_atr(&ind.atr);
-        let oos_start_bar = ((bars.len() as f64) * (1.0 - OOS_FRACTION)).floor() as usize;
+        let total_bars = bars.len();
 
         for strat in SuggestStrategy::all() {
             for dir in [Direction::Long, Direction::Short] {
@@ -1095,7 +1165,7 @@ fn fit_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> Option<Fi
                         continue;
                     }
                     let mut cs = build_config_stat(
-                        strat, tf, dir, sl_mult, rr, &trades, oos_start_bar, last_close, atr,
+                        strat, tf, dir, sl_mult, rr, &trades, total_bars, last_close, atr,
                     );
                     if cs.n < PROVISIONAL_MIN {
                         continue;

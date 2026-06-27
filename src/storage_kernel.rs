@@ -203,6 +203,29 @@ pub fn load_candles(conn: &Connection, root: &Path, symbol: &str, tf: Timeframe)
     Ok(out)
 }
 
+/// Load the IST calendar date (`"YYYY-MM-DD"`) of every candle for a symbol at a
+/// resolution, oldest-first — index-aligned 1:1 with [`load_candles`]. Used to
+/// map a trade's entry bar to a market date for NIFTY-regime conditioning.
+pub fn load_candle_dates(
+    conn: &Connection,
+    root: &Path,
+    symbol: &str,
+    tf: Timeframe,
+) -> Result<Vec<String>> {
+    let path = config::parquet_path(root, symbol, tf);
+    let sql = format!(
+        "SELECT CAST(date AS DATE)::VARCHAR AS day FROM read_parquet({}) ORDER BY date",
+        quote_path(&path)
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // Pure numeric reductions (unit-tested, reference-matched)
 // ---------------------------------------------------------------------------
