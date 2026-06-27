@@ -78,7 +78,7 @@ pub fn discover_symbols(root: &Path) -> Result<Vec<String>> {
 
 /// Quote a filesystem path as a single-quoted SQL string literal (escaping any
 /// embedded single quote). Paths come from on-disk filenames, not user input.
-fn quote_path(p: &Path) -> String {
+pub(crate) fn quote_path(p: &Path) -> String {
     let s = p.to_string_lossy().replace('\'', "''");
     format!("'{s}'")
 }
@@ -86,7 +86,7 @@ fn quote_path(p: &Path) -> String {
 /// Fresh in-memory DuckDB connection, pinned to a single thread (we parallelise
 /// across symbols at the rayon level) and to IST so `CAST(ts AS DATE)` yields
 /// the correct Indian trading day.
-fn open_conn() -> Result<Connection> {
+pub(crate) fn open_conn() -> Result<Connection> {
     let conn = Connection::open_in_memory().context("open duckdb in-memory")?;
     conn.execute_batch("SET threads TO 1; SET TimeZone='Asia/Kolkata';")
         .context("configure duckdb session")?;
@@ -120,10 +120,10 @@ fn read_daily_ohlc(conn: &Connection, path: &Path) -> Result<(Vec<f64>, Vec<f64>
 /// Pull (IST-day-string, typical-price, volume) for minute bars in roughly the
 /// last 40 calendar days (comfortably ≥ 25 trading days). Day-level trimming to
 /// exactly the window happens in `volume_profile`.
-fn read_recent_minute(conn: &Connection, path: &Path) -> Result<Vec<(String, f64, i64)>> {
+fn read_recent_minute(conn: &Connection, path: &Path) -> Result<Vec<(String, f64, f64)>> {
     let qp = quote_path(path);
     let sql = format!(
-        "SELECT CAST(date AS DATE)::VARCHAR AS day, (high+low+close)/3.0 AS typ, volume \
+        "SELECT CAST(date AS DATE)::VARCHAR AS day, (high+low+close)/3.0 AS typ, CAST(volume AS DOUBLE) AS volume \
          FROM read_parquet({qp}) \
          WHERE date >= (SELECT max(date) FROM read_parquet({qp})) - INTERVAL 40 DAY \
          ORDER BY date"
@@ -133,12 +133,72 @@ fn read_recent_minute(conn: &Connection, path: &Path) -> Result<Vec<(String, f64
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, f64>(1)?,
-            row.get::<_, i64>(2)?,
+            row.get::<_, f64>(2)?,
         ))
     })?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r?);
+    }
+    Ok(out)
+}
+
+/// One OHLCV candle plus an incrementing intraday `day` id (0-based, bumps each
+/// time the IST calendar date changes) for fast same-day grouping downstream.
+#[derive(Debug, Clone, Copy)]
+pub struct Candle {
+    pub day: u32,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+}
+
+/// Load every candle for a symbol at a given resolution, oldest-first, tagging
+/// each with a contiguous `day` id. Intended for the backtester (use `5min`/
+/// `15min` for tractable history; `minute` works but is ~1M rows/symbol).
+pub fn load_candles(conn: &Connection, root: &Path, symbol: &str, tf: Timeframe) -> Result<Vec<Candle>> {
+    let path = config::parquet_path(root, symbol, tf);
+    // volume is CAST to DOUBLE: a few files carry a volume at/over i64::MAX
+    // (bad ticks) that would otherwise overflow an i64 read.
+    let sql = format!(
+        "SELECT CAST(date AS DATE)::VARCHAR AS day, open, high, low, close, CAST(volume AS DOUBLE) AS volume \
+         FROM read_parquet({}) ORDER BY date",
+        quote_path(&path)
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, f64>(1)?,
+            row.get::<_, f64>(2)?,
+            row.get::<_, f64>(3)?,
+            row.get::<_, f64>(4)?,
+            row.get::<_, f64>(5)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    let mut last_day: Option<String> = None;
+    let mut day_id: u32 = 0;
+    for r in rows {
+        let (day, open, high, low, close, volume) = r?;
+        match &last_day {
+            Some(d) if *d == day => {}
+            Some(_) => {
+                day_id += 1;
+                last_day = Some(day);
+            }
+            None => last_day = Some(day),
+        }
+        out.push(Candle {
+            day: day_id,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        });
     }
     Ok(out)
 }
@@ -202,7 +262,7 @@ pub struct VolumeProfile {
 /// equal-width bins over the windowed price range, value area grown by always
 /// taking the heavier adjacent bin.
 pub fn volume_profile(
-    recent: &[(String, f64, i64)],
+    recent: &[(String, f64, f64)],
     days: usize,
     nbins: usize,
     va_pct: f64,
@@ -218,7 +278,7 @@ pub fn volume_profile(
     let bars: Vec<(f64, f64)> = recent
         .iter()
         .filter(|(d, _, _)| keep.contains(d.as_str()))
-        .map(|(_, typ, vol)| (*typ, *vol as f64))
+        .map(|(_, typ, vol)| (*typ, *vol))
         .collect();
     if bars.is_empty() {
         return None;
@@ -396,10 +456,10 @@ mod tests {
     #[test]
     fn volume_profile_single_bin_and_value_area() {
         // One dominant price bucket → POC there, value area collapses to it.
-        let recent: Vec<(String, f64, i64)> = vec![
-            ("2026-06-25".into(), 100.0, 1000),
-            ("2026-06-25".into(), 100.1, 10),
-            ("2026-06-25".into(), 99.9, 10),
+        let recent: Vec<(String, f64, f64)> = vec![
+            ("2026-06-25".into(), 100.0, 1000.0),
+            ("2026-06-25".into(), 100.1, 10.0),
+            ("2026-06-25".into(), 99.9, 10.0),
         ];
         let vp = volume_profile(&recent, 25, 100, 0.70).unwrap();
         assert_eq!(vp.bars, 3);
