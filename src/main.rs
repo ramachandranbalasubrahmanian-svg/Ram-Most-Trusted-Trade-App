@@ -18,6 +18,11 @@ mod risk_manager;
 mod server;
 mod storage_kernel;
 mod strategy_engine;
+mod types;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 
@@ -31,18 +36,28 @@ fn main() -> Result<()> {
     match cmd {
         "premarket" => run_premarket(&args[2..]),
         "backtest" => run_backtest(&args[2..]),
+        "serve" => run_serve(&args[2..]),
         "" | "help" | "-h" | "--help" => {
             println!("RAM_ISTP — local intraday backtest + signal engine (signals only).");
             println!("usage:");
             println!("  ram_istp premarket [SYMBOL ...]         pre-market historical scan");
             println!("  ram_istp backtest [TF] [SYMBOL ...]     backtest + build edge map");
+            println!("  ram_istp serve [TF]                     run replay + dashboard server");
             Ok(())
         }
         other => {
-            eprintln!("unknown command: {other:?}  (try `premarket` or `backtest`)");
+            eprintln!("unknown command: {other:?}  (try `premarket`, `backtest`, or `serve`)");
             std::process::exit(2);
         }
     }
+}
+
+/// Current IST wall-clock as "YYYY-MM-DD HH:MM:SS".
+fn now_ist_string() -> String {
+    chrono::Utc::now()
+        .with_timezone(&config::IST)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
 }
 
 /// Parse a timeframe token (e.g. `5min`, `15min`, `1day`); `None` if not one.
@@ -210,4 +225,141 @@ fn print_top_edges(eligible: &[&EdgeRecord], dir: config::Direction, title: &str
             r.symbol, r.strategy, m.n, m.expectancy, m.win_pct, m.profit_factor, m.max_dd
         );
     }
+}
+
+/// `serve [TF]` — load/build the edge map, replay the latest session as a tick
+/// stream, rank Top-10 Buy/Sell each second, and serve the dashboard. This is
+/// the integration point wiring ingestion → analytics → risk → server.
+fn run_serve(raw: &[String]) -> Result<()> {
+    let root = config::data_root();
+    if !root.exists() {
+        anyhow::bail!("data root {} not found", root.display());
+    }
+    let tf = raw.first().and_then(|s| parse_timeframe(s)).unwrap_or(Timeframe::Min30);
+
+    // Edge map: load cache, or build it now.
+    let records = match strategy_engine::load_edge_map(tf) {
+        Ok(r) => r,
+        Err(_) => {
+            eprintln!("no cached edge map for {} — building it now…", tf.dir());
+            let syms = storage_kernel::discover_symbols(&root)?;
+            let (r, _f) = strategy_engine::backtest_universe(&root, &syms, tf);
+            strategy_engine::save_edge_map(&r, tf)?;
+            r
+        }
+    };
+    let edge_index = strategy_engine::build_index(&records);
+    let eligible_edges: usize = edge_index.values().map(Vec::len).sum();
+    let symbols: Vec<String> = {
+        let mut s: Vec<String> = edge_index.keys().cloned().collect();
+        s.sort();
+        s
+    };
+    eprintln!(
+        "serve @ {}: {} symbols with eligible edges ({} edges)",
+        tf.dir(),
+        symbols.len(),
+        eligible_edges
+    );
+
+    // Baselines (ATR / VAH-VAL levels) for the live universe.
+    let baselines: HashMap<String, SymbolBaseline> = storage_kernel::premarket_scan(&root, &symbols)
+        .baselines
+        .into_iter()
+        .map(|b| (b.symbol.clone(), b))
+        .collect();
+
+    // Tick channel + shared state.
+    let (tx, rx) = crossbeam_channel::unbounded::<types::Tick>();
+    let stop = Arc::new(AtomicBool::new(false));
+    let settings = Arc::new(std::sync::RwLock::new(config::UserSettings::default()));
+    let settings0 = *settings.read().unwrap();
+    let packet = Arc::new(std::sync::RwLock::new(types::SignalPacket::empty(
+        types::SettingsView { budget: settings0.budget, risk_pct: settings0.risk_pct },
+        "replay",
+    )));
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let state = server::AppState {
+        packet: packet.clone(),
+        settings: settings.clone(),
+        notify: notify.clone(),
+        static_dir: std::path::PathBuf::from("ui"),
+    };
+
+    // Ingestion thread: replay the latest session.
+    let ing = {
+        let (root, symbols, stop) = (root.clone(), symbols.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let opts = ingestion_engine::ReplayOptions { tf, days_back: 1, speed: 0.0 };
+            if let Err(e) = ingestion_engine::run_replay(&root, &symbols, &opts, tx, stop) {
+                eprintln!("replay ended: {e:#}");
+            }
+        })
+    };
+
+    // Analytics + risk thread: fold ticks, emit a ranked packet every second.
+    let ana = {
+        let (baselines, edge_index, symbols) = (baselines, edge_index, symbols.clone());
+        let (settings, packet, notify, stop) =
+            (settings.clone(), packet.clone(), notify.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let mut engine =
+                analytics_kernel::Engine::new(&symbols, &baselines, &edge_index, eligible_edges);
+            let limits = risk_manager::RiskLimits::default();
+            let mut last_emit = std::time::Instant::now();
+            let mut ticks: u64 = 0;
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                    Ok(t) => {
+                        engine.on_tick(&t);
+                        ticks += 1;
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                        // drain done; keep emitting last state so the UI stays live
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                }
+                if last_emit.elapsed() >= std::time::Duration::from_secs(1) {
+                    let t0 = std::time::Instant::now();
+                    let cands = engine.snapshot_candidates();
+                    let set = *settings.read().unwrap();
+                    let (top_buy, top_sell) = risk_manager::rank(&cands, &set, &limits);
+                    let risk_meter = risk_manager::risk_meter(&top_buy, &top_sell, &set);
+                    let mut diagnostics = engine.diagnostics();
+                    diagnostics.tick_to_signal_us = t0.elapsed().as_micros() as u64;
+                    diagnostics.ticks_per_sec = ticks;
+                    ticks = 0;
+                    let now = chrono::Utc::now().with_timezone(&config::IST);
+                    let alerts: Vec<types::Alert> =
+                        risk_manager::squareoff_alert(now).into_iter().collect();
+                    *packet.write().unwrap() = types::SignalPacket {
+                        ts_ist: now_ist_string(),
+                        mode: "replay".to_string(),
+                        settings: types::SettingsView { budget: set.budget, risk_pct: set.risk_pct },
+                        top_buy,
+                        top_sell,
+                        risk_meter,
+                        diagnostics,
+                        alerts,
+                    };
+                    notify.notify_waiters();
+                    last_emit = std::time::Instant::now();
+                }
+            }
+        })
+    };
+
+    // Server on the tokio runtime (blocks until exit).
+    let rt = tokio::runtime::Runtime::new()?;
+    let addr: std::net::SocketAddr = "127.0.0.1:8787".parse().unwrap();
+    eprintln!("dashboard:  http://{addr}");
+    let res = rt.block_on(async move { server::serve(addr, state).await });
+
+    stop.store(true, Ordering::Relaxed);
+    let _ = ing.join();
+    let _ = ana.join();
+    res
 }

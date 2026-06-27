@@ -895,6 +895,26 @@ pub fn load_edge_map(tf: Timeframe) -> Result<Vec<EdgeRecord>> {
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+/// Fast per-symbol lookup of eligible edges, consumed by the live analytics
+/// layer to confirm currently-firing setups.
+pub type EdgeIndex = std::collections::HashMap<String, Vec<crate::types::EligibleEdge>>;
+
+/// Project the eligible rows of an edge map into an [`EdgeIndex`].
+pub fn build_index(records: &[EdgeRecord]) -> EdgeIndex {
+    let mut idx: EdgeIndex = std::collections::HashMap::new();
+    for r in records.iter().filter(|r| r.eligible) {
+        idx.entry(r.symbol.clone()).or_default().push(crate::types::EligibleEdge {
+            strategy: r.strategy.clone(),
+            direction: r.direction,
+            expectancy_r: r.metrics.expectancy,
+            profit_factor: r.metrics.profit_factor,
+            win_pct: r.metrics.win_pct,
+            n: r.metrics.n,
+        });
+    }
+    idx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
