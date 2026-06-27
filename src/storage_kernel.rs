@@ -88,8 +88,27 @@ pub(crate) fn quote_path(p: &Path) -> String {
 /// the correct Indian trading day.
 pub(crate) fn open_conn() -> Result<Connection> {
     let conn = Connection::open_in_memory().context("open duckdb in-memory")?;
-    conn.execute_batch("SET threads TO 1; SET TimeZone='Asia/Kolkata';")
-        .context("configure duckdb session")?;
+    // threads=1: we parallelise across symbols at the rayon level.
+    // TimeZone=IST: `CAST(ts AS DATE)` yields the correct Indian trading day.
+    // memory_limit + temp_directory: a backstop so a single pathological query
+    // (e.g. a 25-year 1-minute file, or a full-universe scan) cannot OOM an 18 GB
+    // box — past the limit DuckDB spills to disk instead of crashing the process.
+    // It is per-connection, and we open ~one connection per rayon worker, so the
+    // default is sized to keep the aggregate (≈ cores × limit) well under 18 GB.
+    // Tune via RAM_ISTP_DB_MEMORY_LIMIT (e.g. "3GB", "75%").
+    let mem = std::env::var("RAM_ISTP_DB_MEMORY_LIMIT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "2GB".to_string());
+    let mem = mem.replace('\'', "");
+    let spill = std::env::temp_dir().join("ram_istp_duckdb_spill");
+    let _ = std::fs::create_dir_all(&spill);
+    conn.execute_batch(&format!(
+        "SET threads TO 1; SET TimeZone='Asia/Kolkata'; \
+         SET memory_limit='{mem}'; SET temp_directory={spill};",
+        spill = quote_path(&spill),
+    ))
+    .context("configure duckdb session")?;
     Ok(conn)
 }
 

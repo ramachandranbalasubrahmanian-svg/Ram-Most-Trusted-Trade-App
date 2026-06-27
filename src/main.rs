@@ -18,6 +18,7 @@ mod costs;
 mod execution_staging;
 mod ingestion_engine;
 mod journal_sync;
+mod kite_instruments;
 mod news_engine;
 mod portfolio_analytics;
 mod regime;
@@ -49,6 +50,7 @@ fn main() -> Result<()> {
         "backtest" => run_backtest(&args[2..]),
         "serve" => run_serve(&args[2..]),
         "suggest" => run_suggest(&args[2..]),
+        "instruments" => run_instruments(),
         "" | "help" | "-h" | "--help" => {
             println!("RAM_ISTP — local intraday backtest + signal engine (signals only).");
             println!("usage:");
@@ -56,6 +58,7 @@ fn main() -> Result<()> {
             println!("  ram_istp backtest [TF] [SYMBOL ...]     backtest + build edge map");
             println!("  ram_istp serve [TF]                     run replay + dashboard server");
             println!("  ram_istp suggest SYMBOL                 per-stock intraday suggestion");
+            println!("  ram_istp instruments                    refresh NSE token map (pre-market)");
             Ok(())
         }
         other => {
@@ -627,6 +630,44 @@ fn run_serve(raw: &[String]) -> Result<()> {
     let _ = ana.join();
     let _ = sched.join();
     res
+}
+
+/// `instruments` — daily pre-market job: refresh the NSE `tradingsymbol →
+/// instrument_token` map from Kite's public dump and report the live universe.
+/// Read-only / advisory: it fetches a PUBLIC csv (no auth, no secrets) and never
+/// places an order. This is the mapping the live Full-mode WebSocket subscribes
+/// by (tokens, never string tickers).
+fn run_instruments() -> Result<()> {
+    let root = config::data_root();
+    let ist_date = chrono::Utc::now()
+        .with_timezone(&config::IST)
+        .format("%Y-%m-%d")
+        .to_string();
+    let cache_dir = std::path::Path::new("cache");
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let map = rt.block_on(kite_instruments::load_or_refresh(cache_dir, &ist_date))?;
+
+    let archive = storage_kernel::discover_symbols(&root).unwrap_or_default();
+    let cap = config::live_universe_max();
+    let universe = kite_instruments::select_universe(&map, &archive, cap);
+
+    println!(
+        "\nNSE instrument map ({ist_date}): {} cash-equity symbols mapped to integer tokens",
+        map.len()
+    );
+    println!(
+        "live universe: {} of {} archive symbols map to a token (cap {}) — subscribe these as instrument_tokens in Full mode",
+        universe.len(),
+        archive.len(),
+        cap
+    );
+    println!("\nsample mappings (symbol → instrument_token):");
+    for (sym, tok) in universe.iter().take(8) {
+        println!("  {sym:<14} {tok}");
+    }
+    println!("\ncached → {}", kite_instruments::cache_path(cache_dir, &ist_date).display());
+    Ok(())
 }
 
 /// `suggest SYMBOL` — print the per-stock intraday suggestion (CLI view of what

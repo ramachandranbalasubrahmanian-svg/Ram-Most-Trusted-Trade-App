@@ -245,6 +245,21 @@ pub const TOP_N: usize = 10;
 
 /// Per-symbol sliding window of the most recent ticks held in memory.
 pub const LIVE_WINDOW: usize = 1000;
+/// Maximum number of NSE-equity instruments to map → `instrument_token` and
+/// subscribe on the live WebSocket. A configurable knob, NOT a hardcoded
+/// universe: the actual tokens always come from the live Kite instruments dump
+/// (`kite_instruments`), never from literals. Stays under Kite's ~3000
+/// tokens/connection cap. Override via `RAM_ISTP_LIVE_UNIVERSE_MAX`.
+pub const LIVE_UNIVERSE_MAX: usize = 1600;
+
+/// Resolve the live-universe cap, honouring `RAM_ISTP_LIVE_UNIVERSE_MAX`.
+pub fn live_universe_max() -> usize {
+    std::env::var("RAM_ISTP_LIVE_UNIVERSE_MAX")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(LIVE_UNIVERSE_MAX)
+}
 /// Trailing trading days used to build the intraday volume profile (VAH/VAL).
 pub const VOLUME_PROFILE_DAYS: usize = 25;
 /// Fraction of volume that defines the "value area" (standard 70%).

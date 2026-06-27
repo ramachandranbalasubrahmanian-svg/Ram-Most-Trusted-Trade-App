@@ -19,6 +19,7 @@ futures-util = "0.3.32"
 # need it: DuckDB handles all out-of-core/parquet work, and live per-symbol
 # 1000-tick windows are plain Rust ring buffers (VecDeque) — faster and matches
 # the "lock-free ring buffer / native structures" design goal.
+csv = "1.3.1"
 rayon = "1.12.0"
 reqwest = { version = "0.13.4", features = ["json", "query"] }
 serde = { version = "1.0.228", features = ["derive"] }
