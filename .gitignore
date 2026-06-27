@@ -19,3 +19,6 @@ nse_instruments_cache.json
 # macOS
 .DS_Store
 **/.DS_Store
+
+# Runtime journal DB + CSV exports (not source)
+/data/
