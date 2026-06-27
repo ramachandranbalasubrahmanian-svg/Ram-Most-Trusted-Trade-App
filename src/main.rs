@@ -318,7 +318,9 @@ fn run_serve(raw: &[String]) -> Result<()> {
                         ticks += 1;
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                        // drain done; keep emitting last state so the UI stays live
+                        // Replay finished: keep the last snapshot live for the UI,
+                        // but sleep so we re-emit ~1/s instead of busy-spinning.
+                        std::thread::sleep(std::time::Duration::from_millis(200));
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
                 }

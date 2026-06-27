@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ram-istp",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "cd '/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture' && exec ./target/debug/ram_istp serve 30min"
+      ],
+      "port": 8787
+    }
+  ]
+}

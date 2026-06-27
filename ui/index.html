@@ -1,9 +1,643 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><title>RAM_ISTP — dashboard (stub)</title></head>
-<body>
-  <h1>RAM_ISTP dashboard</h1>
-  <p>Contract stub — replaced in Phase 4 by the full Tailwind SPA wired to
-     <code>/ws/live_signals</code>.</p>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAM ISTP · Live Signals</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    html, body { background: #0a0e14; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #cbd5e1;
+    }
+    .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; }
+    ::-webkit-scrollbar-track { background: #0a0e14; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+    .pulse-dot { animation: pulse 1.6s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    input[type="range"] { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: #1e293b; outline: none; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #38bdf8; cursor: pointer; border: 2px solid #0a0e14; }
+    input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #38bdf8; cursor: pointer; border: 2px solid #0a0e14; }
+    .tbl-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; }
+    thead th {
+      position: sticky; top: 0; z-index: 5;
+      background: #0d1320; color: #64748b;
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #1e293b;
+    }
+    tbody td { padding: 5px 8px; font-size: 12px; white-space: nowrap; border-bottom: 1px solid #131b29; }
+    tbody tr:hover td { background: #11192680; }
+  </style>
+</head>
+<body class="min-h-screen antialiased">
+  <!-- ===================== HEADER ===================== -->
+  <header class="sticky top-0 z-20 border-b border-slate-800 bg-[#0a0e14]/95 backdrop-blur">
+    <div class="mx-auto max-w-[1700px] px-4 py-2.5 flex items-center gap-4 flex-wrap">
+      <div class="flex items-center gap-2.5">
+        <div class="h-7 w-7 rounded-md bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm">R</div>
+        <div>
+          <div class="text-sm font-bold tracking-tight text-slate-100 leading-none">RAM ISTP</div>
+          <div class="text-[10px] text-slate-500 leading-none mt-0.5">Intraday Signals · Analytics Engine</div>
+        </div>
+      </div>
+      <span id="modeBadge" class="px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-slate-700 text-slate-300">—</span>
+
+      <div class="flex-1"></div>
+
+      <div class="flex items-center gap-2 text-xs num">
+        <span class="text-slate-500">IST</span>
+        <span id="tsIst" class="font-semibold text-slate-200">—</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span id="connDot" class="h-2.5 w-2.5 rounded-full bg-slate-600"></span>
+        <span id="connText" class="text-[11px] font-medium text-slate-400">connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[1700px] px-4 py-3 space-y-3">
+
+    <!-- ===================== CONTROLS + RISK ===================== -->
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+      <!-- Budget -->
+      <div class="lg:col-span-4 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Budget</span>
+          <span class="text-[10px] text-slate-600">5× MIS leverage</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="budMinus" class="h-8 w-8 shrink-0 rounded-md border border-slate-700 bg-slate-800/60 text-slate-300 text-lg leading-none hover:bg-slate-700 active:scale-95 transition">−</button>
+          <div class="flex-1 text-center">
+            <span id="budgetVal" class="num text-xl font-bold text-slate-100">₹5,00,000</span>
+          </div>
+          <button id="budPlus" class="h-8 w-8 shrink-0 rounded-md border border-slate-700 bg-slate-800/60 text-slate-300 text-lg leading-none hover:bg-slate-700 active:scale-95 transition">+</button>
+        </div>
+        <input id="budgetRange" type="range" class="w-full mt-3" min="50000" max="7500000" step="50000" value="500000" />
+        <div class="flex justify-between text-[9px] text-slate-600 num mt-1">
+          <span>₹50K</span><span>₹75L</span>
+        </div>
+      </div>
+
+      <!-- Risk -->
+      <div class="lg:col-span-3 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Risk / Trade</span>
+          <span id="riskVal" class="num text-xl font-bold text-amber-300">1%</span>
+        </div>
+        <input id="riskRange" type="range" class="w-full mt-1" min="1" max="7" step="1" value="1" />
+        <div class="flex justify-between text-[9px] text-slate-600 num mt-1">
+          <span>1%</span><span>7%</span>
+        </div>
+        <div class="text-[10px] text-slate-500 mt-2 num">
+          Risk amount: <span id="riskAmt" class="text-slate-300 font-medium">—</span>
+        </div>
+      </div>
+
+      <!-- Risk gauge -->
+      <div class="lg:col-span-5 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Exposure</span>
+          <span id="exposurePct" class="num text-sm font-bold text-slate-200">0.0%</span>
+        </div>
+        <div class="h-3 w-full rounded-full bg-slate-800 overflow-hidden">
+          <div id="exposureBar" class="h-full rounded-full bg-emerald-500 transition-all duration-300" style="width:0%"></div>
+        </div>
+        <div class="grid grid-cols-3 gap-2 mt-2.5 text-[10px]">
+          <div>
+            <div class="text-slate-600 uppercase tracking-wide">Deployed</div>
+            <div id="deployed" class="num text-slate-200 font-semibold">—</div>
+          </div>
+          <div>
+            <div class="text-slate-600 uppercase tracking-wide">Max Notional</div>
+            <div id="maxNotional" class="num text-slate-200 font-semibold">—</div>
+          </div>
+          <div>
+            <div class="text-slate-600 uppercase tracking-wide">Free Margin</div>
+            <div id="freeMargin" class="num text-slate-200 font-semibold">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== ALERTS ===================== -->
+    <section id="alertsWrap" class="space-y-1.5 hidden"></section>
+
+    <!-- ===================== TABLES ===================== -->
+    <section class="grid grid-cols-1 2xl:grid-cols-2 gap-3">
+      <!-- BUY -->
+      <div class="rounded-lg border border-emerald-900/50 bg-[#0d1320] overflow-hidden">
+        <div class="flex items-center justify-between px-3 py-2 border-b border-emerald-900/40 bg-emerald-950/30">
+          <div class="flex items-center gap-2">
+            <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
+            <span class="text-xs font-bold uppercase tracking-wider text-emerald-300">Top 10 · Buy</span>
+          </div>
+          <span id="buyCount" class="text-[10px] text-slate-500 num">0 names</span>
+        </div>
+        <div class="tbl-wrap max-h-[44vh] 2xl:max-h-[58vh]">
+          <table>
+            <thead id="buyHead"></thead>
+            <tbody id="buyBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- SELL -->
+      <div class="rounded-lg border border-rose-900/50 bg-[#0d1320] overflow-hidden">
+        <div class="flex items-center justify-between px-3 py-2 border-b border-rose-900/40 bg-rose-950/30">
+          <div class="flex items-center gap-2">
+            <span class="h-2 w-2 rounded-full bg-rose-400"></span>
+            <span class="text-xs font-bold uppercase tracking-wider text-rose-300">Top 10 · Sell</span>
+          </div>
+          <span id="sellCount" class="text-[10px] text-slate-500 num">0 names</span>
+        </div>
+        <div class="tbl-wrap max-h-[44vh] 2xl:max-h-[58vh]">
+          <table>
+            <thead id="sellHead"></thead>
+            <tbody id="sellBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== DIAGNOSTICS ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+      <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">Diagnostics</div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+        <div><div class="text-[9px] text-slate-600 uppercase tracking-wide">Tick → Signal</div><div id="dTickSig" class="num text-sm font-semibold text-sky-300">— µs</div></div>
+        <div><div class="text-[9px] text-slate-600 uppercase tracking-wide">Ingest Latency</div><div id="dIngest" class="num text-sm font-semibold text-slate-200">— µs</div></div>
+        <div><div class="text-[9px] text-slate-600 uppercase tracking-wide">Ticks / s</div><div id="dTps" class="num text-sm font-semibold text-slate-200">—</div></div>
+        <div><div class="text-[9px] text-slate-600 uppercase tracking-wide">Threads</div><div id="dThreads" class="num text-sm font-semibold text-slate-200">—</div></div>
+        <div><div class="text-[9px] text-slate-600 uppercase tracking-wide">Universe</div><div id="dUniverse" class="num text-sm font-semibold text-slate-200">—</div></div>
+        <div><div class="text-[9px] text-slate-600 uppercase tracking-wide">Eligible Edges</div><div id="dEdges" class="num text-sm font-semibold text-slate-200">—</div></div>
+        <div><div class="text-[9px] text-slate-600 uppercase tracking-wide">I/O</div><div id="dIo" class="num text-sm font-semibold text-slate-200">— MB/s</div></div>
+      </div>
+    </section>
+
+    <!-- ===================== HONESTY BANNER ===================== -->
+    <section class="rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2.5">
+      <p class="text-[11px] leading-relaxed text-amber-200/80">
+        <span class="font-bold text-amber-300">Signals &amp; analysis only — NOT investment advice.</span>
+        Projected P&amp;L figures are scenarios net of estimated cost, not guarantees or promises.
+        The 15:15 IST square-off is an <span class="font-semibold">alert</span> only.
+        This engine never places, modifies, or cancels any broker order.
+      </p>
+    </section>
+
+    <footer class="text-center text-[10px] text-slate-700 py-2">
+      RAM ISTP · local analytics · last update <span id="footTs" class="num">—</span>
+    </footer>
+  </main>
+
+  <script>
+  "use strict";
+  (function () {
+    // ----------------------------------------------------------------
+    // Config (mirrors src/config.rs)
+    // ----------------------------------------------------------------
+    var BUDGET_MIN = 50000, BUDGET_MAX = 7500000, BUDGET_STEP = 50000, BUDGET_DEFAULT = 500000;
+    var RISK_MIN = 1, RISK_MAX = 7; // percent integer for slider
+
+    // ----------------------------------------------------------------
+    // Safe accessors / formatters
+    // ----------------------------------------------------------------
+    function num(v, fallback) {
+      var n = typeof v === "number" ? v : (v == null ? NaN : Number(v));
+      return isFinite(n) ? n : (fallback === undefined ? 0 : fallback);
+    }
+    function str(v, fallback) {
+      return (v == null) ? (fallback === undefined ? "" : fallback) : String(v);
+    }
+    function arr(v) { return Array.isArray(v) ? v : []; }
+
+    // Indian digit grouping (no decimals) for rupee amounts.
+    function groupIndian(intStr) {
+      var neg = intStr.charAt(0) === "-";
+      if (neg) intStr = intStr.slice(1);
+      if (intStr.length <= 3) return (neg ? "-" : "") + intStr;
+      var last3 = intStr.slice(-3);
+      var rest = intStr.slice(0, -3);
+      rest = rest.replace(/\B(?=(\d{2})+(?!\d))/g, ",");
+      return (neg ? "-" : "") + rest + "," + last3;
+    }
+    // ₹ amount, rounded to whole rupees, Indian grouping.
+    function rupee(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      var rounded = Math.round(n);
+      var s = groupIndian(Math.abs(rounded).toString());
+      return (rounded < 0 ? "-₹" : "₹") + s;
+    }
+    // Signed money: keeps explicit + / - prefix.
+    function signedRupee(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      var rounded = Math.round(n);
+      var s = groupIndian(Math.abs(rounded).toString());
+      if (rounded > 0) return "+₹" + s;
+      if (rounded < 0) return "-₹" + s;
+      return "₹0";
+    }
+    function price(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      return n.toFixed(2);
+    }
+    function fixed(v, d) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      return n.toFixed(d);
+    }
+    function intFmt(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      return Math.round(n).toLocaleString("en-IN");
+    }
+    function pct1(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      return n.toFixed(1) + "%";
+    }
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
+    // ----------------------------------------------------------------
+    // DOM refs
+    // ----------------------------------------------------------------
+    var $ = function (id) { return document.getElementById(id); };
+    var els = {
+      modeBadge: $("modeBadge"), tsIst: $("tsIst"), footTs: $("footTs"),
+      connDot: $("connDot"), connText: $("connText"),
+      budMinus: $("budMinus"), budPlus: $("budPlus"), budgetVal: $("budgetVal"), budgetRange: $("budgetRange"),
+      riskRange: $("riskRange"), riskVal: $("riskVal"), riskAmt: $("riskAmt"),
+      exposurePct: $("exposurePct"), exposureBar: $("exposureBar"),
+      deployed: $("deployed"), maxNotional: $("maxNotional"), freeMargin: $("freeMargin"),
+      alertsWrap: $("alertsWrap"),
+      buyHead: $("buyHead"), buyBody: $("buyBody"), buyCount: $("buyCount"),
+      sellHead: $("sellHead"), sellBody: $("sellBody"), sellCount: $("sellCount"),
+      dTickSig: $("dTickSig"), dIngest: $("dIngest"), dTps: $("dTps"), dThreads: $("dThreads"),
+      dUniverse: $("dUniverse"), dEdges: $("dEdges"), dIo: $("dIo"),
+    };
+
+    // ----------------------------------------------------------------
+    // Local control state (clamped to config bounds)
+    // ----------------------------------------------------------------
+    var state = {
+      budget: BUDGET_DEFAULT,
+      riskPctInt: RISK_MIN, // 1..7
+    };
+    var userEditing = false; // suppress server echo overwriting an in-flight drag
+
+    function clampBudget(b) {
+      b = Math.round(num(b, BUDGET_DEFAULT) / BUDGET_STEP) * BUDGET_STEP;
+      if (b < BUDGET_MIN) b = BUDGET_MIN;
+      if (b > BUDGET_MAX) b = BUDGET_MAX;
+      return b;
+    }
+    function clampRiskInt(r) {
+      r = Math.round(num(r, RISK_MIN));
+      if (r < RISK_MIN) r = RISK_MIN;
+      if (r > RISK_MAX) r = RISK_MAX;
+      return r;
+    }
+
+    function renderControls() {
+      els.budgetVal.textContent = rupee(state.budget);
+      if (els.budgetRange.value !== String(state.budget)) els.budgetRange.value = state.budget;
+      els.riskVal.textContent = state.riskPctInt + "%";
+      if (els.riskRange.value !== String(state.riskPctInt)) els.riskRange.value = state.riskPctInt;
+      els.riskAmt.textContent = rupee(state.budget * state.riskPctInt / 100);
+    }
+
+    // ----------------------------------------------------------------
+    // WebSocket plumbing
+    // ----------------------------------------------------------------
+    var ws = null, reconnectTimer = null, connected = false;
+
+    function setConn(status) {
+      // status: "open" | "closed" | "connecting"
+      connected = status === "open";
+      if (status === "open") {
+        els.connDot.className = "h-2.5 w-2.5 rounded-full bg-emerald-400 pulse-dot";
+        els.connText.textContent = "live";
+        els.connText.className = "text-[11px] font-medium text-emerald-400";
+      } else if (status === "connecting") {
+        els.connDot.className = "h-2.5 w-2.5 rounded-full bg-amber-400 pulse-dot";
+        els.connText.textContent = "connecting…";
+        els.connText.className = "text-[11px] font-medium text-amber-400";
+      } else {
+        els.connDot.className = "h-2.5 w-2.5 rounded-full bg-rose-500";
+        els.connText.textContent = "disconnected · retrying";
+        els.connText.className = "text-[11px] font-medium text-rose-400";
+      }
+    }
+
+    function wsUrl() {
+      var proto = location.protocol === "https:" ? "wss:" : "ws:";
+      return proto + "//" + location.host + "/ws/live_signals";
+    }
+
+    function connect() {
+      setConn("connecting");
+      try {
+        ws = new WebSocket(wsUrl());
+      } catch (e) {
+        scheduleReconnect();
+        return;
+      }
+      ws.onopen = function () {
+        setConn("open");
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        sendSettings(); // sync server to current control state
+      };
+      ws.onmessage = function (ev) {
+        var pkt;
+        try { pkt = JSON.parse(ev.data); }
+        catch (e) { return; } // never throw on malformed input
+        try { applyPacket(pkt); }
+        catch (e) { /* swallow render errors to stay alive */ }
+      };
+      ws.onclose = function () { setConn("closed"); scheduleReconnect(); };
+      ws.onerror = function () { try { ws.close(); } catch (e) {} };
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(function () {
+        reconnectTimer = null;
+        connect();
+      }, 2000);
+    }
+
+    function sendSettings() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      var msg = { budget: state.budget, risk_pct: state.riskPctInt / 100 };
+      try { ws.send(JSON.stringify(msg)); } catch (e) {}
+    }
+
+    // ----------------------------------------------------------------
+    // Packet application
+    // ----------------------------------------------------------------
+    function applyPacket(pkt) {
+      if (!pkt || typeof pkt !== "object") return;
+
+      // Mode badge
+      var mode = str(pkt.mode, "").toLowerCase();
+      if (mode === "live") {
+        els.modeBadge.textContent = "LIVE";
+        els.modeBadge.className = "px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-rose-600/80 text-white";
+      } else if (mode === "replay") {
+        els.modeBadge.textContent = "REPLAY";
+        els.modeBadge.className = "px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-sky-600/80 text-white";
+      } else {
+        els.modeBadge.textContent = mode ? mode.toUpperCase() : "—";
+        els.modeBadge.className = "px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-slate-700 text-slate-300";
+      }
+
+      // Timestamp
+      var ts = str(pkt.ts_ist, "—") || "—";
+      els.tsIst.textContent = ts;
+      els.footTs.textContent = ts;
+
+      // Settings echo (don't clobber a control the user is actively dragging)
+      var settings = pkt.settings && typeof pkt.settings === "object" ? pkt.settings : null;
+      if (settings && !userEditing) {
+        var sb = clampBudget(num(settings.budget, state.budget));
+        var srpFrac = num(settings.risk_pct, state.riskPctInt / 100);
+        var srpInt = clampRiskInt(Math.round(srpFrac * 100));
+        state.budget = sb;
+        state.riskPctInt = srpInt;
+        renderControls();
+      }
+
+      // Risk meter
+      applyRiskMeter(pkt.risk_meter);
+
+      // Alerts
+      applyAlerts(arr(pkt.alerts));
+
+      // Tables
+      renderTable(els.buyHead, els.buyBody, arr(pkt.top_buy), "buy");
+      renderTable(els.sellHead, els.sellBody, arr(pkt.top_sell), "sell");
+      els.buyCount.textContent = arr(pkt.top_buy).length + " names";
+      els.sellCount.textContent = arr(pkt.top_sell).length + " names";
+
+      // Diagnostics
+      applyDiagnostics(pkt.diagnostics);
+    }
+
+    function applyRiskMeter(rm) {
+      rm = rm && typeof rm === "object" ? rm : {};
+      var exposure = num(rm.exposure_pct, 0);
+      var color = str(rm.color, "green").toLowerCase();
+      els.exposurePct.textContent = pct1(exposure);
+      var w = Math.max(0, Math.min(100, exposure));
+      els.exposureBar.style.width = w + "%";
+      var barColor = "bg-emerald-500";
+      if (color === "red") barColor = "bg-rose-500";
+      else if (color === "amber") barColor = "bg-amber-400";
+      els.exposureBar.className = "h-full rounded-full transition-all duration-300 " + barColor;
+      els.deployed.textContent = rupee(num(rm.deployed_notional, 0));
+      els.maxNotional.textContent = rupee(num(rm.max_notional, 0));
+      els.freeMargin.textContent = rupee(num(rm.free_margin, 0));
+    }
+
+    function applyAlerts(alerts) {
+      if (!alerts.length) {
+        els.alertsWrap.classList.add("hidden");
+        els.alertsWrap.innerHTML = "";
+        return;
+      }
+      els.alertsWrap.classList.remove("hidden");
+      var html = "";
+      for (var i = 0; i < alerts.length; i++) {
+        var a = alerts[i] || {};
+        var sev = str(a.severity, "info").toLowerCase();
+        var msg = esc(str(a.message, ""));
+        var kind = esc(str(a.kind, "info").toUpperCase());
+        var cls, dot;
+        if (sev === "danger") { cls = "border-rose-800 bg-rose-950/40 text-rose-200"; dot = "bg-rose-400"; }
+        else if (sev === "warn") { cls = "border-amber-800 bg-amber-950/30 text-amber-200"; dot = "bg-amber-400"; }
+        else { cls = "border-sky-800 bg-sky-950/30 text-sky-200"; dot = "bg-sky-400"; }
+        html += '<div class="flex items-center gap-2 rounded-md border px-3 py-1.5 text-[11px] ' + cls + '">' +
+                '<span class="h-1.5 w-1.5 rounded-full ' + dot + '"></span>' +
+                '<span class="font-semibold uppercase tracking-wide text-[9px] opacity-70">' + kind + '</span>' +
+                '<span>' + msg + '</span></div>';
+      }
+      els.alertsWrap.innerHTML = html;
+    }
+
+    function applyDiagnostics(d) {
+      d = d && typeof d === "object" ? d : {};
+      els.dTickSig.textContent = intFmt(d.tick_to_signal_us) + " µs";
+      els.dIngest.textContent = intFmt(d.ingest_latency_us) + " µs";
+      els.dTps.textContent = intFmt(d.ticks_per_sec);
+      els.dThreads.textContent = intFmt(d.threads);
+      els.dUniverse.textContent = intFmt(d.universe);
+      els.dEdges.textContent = intFmt(d.eligible_edges);
+      els.dIo.textContent = fixed(d.io_mbps, 1) + " MB/s";
+    }
+
+    // ----------------------------------------------------------------
+    // Tables
+    // ----------------------------------------------------------------
+    var COLS = [
+      { k: "symbol", label: "Symbol", align: "left" },
+      { k: "strategy", label: "Strategy", align: "left" },
+      { k: "entry", label: "Entry", align: "right" },
+      { k: "sl", label: "SL", align: "right" },
+      { k: "target", label: "Target", align: "right" },
+      { k: "shares", label: "Qty", align: "right" },
+      { k: "projpl", label: "Proj P/L", align: "right" },
+      { k: "exp_pnl", label: "Exp P&L", align: "right" },
+      { k: "expectancy_r", label: "exp(R)", align: "right" },
+      { k: "win_pct", label: "Win%", align: "right" },
+      { k: "profit_factor", label: "PF", align: "right" },
+      { k: "n", label: "n", align: "right" },
+      { k: "obi", label: "OBI", align: "right" },
+      { k: "rvol", label: "RVOL", align: "right" },
+      { k: "note", label: "Note", align: "left" },
+    ];
+
+    function headHtml() {
+      var h = "<tr>";
+      for (var i = 0; i < COLS.length; i++) {
+        var c = COLS[i];
+        h += '<th style="text-align:' + c.align + '">' + esc(c.label) + "</th>";
+      }
+      return h + "</tr>";
+    }
+
+    function emptyRow() {
+      return '<tr><td colspan="' + COLS.length + '" class="text-center text-slate-600 italic py-6 text-[11px]">' +
+             "No qualifying signals right now</td></tr>";
+    }
+
+    function signedRClass(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "text-slate-400";
+      return n > 0 ? "text-emerald-400" : (n < 0 ? "text-rose-400" : "text-slate-400");
+    }
+
+    function rowHtml(r, kind) {
+      r = r && typeof r === "object" ? r : {};
+      var symColor = kind === "buy" ? "text-emerald-300" : "text-rose-300";
+      var projProfit = num(r.proj_profit, NaN);
+      var projLoss = num(r.proj_loss, NaN);
+      var projCell =
+        '<span class="text-emerald-400">' + (isFinite(projProfit) ? signedRupee(projProfit) : "—") + '</span>' +
+        '<span class="text-slate-600"> / </span>' +
+        '<span class="text-rose-400">' + (isFinite(projLoss) ? signedRupee(projLoss) : "—") + '</span>';
+
+      var cells = "";
+      // Symbol
+      cells += '<td style="text-align:left"><span class="font-bold ' + symColor + '">' + esc(str(r.symbol, "—")) + "</span></td>";
+      // Strategy
+      cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.strategy, "—")) + "</td>";
+      // Entry / SL / Target
+      cells += '<td style="text-align:right" class="num text-slate-200">' + price(r.entry) + "</td>";
+      cells += '<td style="text-align:right" class="num text-rose-300/80">' + price(r.sl) + "</td>";
+      cells += '<td style="text-align:right" class="num text-emerald-300/80">' + price(r.target) + "</td>";
+      // Qty
+      cells += '<td style="text-align:right" class="num text-slate-200 font-medium">' + intFmt(r.shares) + "</td>";
+      // Proj P/L
+      cells += '<td style="text-align:right" class="num text-[11px]">' + projCell + "</td>";
+      // Exp P&L (signed color)
+      cells += '<td style="text-align:right" class="num font-semibold ' + signedRClass(r.exp_pnl) + '">' +
+               (isFinite(num(r.exp_pnl, NaN)) ? signedRupee(r.exp_pnl) : "—") + "</td>";
+      // exp(R)
+      cells += '<td style="text-align:right" class="num ' + signedRClass(r.expectancy_r) + '">' + fixed(r.expectancy_r, 2) + "R</td>";
+      // Win%
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.win_pct, 1) + "</td>";
+      // PF
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.profit_factor, 2) + "</td>";
+      // n
+      cells += '<td style="text-align:right" class="num text-slate-500">' + intFmt(r.n) + "</td>";
+      // OBI
+      cells += '<td style="text-align:right" class="num ' + signedRClass(r.obi) + '">' + fixed(r.obi, 2) + "</td>";
+      // RVOL
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.rvol, 2) + "</td>";
+      // Note
+      var note = str(r.note, "");
+      cells += '<td style="text-align:left" class="text-slate-500 text-[11px] max-w-[220px] truncate" title="' + esc(note) + '">' + esc(note) + "</td>";
+
+      return "<tr>" + cells + "</tr>";
+    }
+
+    function renderTable(headEl, bodyEl, rows, kind) {
+      if (!headEl.innerHTML) headEl.innerHTML = headHtml();
+      if (!rows.length) { bodyEl.innerHTML = emptyRow(); return; }
+      var html = "";
+      for (var i = 0; i < rows.length; i++) html += rowHtml(rows[i], kind);
+      bodyEl.innerHTML = html;
+    }
+
+    // ----------------------------------------------------------------
+    // Control wiring
+    // ----------------------------------------------------------------
+    function commitBudget(b) {
+      state.budget = clampBudget(b);
+      renderControls();
+      sendSettings();
+    }
+    function commitRisk(r) {
+      state.riskPctInt = clampRiskInt(r);
+      renderControls();
+      sendSettings();
+    }
+
+    els.budMinus.addEventListener("click", function () { commitBudget(state.budget - BUDGET_STEP); });
+    els.budPlus.addEventListener("click", function () { commitBudget(state.budget + BUDGET_STEP); });
+
+    els.budgetRange.addEventListener("input", function () {
+      userEditing = true;
+      state.budget = clampBudget(els.budgetRange.value);
+      els.budgetVal.textContent = rupee(state.budget);
+      els.riskAmt.textContent = rupee(state.budget * state.riskPctInt / 100);
+    });
+    els.budgetRange.addEventListener("change", function () {
+      userEditing = false;
+      commitBudget(els.budgetRange.value);
+    });
+
+    els.riskRange.addEventListener("input", function () {
+      userEditing = true;
+      state.riskPctInt = clampRiskInt(els.riskRange.value);
+      els.riskVal.textContent = state.riskPctInt + "%";
+      els.riskAmt.textContent = rupee(state.budget * state.riskPctInt / 100);
+    });
+    els.riskRange.addEventListener("change", function () {
+      userEditing = false;
+      commitRisk(els.riskRange.value);
+    });
+
+    // ----------------------------------------------------------------
+    // Boot
+    // ----------------------------------------------------------------
+    els.buyHead.innerHTML = headHtml();
+    els.sellHead.innerHTML = headHtml();
+    els.buyBody.innerHTML = emptyRow();
+    els.sellBody.innerHTML = emptyRow();
+    renderControls();
+    connect();
+  })();
+  </script>
 </body>
 </html>
