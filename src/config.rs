@@ -42,6 +42,24 @@ pub fn squareoff_alert() -> NaiveTime {
 /// Bars in a full NSE continuous session (09:15–15:29 inclusive = 375 minutes).
 pub const BARS_PER_SESSION: usize = 375;
 
+/// True if `t` (IST wall-clock time) is inside the continuous trading session
+/// (09:15:00–15:30:00). Live tick ingestion / signal generation must be gated to
+/// this window — outside it (incl. the 09:00–09:15 pre-open call auction, where
+/// VWAP and continuous indicators are unreliable) no live signal should fire.
+/// Replay/backtest are an offline simulator and are intentionally NOT gated.
+#[allow(dead_code)] // called from the live tick path (wired when live ingestion lands) + tests
+pub fn is_regular_session(t: NaiveTime) -> bool {
+    t >= session_open() && t <= session_close()
+}
+
+/// True if `t` (IST) is inside the pre-market gap-analysis window (09:00–09:08).
+/// Gap math (prior-close vs open) is auction-safe — it computes no continuous
+/// indicators — so it is fine to run in this pre-open window.
+#[allow(dead_code)] // available for an opt-in timed pre-market trigger + tests
+pub fn is_premarket_gap_window(t: NaiveTime) -> bool {
+    t >= premarket_start() && t <= premarket_end()
+}
+
 // ---------------------------------------------------------------------------
 // Data archive layout
 // ---------------------------------------------------------------------------
@@ -252,6 +270,11 @@ pub const LIVE_WINDOW: usize = 1000;
 /// tokens/connection cap. Override via `RAM_ISTP_LIVE_UNIVERSE_MAX`.
 pub const LIVE_UNIVERSE_MAX: usize = 1600;
 
+/// Max news-sentiment API requests per IST trading day. Kept under the provider's
+/// 100/day free-tier limit with headroom. Sentiment is fetched on-demand only for
+/// Top-10 names that cross the volatility + VWAP-extension triggers.
+pub const NEWS_DAILY_CAP: u32 = 90;
+
 /// Resolve the live-universe cap, honouring `RAM_ISTP_LIVE_UNIVERSE_MAX`.
 pub fn live_universe_max() -> usize {
     std::env::var("RAM_ISTP_LIVE_UNIVERSE_MAX")
@@ -318,5 +341,23 @@ mod tests {
     fn direction_sign_and_label() {
         assert_eq!(Direction::Long.sign(), 1.0);
         assert_eq!(Direction::Short.as_str(), "SELL");
+    }
+
+    #[test]
+    fn session_and_premarket_windows() {
+        let t = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        // Regular session 09:15–15:30 inclusive.
+        assert!(!is_regular_session(t(9, 14)), "pre-open auction is not the session");
+        assert!(is_regular_session(t(9, 15)));
+        assert!(is_regular_session(t(15, 30)));
+        assert!(!is_regular_session(t(15, 31)), "after close");
+        assert!(!is_regular_session(t(8, 59)));
+        // Pre-market gap window 09:00–09:08.
+        assert!(is_premarket_gap_window(t(9, 0)));
+        assert!(is_premarket_gap_window(t(9, 8)));
+        assert!(!is_premarket_gap_window(t(9, 9)));
+        assert!(!is_premarket_gap_window(t(8, 59)));
+        // The pre-open auction (09:09–09:14) is in neither window.
+        assert!(!is_regular_session(t(9, 10)) && !is_premarket_gap_window(t(9, 10)));
     }
 }

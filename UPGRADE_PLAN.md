@@ -1,5 +1,38 @@
 # RAM_ISTP — Product Evaluation & Upgrade Plan
 
+## 🇮🇳 Indian-market constraint conformance (session 2026-06-28, decisions taken)
+
+Audited the 4-point NSE spec (timezone/hours, Kite instrument mapping, news API, parquet) against the
+code. Implemented the safe, decision-free conformance items (signals-only, read-only/advisory; 100 tests):
+
+- **Instrument-token mapping** (`kite_instruments.rs`, `ram_istp instruments`): public Kite dump →
+  NSE-EQ filter → `tradingsymbol↔instrument_token` map, cached by IST date. Verified live: 9,903 NSE-EQ
+  tokens; 541/541 archive symbols resolve. Cap = `LIVE_UNIVERSE_MAX` (1600, env-overridable). No string
+  tickers; no secrets (public endpoint).
+- **18 GB memory backstop**: `open_conn` sets DuckDB `memory_limit` (default 2 GB, env-overridable) +
+  temp-dir spill → a pathological query spills to disk instead of OOM-crashing.
+- **Market-hours gating primitives**: `config::is_regular_session` (09:15–15:30) + `is_premarket_gap_window`
+  (09:00–09:08), unit-tested; the live tick path drops ticks outside the session (pre-open auction / post-close).
+- **News budget guard**: `NewsBudget` (<`NEWS_DAILY_CAP`=90/day, resets per IST date) + `should_fetch`
+  (Top-10 + volatility/VWAP-trigger gate), unit-tested. Marketaux `&countries=in&exchanges=NSE`; EODHD `.NSE`.
+- **`.env.example`** committed (data root, DB memory, universe cap, news provider/key, Kite live creds).
+
+**Decisions taken (owner delegated "best for the product"):**
+- **Parquet path** → keep the shipped multi-timeframe `{DATA_ROOT}/{tf}/{SYMBOL}.parquet` as canonical
+  (tested, matches disk, backtester uses all 9 timeframes). The spec's `/data/historical/NSE_{symbol}.parquet`
+  single-1-min/25-yr path is the **stale artifact** — NOT migrating. Reality: 1-min ≈ 11 yr (2015→2026);
+  25–30 yr only at daily. `RAM_ISTP_DATA_ROOT` overrides the root.
+- **Live path** → built the **offline-verifiable safety pieces** now; the authenticated Kite socket
+  (run_live wiring, Full-mode L2 subscription of the 1600 tokens, real OBI, news call-site) stays a
+  creds-present / market-hours follow-up. The token-subscribe + 5+5 depth parser already exist and are tested.
+- **Universe** → "all NSE-EQ ∩ local archive, capped at 1600" (no extra turnover feed needed).
+
+**Non-negotiables held:** 15:15 stays an **ALERT** (the spec's "executes" wording is barred by signals-only);
+replay OBI stays synthetic-labeled and out of gating; no `place/modify/cancel` anywhere; no secret logging.
+
+---
+
+
 ## ✅ Implementation status (session 2026-06-28)
 Done + verified (93 tests green; build clean at baseline 37 warnings):
 - **Backtester P1** — `SimConfig`/`run_fill` refactor; `simulate`/`simulate_detailed` are thin

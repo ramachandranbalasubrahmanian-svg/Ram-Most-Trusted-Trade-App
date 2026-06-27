@@ -67,6 +67,57 @@ impl NewsConfig {
     }
 }
 
+/// A per-IST-trading-day request budget for the news API, so we never blow the
+/// provider's ~100/day free-tier limit. Resets automatically when the trading
+/// date rolls over. Hold one of these in shared state (e.g. behind a Mutex) for
+/// the live session.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // wired into the live loop in the creds-present session
+pub struct NewsBudget {
+    date: String,
+    used: u32,
+    pub cap: u32,
+}
+
+#[allow(dead_code)] // wired into the live loop in the creds-present session
+impl NewsBudget {
+    pub fn new(cap: u32) -> Self {
+        NewsBudget { date: String::new(), used: 0, cap }
+    }
+    /// Remaining requests for `today` (resets the counter on a new date).
+    pub fn remaining(&self, today: &str) -> u32 {
+        if self.date != today {
+            self.cap
+        } else {
+            self.cap.saturating_sub(self.used)
+        }
+    }
+    /// Try to consume one request for `today`. Returns `true` if allowed (and
+    /// increments); `false` once the daily cap is hit. Rolls the counter over on
+    /// a new trading date.
+    pub fn try_consume(&mut self, today: &str) -> bool {
+        if self.date != today {
+            self.date = today.to_string();
+            self.used = 0;
+        }
+        if self.used >= self.cap {
+            return false;
+        }
+        self.used += 1;
+        true
+    }
+}
+
+/// Gate a news fetch: only proceed when the symbol's microstructure `triggered`
+/// the request (volatility + VWAP-extension thresholds crossed by the caller, for
+/// a Top-10 name) AND the daily budget allows it. Consumes one budget unit only
+/// when it returns `true`. This is the single choke-point that keeps news both
+/// on-demand and under the daily cap.
+#[allow(dead_code)] // wired into the live loop in the creds-present session
+pub fn should_fetch(triggered: bool, budget: &mut NewsBudget, today: &str) -> bool {
+    triggered && budget.try_consume(today)
+}
+
 /// A sentiment reading for one symbol.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Sentiment {
@@ -260,6 +311,32 @@ mod tests {
         assert!(!cfg.enabled);
         assert_eq!(cfg.provider, "mock");
         assert!(cfg.api_key.is_none());
+    }
+
+    #[test]
+    fn budget_caps_per_day_and_resets_on_new_date() {
+        let mut b = NewsBudget::new(3);
+        assert_eq!(b.remaining("2026-06-28"), 3);
+        assert!(b.try_consume("2026-06-28"));
+        assert!(b.try_consume("2026-06-28"));
+        assert!(b.try_consume("2026-06-28"));
+        assert!(!b.try_consume("2026-06-28"), "4th call same day blocked");
+        assert_eq!(b.remaining("2026-06-28"), 0);
+        // New trading date rolls the counter over.
+        assert_eq!(b.remaining("2026-06-29"), 3);
+        assert!(b.try_consume("2026-06-29"));
+    }
+
+    #[test]
+    fn should_fetch_requires_trigger_and_budget() {
+        let mut b = NewsBudget::new(1);
+        // Not triggered → never consumes budget, never fetches.
+        assert!(!should_fetch(false, &mut b, "2026-06-28"));
+        assert_eq!(b.remaining("2026-06-28"), 1, "untriggered must not spend budget");
+        // Triggered + budget → fetch, consumes the one unit.
+        assert!(should_fetch(true, &mut b, "2026-06-28"));
+        // Triggered but budget exhausted → blocked.
+        assert!(!should_fetch(true, &mut b, "2026-06-28"));
     }
 
     #[test]

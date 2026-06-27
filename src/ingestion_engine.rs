@@ -361,6 +361,16 @@ fn live_blocking(cfg: LiveConfig, tx: Sender<Tick>, stop: Arc<AtomicBool>) -> Re
 
                         match ws.read() {
                             Ok(Message::Binary(buf)) => {
+                                // IST market-hours gate: only ingest live ticks during
+                                // the continuous session (09:15–15:30). Ticks arriving in
+                                // the pre-open call auction (09:00–09:15, where VWAP is
+                                // unreliable) or after close are dropped — no live signal
+                                // should be generated outside the session. (Replay is an
+                                // offline simulator and is gated elsewhere / not at all.)
+                                let now_ist = chrono::Utc::now().with_timezone(&crate::config::IST).time();
+                                if !crate::config::is_regular_session(now_ist) {
+                                    continue;
+                                }
                                 let recv_us = now_epoch_us();
                                 let mut ticks = parse_binary_frame(buf.as_ref());
                                 for t in ticks.iter_mut() {
