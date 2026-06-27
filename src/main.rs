@@ -300,6 +300,7 @@ fn run_serve(raw: &[String]) -> Result<()> {
         config::CAPITAL_POOL,
         config::DRAWDOWN_FREEZE_PCT,
     )));
+    let journal_arc = Arc::new(std::sync::Mutex::new(journal_conn));
     let state = server::AppState {
         packet: packet.clone(),
         settings: settings.clone(),
@@ -308,7 +309,7 @@ fn run_serve(raw: &[String]) -> Result<()> {
         root: root.clone(),
         scanner: Arc::new(std::sync::RwLock::new(None)),
         freeze: freeze.clone(),
-        journal: Arc::new(std::sync::Mutex::new(journal_conn)),
+        journal: journal_arc.clone(),
     };
 
     // Ingestion thread: replay the latest session.
@@ -327,6 +328,7 @@ fn run_serve(raw: &[String]) -> Result<()> {
         let (baselines, edge_index, symbols) = (baselines, edge_index, symbols.clone());
         let (settings, packet, notify, stop) =
             (settings.clone(), packet.clone(), notify.clone(), stop.clone());
+        let freeze = freeze.clone();
         std::thread::spawn(move || {
             let mut engine =
                 analytics_kernel::Engine::new(&symbols, &baselines, &edge_index, eligible_edges);
@@ -353,15 +355,35 @@ fn run_serve(raw: &[String]) -> Result<()> {
                     let t0 = std::time::Instant::now();
                     let cands = engine.snapshot_candidates();
                     let set = *settings.read().unwrap();
-                    let (top_buy, top_sell) = risk_manager::rank(&cands, &set, &limits);
+                    let (mut top_buy, mut top_sell) = risk_manager::rank(&cands, &set, &limits);
                     let risk_meter = risk_manager::risk_meter(&top_buy, &top_sell, &set);
                     let mut diagnostics = engine.diagnostics();
                     diagnostics.tick_to_signal_us = t0.elapsed().as_micros() as u64;
                     diagnostics.ticks_per_sec = ticks;
                     ticks = 0;
                     let now = chrono::Utc::now().with_timezone(&config::IST);
-                    let alerts: Vec<types::Alert> =
+                    let mut alerts: Vec<types::Alert> =
                         risk_manager::squareoff_alert(now).into_iter().collect();
+                    // Signal Freeze: halt new suggestions + clear the queue, but keep
+                    // background logging running. (Manual button or circuit breaker.)
+                    let fz = freeze.read().map(|g| g.clone()).ok();
+                    if let Some(f) = fz {
+                        if f.frozen {
+                            top_buy.clear();
+                            top_sell.clear();
+                            alerts.insert(
+                                0,
+                                types::Alert {
+                                    kind: "freeze".to_string(),
+                                    severity: "danger".to_string(),
+                                    message: format!(
+                                        "SIGNAL FREEZE active — {} (daily P&L ₹{:.0})",
+                                        f.reason, f.daily_pnl
+                                    ),
+                                },
+                            );
+                        }
+                    }
                     *packet.write().unwrap() = types::SignalPacket {
                         ts_ist: now_ist_string(),
                         mode: "replay".to_string(),
@@ -379,6 +401,60 @@ fn run_serve(raw: &[String]) -> Result<()> {
         })
     };
 
+    // Desk scheduler: synthetic-drawdown circuit breaker + 15:45 IST CSV export.
+    let sched = {
+        let (journal, freeze, stop) = (journal_arc.clone(), freeze.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let mut exported_date = String::new();
+            let marks: HashMap<String, f64> = HashMap::new(); // no live marks in replay
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+
+                // Circuit breaker: evaluate synthetic MTM of accepted trades.
+                if let Ok(conn) = journal.lock() {
+                    if let Ok(entries) = journal_sync::all_entries(&conn) {
+                        let fs = circuit_breaker::evaluate(
+                            &entries,
+                            config::CAPITAL_POOL,
+                            config::DRAWDOWN_FREEZE_PCT,
+                            &marks,
+                        );
+                        if let Ok(mut g) = freeze.write() {
+                            g.daily_pnl = fs.daily_pnl;
+                            // Auto-freeze on breach; never auto-clear a freeze
+                            // (only the manual Unfreeze button clears it).
+                            if fs.frozen && !g.frozen {
+                                g.frozen = true;
+                                g.reason = fs.reason;
+                            }
+                        }
+                    }
+                }
+
+                // 15:45 IST: export the journal to CSV once per day.
+                let now = chrono::Utc::now().with_timezone(&config::IST);
+                let today = now.format("%Y-%m-%d").to_string();
+                let cutoff = chrono::NaiveTime::from_hms_opt(15, 45, 0).unwrap();
+                if now.time() >= cutoff && exported_date != today {
+                    if let Ok(conn) = journal.lock() {
+                        match journal_sync::export_csv(
+                            &conn,
+                            std::path::Path::new("data/journals"),
+                            &now_ist_string(),
+                        ) {
+                            Ok(p) => eprintln!("journal exported → {}", p.display()),
+                            Err(e) => eprintln!("journal export failed: {e:#}"),
+                        }
+                    }
+                    exported_date = today;
+                }
+            }
+        })
+    };
+
     // Server on the tokio runtime (blocks until exit).
     let rt = tokio::runtime::Runtime::new()?;
     let addr: std::net::SocketAddr = "127.0.0.1:8787".parse().unwrap();
@@ -388,6 +464,7 @@ fn run_serve(raw: &[String]) -> Result<()> {
     stop.store(true, Ordering::Relaxed);
     let _ = ing.join();
     let _ = ana.join();
+    let _ = sched.join();
     res
 }
 

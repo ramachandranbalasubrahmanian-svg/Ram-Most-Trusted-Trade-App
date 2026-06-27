@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAM ISTP · Trading Desk</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    html, body { background: #0a0e14; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #cbd5e1;
+    }
+    .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; }
+    ::-webkit-scrollbar-track { background: #0a0e14; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+    .pulse-dot { animation: pulse 1.6s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    .spin { animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .tbl-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; }
+    thead th {
+      position: sticky; top: 0; z-index: 5;
+      background: #0d1320; color: #64748b;
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #1e293b;
+    }
+    tbody td { padding: 5px 8px; font-size: 12px; white-space: nowrap; border-bottom: 1px solid #131b29; }
+    tbody tr:hover td { background: #11192680; }
+    .freeze-flash { animation: freezeflash 1.4s ease-in-out infinite; }
+    @keyframes freezeflash { 0%,100% { box-shadow: 0 0 0 0 rgba(244,63,94,0.0); } 50% { box-shadow: 0 0 0 3px rgba(244,63,94,0.25); } }
+    textarea { resize: none; }
+  </style>
+</head>
+<body class="min-h-screen antialiased">
+  <!-- ===================== HEADER ===================== -->
+  <header class="sticky top-0 z-30 border-b border-slate-800 bg-[#0a0e14]/95 backdrop-blur">
+    <div class="mx-auto max-w-[1700px] px-4 py-2.5 flex items-center gap-4 flex-wrap">
+      <div class="flex items-center gap-2.5">
+        <div class="h-7 w-7 rounded-md bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm">R</div>
+        <div>
+          <div class="text-sm font-bold tracking-tight text-slate-100 leading-none">Trading Desk</div>
+          <div class="text-[10px] text-slate-500 leading-none mt-0.5">RAM ISTP · signal staging · journal · signals only</div>
+        </div>
+      </div>
+
+      <a href="/" class="px-2 py-0.5 rounded text-[11px] font-semibold text-sky-300 border border-sky-500/40 hover:bg-sky-500/10">← Live Signals</a>
+      <a href="/intraday" class="px-2 py-0.5 rounded text-[11px] font-semibold text-amber-300 border border-amber-500/40 hover:bg-amber-500/10">⚡ Intraday Suggestion</a>
+
+      <div class="flex-1"></div>
+
+      <div class="flex items-center gap-2 text-xs num">
+        <span class="text-slate-500">IST</span>
+        <span id="tsIst" class="font-semibold text-slate-200">—</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span id="freezePill" class="px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-emerald-700/40 text-emerald-300 border border-emerald-700/50">ARMED</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[1700px] px-4 py-3 space-y-3">
+
+    <!-- ===================== FROZEN BANNER ===================== -->
+    <section id="frozenBanner" class="hidden">
+      <div class="freeze-flash rounded-lg border-2 border-rose-600 bg-rose-950/50 px-4 py-3">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="text-lg">🧊</span>
+          <div class="flex-1 min-w-[200px]">
+            <div class="text-sm font-bold text-rose-200 tracking-wide">SIGNAL FREEZE ACTIVE — staging disabled</div>
+            <div id="frozenReason" class="text-[11px] text-rose-300/85 mt-0.5">—</div>
+          </div>
+          <button id="unfreezeBtn"
+                  class="rounded-md border border-rose-500/60 bg-rose-900/40 hover:bg-rose-800/50 active:scale-[0.99] transition text-rose-100 text-xs font-semibold px-3 py-1.5">
+            Unfreeze
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== CIRCUIT BREAKER / FREEZE CONTROL ===================== -->
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+      <!-- Big freeze button -->
+      <div class="lg:col-span-4 rounded-lg border border-slate-800 bg-[#0d1320] p-3 flex flex-col">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Circuit Breaker</span>
+          <span class="text-[10px] text-slate-600">synthetic · −2% pool</span>
+        </div>
+        <button id="freezeBtn"
+                class="w-full rounded-md bg-rose-700 hover:bg-rose-600 active:scale-[0.99] transition text-white text-base font-bold tracking-wide py-3 border border-rose-500/50">
+          🛑 SIGNAL FREEZE
+        </button>
+        <button id="unfreezeBtn2"
+                class="mt-2 w-full rounded-md border border-slate-700 bg-slate-800/50 hover:bg-slate-700/60 active:scale-[0.99] transition text-slate-300 text-xs font-semibold py-1.5 hidden">
+          Unfreeze (re-arm staging)
+        </button>
+        <p class="text-[10px] text-slate-600 mt-2 leading-relaxed">
+          Kills all staging actions instantly. Auto-trips on synthetic drawdown past the threshold.
+        </p>
+      </div>
+
+      <!-- Synthetic P&L gauge -->
+      <div class="lg:col-span-8 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Synthetic Daily P&amp;L vs Drawdown Threshold</span>
+          <span id="freezeStatusText" class="text-[10px] font-semibold text-emerald-400">Armed — staging live</span>
+        </div>
+        <div class="relative h-3 w-full rounded-full bg-slate-800 overflow-hidden">
+          <!-- threshold marker sits to the left; bar fills from center toward loss -->
+          <div id="pnlBar" class="h-full rounded-full bg-emerald-500 transition-all duration-300" style="width:0%"></div>
+        </div>
+        <div class="grid grid-cols-3 gap-2 mt-2.5 text-[10px]">
+          <div>
+            <div class="text-slate-600 uppercase tracking-wide">Daily P&amp;L</div>
+            <div id="dailyPnl" class="num text-sm font-semibold text-slate-200">—</div>
+          </div>
+          <div>
+            <div class="text-slate-600 uppercase tracking-wide">Freeze Threshold</div>
+            <div id="threshold" class="num text-sm font-semibold text-rose-300">—</div>
+          </div>
+          <div>
+            <div class="text-slate-600 uppercase tracking-wide">Capital Pool</div>
+            <div id="capitalPool" class="num text-sm font-semibold text-slate-200">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== INTRADAY STAGING CONSOLE ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] overflow-hidden">
+      <div class="flex flex-wrap items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/30">
+        <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Intraday Staging Console</span>
+        <span class="text-[10px] text-slate-600">synthetic Bracket Orders · copy/paste only · never sent to a broker</span>
+        <div class="flex-1"></div>
+        <div class="flex items-center gap-1.5">
+          <span class="text-[10px] text-slate-500 uppercase tracking-wide">Risk Tier</span>
+          <div id="riskTierWrap" class="inline-flex rounded-md border border-slate-700 overflow-hidden">
+            <button data-tier="Conservative" class="tier-btn px-2.5 py-1 text-[11px] font-semibold transition text-slate-400 hover:text-slate-200">Conservative</button>
+            <button data-tier="Moderate" class="tier-btn px-2.5 py-1 text-[11px] font-semibold transition border-l border-slate-700 bg-sky-600/20 text-sky-200">Moderate</button>
+            <button data-tier="Aggressive" class="tier-btn px-2.5 py-1 text-[11px] font-semibold transition border-l border-slate-700 text-slate-400 hover:text-slate-200">Aggressive</button>
+          </div>
+        </div>
+        <button id="refreshStagingBtn"
+                class="rounded-md bg-sky-600 hover:bg-sky-500 active:scale-[0.99] transition text-white text-[11px] font-semibold px-3 py-1">
+          Refresh
+        </button>
+      </div>
+      <div class="px-3 py-1.5 border-b border-slate-800/60">
+        <span id="stagingMeta" class="text-[10px] text-slate-500 num">Loading staged signals…</span>
+      </div>
+      <div class="grid grid-cols-1 2xl:grid-cols-2 gap-3 p-3">
+        <!-- LONG -->
+        <div class="rounded-lg border border-emerald-900/50 bg-[#0b101a] overflow-hidden">
+          <div class="flex items-center justify-between px-3 py-2 border-b border-emerald-900/40 bg-emerald-950/30">
+            <div class="flex items-center gap-2">
+              <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
+              <span class="text-xs font-bold uppercase tracking-wider text-emerald-300">Top 5 · Long</span>
+            </div>
+            <span id="longCount" class="text-[10px] text-slate-500 num">0</span>
+          </div>
+          <div id="longCards" class="p-2.5 space-y-2.5 max-h-[70vh] overflow-y-auto"></div>
+        </div>
+        <!-- SHORT -->
+        <div class="rounded-lg border border-rose-900/50 bg-[#0b101a] overflow-hidden">
+          <div class="flex items-center justify-between px-3 py-2 border-b border-rose-900/40 bg-rose-950/30">
+            <div class="flex items-center gap-2">
+              <span class="h-2 w-2 rounded-full bg-rose-400"></span>
+              <span class="text-xs font-bold uppercase tracking-wider text-rose-300">Top 5 · Short</span>
+            </div>
+            <span id="shortCount" class="text-[10px] text-slate-500 num">0</span>
+          </div>
+          <div id="shortCards" class="p-2.5 space-y-2.5 max-h-[70vh] overflow-y-auto"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== SWING TRADING LEDGER ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] overflow-hidden">
+      <div class="flex flex-wrap items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/30">
+        <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Swing Trading Ledger</span>
+        <span id="swingMeta" class="text-[10px] text-slate-500 num">Loading swing catalog…</span>
+        <div class="flex-1"></div>
+        <button id="refreshSwingBtn"
+                class="rounded-md bg-slate-700 hover:bg-slate-600 active:scale-[0.99] transition text-slate-200 text-[11px] font-semibold px-3 py-1">
+          Refresh
+        </button>
+      </div>
+      <div class="tbl-wrap max-h-[52vh]">
+        <table>
+          <thead id="swingHead"></thead>
+          <tbody id="swingBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===================== PORTFOLIO ANALYTICS ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] overflow-hidden">
+      <div class="flex flex-wrap items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/30">
+        <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Portfolio Analytics</span>
+        <span class="text-[10px] text-slate-600">from the manual-validation journal · net of cost</span>
+        <div class="flex-1"></div>
+        <button id="refreshPortfolioBtn"
+                class="rounded-md bg-slate-700 hover:bg-slate-600 active:scale-[0.99] transition text-slate-200 text-[11px] font-semibold px-3 py-1">
+          Refresh
+        </button>
+      </div>
+
+      <!-- stat tiles -->
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 p-3">
+        <div class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2">
+          <div class="text-[9px] uppercase tracking-wide text-slate-600">Trades</div>
+          <div id="pmTrades" class="num text-base font-bold text-slate-100">—</div>
+        </div>
+        <div class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2">
+          <div class="text-[9px] uppercase tracking-wide text-slate-600">Win %</div>
+          <div id="pmWin" class="num text-base font-bold text-slate-100">—</div>
+        </div>
+        <div class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2">
+          <div class="text-[9px] uppercase tracking-wide text-slate-600">Profit Factor</div>
+          <div id="pmPf" class="num text-base font-bold text-slate-100">—</div>
+        </div>
+        <div class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2">
+          <div class="text-[9px] uppercase tracking-wide text-slate-600">Sharpe</div>
+          <div id="pmSharpe" class="num text-base font-bold text-slate-100">—</div>
+        </div>
+        <div class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2">
+          <div class="text-[9px] uppercase tracking-wide text-slate-600">Max DD ₹</div>
+          <div id="pmDd" class="num text-base font-bold text-rose-300">—</div>
+        </div>
+        <div class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2">
+          <div class="text-[9px] uppercase tracking-wide text-slate-600">Total P&amp;L ₹</div>
+          <div id="pmPnl" class="num text-base font-bold text-slate-100">—</div>
+        </div>
+      </div>
+
+      <!-- equity curve -->
+      <div class="px-3 pb-3">
+        <div class="rounded-md border border-slate-800 bg-[#0b101a] p-3">
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Equity Curve · cumulative P&amp;L (₹)</span>
+            <span id="eqMeta" class="text-[10px] text-slate-600 num">—</span>
+          </div>
+          <div id="eqChartWrap" class="w-full overflow-hidden">
+            <svg id="eqChart" viewBox="0 0 1000 220" preserveAspectRatio="none" class="w-full" style="height:200px"></svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- attribution tables -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 px-3 pb-3">
+        <div class="rounded-md border border-slate-800 bg-[#0b101a] overflow-hidden">
+          <div class="px-3 py-2 border-b border-slate-800 bg-slate-900/30 text-[11px] font-bold uppercase tracking-wider text-slate-300">By Strategy</div>
+          <div class="tbl-wrap max-h-[32vh]">
+            <table>
+              <thead id="byStrategyHead"></thead>
+              <tbody id="byStrategyBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="rounded-md border border-slate-800 bg-[#0b101a] overflow-hidden">
+          <div class="px-3 py-2 border-b border-slate-800 bg-slate-900/30 text-[11px] font-bold uppercase tracking-wider text-slate-300">By Sector</div>
+          <div class="tbl-wrap max-h-[32vh]">
+            <table>
+              <thead id="bySectorHead"></thead>
+              <tbody id="bySectorBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== JOURNAL ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] overflow-hidden">
+      <div class="flex flex-wrap items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/30">
+        <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Manual-Validation Journal</span>
+        <span id="journalMeta" class="text-[10px] text-slate-500 num">Loading journal…</span>
+        <div class="flex-1"></div>
+        <button id="refreshJournalBtn"
+                class="rounded-md bg-slate-700 hover:bg-slate-600 active:scale-[0.99] transition text-slate-200 text-[11px] font-semibold px-3 py-1">
+          Refresh
+        </button>
+      </div>
+      <div class="tbl-wrap max-h-[56vh]">
+        <table>
+          <thead id="journalHead"></thead>
+          <tbody id="journalBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===================== HONESTY BANNER ===================== -->
+    <section class="rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2.5">
+      <p class="text-[11px] leading-relaxed text-amber-200/80">
+        <span class="font-bold text-amber-300">Signals &amp; analysis only — NOT investment advice.</span>
+        Every bracket order here is synthetic, generated for manual copy/paste. This engine never places,
+        modifies, or cancels any broker order. The journal tracks accepted/rejected signals synthetically;
+        P&amp;L figures are scenarios net of estimated cost, not guarantees.
+      </p>
+    </section>
+
+    <footer class="text-center text-[10px] text-slate-700 py-2">
+      RAM ISTP · local analytics · Trading Desk · last sync <span id="footTs" class="num">—</span>
+    </footer>
+  </main>
+
+  <script>
+  "use strict";
+  (function () {
+    // ----------------------------------------------------------------
+    // Constants (mirror src/config.rs — display only)
+    // ----------------------------------------------------------------
+    var FREEZE_POLL_MS = 4000;
+    var DEFAULT_TIER = "Moderate";
+
+    // ----------------------------------------------------------------
+    // Safe accessors / formatters
+    // ----------------------------------------------------------------
+    function num(v, fallback) {
+      var n = typeof v === "number" ? v : (v == null ? NaN : Number(v));
+      return isFinite(n) ? n : (fallback === undefined ? 0 : fallback);
+    }
+    function isNum(v) { return isFinite(typeof v === "number" ? v : (v == null ? NaN : Number(v))); }
+    function str(v, fallback) {
+      return (v == null) ? (fallback === undefined ? "" : fallback) : String(v);
+    }
+    function arr(v) { return Array.isArray(v) ? v : []; }
+
+    function groupIndian(intStr) {
+      var neg = intStr.charAt(0) === "-";
+      if (neg) intStr = intStr.slice(1);
+      if (intStr.length <= 3) return (neg ? "-" : "") + intStr;
+      var last3 = intStr.slice(-3);
+      var rest = intStr.slice(0, -3);
+      rest = rest.replace(/\B(?=(\d{2})+(?!\d))/g, ",");
+      return (neg ? "-" : "") + rest + "," + last3;
+    }
+    function rupee(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      var rounded = Math.round(n);
+      var s = groupIndian(Math.abs(rounded).toString());
+      return (rounded < 0 ? "-₹" : "₹") + s;
+    }
+    function signedRupee(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      var rounded = Math.round(n);
+      var s = groupIndian(Math.abs(rounded).toString());
+      if (rounded > 0) return "+₹" + s;
+      if (rounded < 0) return "-₹" + s;
+      return "₹0";
+    }
+    function price(v) {
+      var n = num(v, NaN);
+      return isFinite(n) ? n.toFixed(2) : "—";
+    }
+    function fixed(v, d) {
+      var n = num(v, NaN);
+      return isFinite(n) ? n.toFixed(d) : "—";
+    }
+    function signedFixed(v, d) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      return (n >= 0 ? "+" : "") + n.toFixed(d);
+    }
+    function intFmt(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      return groupIndian(Math.round(n).toString());
+    }
+    function pct1(v) {
+      var n = num(v, NaN);
+      return isFinite(n) ? n.toFixed(1) + "%" : "—";
+    }
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+    function moneyClass(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "text-slate-300";
+      return n > 0 ? "text-emerald-400" : (n < 0 ? "text-rose-400" : "text-slate-300");
+    }
+
+    var $ = function (id) { return document.getElementById(id); };
+
+    // ----------------------------------------------------------------
+    // IST clock
+    // ----------------------------------------------------------------
+    function istNow() {
+      var parts;
+      try {
+        parts = new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Asia/Kolkata",
+          year: "numeric", month: "2-digit", day: "2-digit",
+          hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+        }).formatToParts(new Date());
+      } catch (e) { return null; }
+      var m = {};
+      for (var i = 0; i < parts.length; i++) m[parts[i].type] = parts[i].value;
+      return m.year + "-" + m.month + "-" + m.day + " " + m.hour + ":" + m.minute + ":" + m.second;
+    }
+    function tickClock() {
+      var t = istNow();
+      $("tsIst").textContent = t || "—";
+    }
+
+    // ----------------------------------------------------------------
+    // Fetch helpers (null-safe; never throw to caller)
+    // ----------------------------------------------------------------
+    function getJson(url) {
+      return fetch(url, { headers: { "Accept": "application/json" } })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        });
+    }
+    function postJson(url, body) {
+      return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify(body || {}),
+      }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json().catch(function () { return {}; });
+      });
+    }
+
+    // Clipboard with a graceful fallback for non-secure contexts.
+    function copyText(text, btn) {
+      var t = str(text, "");
+      function flash() {
+        if (!btn) return;
+        var prev = btn.textContent;
+        btn.textContent = "✓ Copied";
+        btn.classList.add("text-emerald-300");
+        setTimeout(function () { btn.textContent = prev; btn.classList.remove("text-emerald-300"); }, 1300);
+      }
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(t).then(flash, function () { legacyCopy(t); flash(); });
+          return;
+        }
+      } catch (e) { /* fall through */ }
+      legacyCopy(t); flash();
+    }
+    function legacyCopy(t) {
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = t;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch (e) { /* nothing more we can do */ }
+    }
+
+    function stampFoot() { $("footTs").textContent = istNow() || "—"; }
+
+    // ================================================================
+    // 1) FREEZE / CIRCUIT BREAKER
+    // ================================================================
+    var freezeState = { frozen: false };
+
+    function applyFreeze(fs) {
+      fs = fs && typeof fs === "object" ? fs : {};
+      var frozen = !!fs.frozen;
+      freezeState.frozen = frozen;
+      var reason = str(fs.reason, "").trim();
+      var dailyPnl = num(fs.daily_pnl, NaN);
+      var threshold = num(fs.threshold, NaN);
+      var pool = num(fs.capital_pool, NaN);
+
+      // Header pill
+      var pill = $("freezePill");
+      if (frozen) {
+        pill.textContent = "FROZEN";
+        pill.className = "px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-rose-600/80 text-white border border-rose-500";
+      } else {
+        pill.textContent = "ARMED";
+        pill.className = "px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-emerald-700/40 text-emerald-300 border border-emerald-700/50";
+      }
+
+      // Full-width banner
+      var banner = $("frozenBanner");
+      if (frozen) {
+        banner.classList.remove("hidden");
+        $("frozenReason").textContent = reason ? ("Reason: " + reason) : "Reason: synthetic drawdown / manual freeze.";
+      } else {
+        banner.classList.add("hidden");
+      }
+
+      // Big button + unfreeze toggles
+      $("freezeBtn").classList.toggle("hidden", frozen);
+      $("unfreezeBtn2").classList.toggle("hidden", !frozen);
+
+      // Status text
+      $("freezeStatusText").textContent = frozen ? "FROZEN — staging disabled" : "Armed — staging live";
+      $("freezeStatusText").className = "text-[10px] font-semibold " + (frozen ? "text-rose-400" : "text-emerald-400");
+
+      // Gauge
+      $("dailyPnl").textContent = isFinite(dailyPnl) ? signedRupee(dailyPnl) : "—";
+      $("dailyPnl").className = "num text-sm font-semibold " + moneyClass(dailyPnl);
+      $("threshold").textContent = isFinite(threshold) ? rupee(threshold) : "—";
+      $("capitalPool").textContent = isFinite(pool) ? rupee(pool) : "—";
+
+      // Bar: fraction of the way from 0 toward the (negative) threshold.
+      var bar = $("pnlBar");
+      var frac = 0;
+      if (isFinite(dailyPnl) && isFinite(threshold) && threshold !== 0) {
+        if (dailyPnl < 0) frac = Math.min(1, dailyPnl / threshold); // both negative => positive ratio
+      }
+      var w = Math.max(0, Math.min(100, frac * 100));
+      bar.style.width = (isFinite(dailyPnl) && dailyPnl >= 0 ? 100 : w) + "%";
+      var barColor = "bg-emerald-500";
+      if (frozen || frac >= 1) barColor = "bg-rose-500";
+      else if (frac >= 0.6) barColor = "bg-amber-400";
+      else if (isFinite(dailyPnl) && dailyPnl < 0) barColor = "bg-amber-400";
+      bar.className = "h-full rounded-full transition-all duration-300 " + barColor;
+
+      // Disable/enable staging action buttons
+      setStagingEnabled(!frozen);
+      stampFoot();
+    }
+
+    function loadFreeze() {
+      getJson("/api/freeze").then(function (fs) {
+        try { applyFreeze(fs); } catch (e) {}
+      }).catch(function () { /* keep last known state; never throw */ });
+    }
+
+    function toggleFreeze(frozen, reason) {
+      var body = { frozen: !!frozen, reason: str(reason, frozen ? "manual" : "manual_unfreeze") };
+      postJson("/api/signal_freeze", body).then(function (fs) {
+        try { applyFreeze(fs); } catch (e) { loadFreeze(); }
+      }).catch(function () { loadFreeze(); });
+    }
+
+    $("freezeBtn").addEventListener("click", function () { toggleFreeze(true, "manual"); });
+    $("unfreezeBtn").addEventListener("click", function () { toggleFreeze(false, "manual"); });
+    $("unfreezeBtn2").addEventListener("click", function () { toggleFreeze(false, "manual"); });
+
+    // ================================================================
+    // 2) INTRADAY STAGING CONSOLE
+    // ================================================================
+    var currentTier = DEFAULT_TIER;
+    var stagingFrozen = false;
+
+    function setStagingEnabled(enabled) {
+      stagingFrozen = !enabled;
+      var btns = document.querySelectorAll(".stage-action");
+      for (var i = 0; i < btns.length; i++) {
+        btns[i].disabled = !enabled;
+        if (enabled) {
+          btns[i].classList.remove("opacity-40", "cursor-not-allowed");
+        } else {
+          btns[i].classList.add("opacity-40", "cursor-not-allowed");
+        }
+      }
+    }
+
+    function tierBtnClass(active) {
+      return "tier-btn px-2.5 py-1 text-[11px] font-semibold transition " +
+        (active ? "bg-sky-600/20 text-sky-200" : "text-slate-400 hover:text-slate-200");
+    }
+    function renderTierButtons() {
+      var btns = document.querySelectorAll(".tier-btn");
+      for (var i = 0; i < btns.length; i++) {
+        var t = btns[i].getAttribute("data-tier");
+        var active = (t === currentTier);
+        // keep the left-border separators on the 2nd/3rd buttons
+        var base = tierBtnClass(active);
+        if (i > 0) base += " border-l border-slate-700";
+        btns[i].className = base;
+      }
+    }
+
+    // Build one staging card from a StagedSignal.
+    function stageCardHtml(s, side, idx) {
+      s = s && typeof s === "object" ? s : {};
+      var sideU = str(s.side, side).toUpperCase();
+      var isBuy = sideU === "BUY" || side === "long";
+      var accent = isBuy ? "emerald" : "rose";
+      var symbol = esc(str(s.symbol, "—"));
+      var token = num(s.instrument_token, 0);
+      var qty = num(s.qty, 0);
+      var copy = str(s.copy_text, "");
+
+      // Stash full params for log on accept/reject (data-* attributes, escaped).
+      var dataAttrs =
+        ' data-symbol="' + esc(symbol) + '"' +
+        ' data-token="' + esc(String(Math.round(token))) + '"' +
+        ' data-side="' + esc(sideU) + '"' +
+        ' data-ltp="' + esc(String(num(s.ltp, ""))) + '"' +
+        ' data-limit="' + esc(String(num(s.limit_price, ""))) + '"' +
+        ' data-qty="' + esc(String(Math.round(qty))) + '"';
+
+      var html = '<div class="rounded-md border border-' + accent + '-900/50 bg-[#0d1320] p-2.5 space-y-2" id="stagecard-' + side + '-' + idx + '">';
+
+      // header row
+      html += '<div class="flex items-center gap-2 text-[12px]">' +
+        '<span class="font-bold text-' + accent + '-300">' + esc(sideU || "—") + '</span>' +
+        '<span class="font-bold text-slate-100">' + symbol + '</span>' +
+        '<span class="ml-auto rounded bg-slate-800 px-1.5 py-0.5 text-[10px] num text-slate-300">' + intFmt(qty) + ' sh</span>' +
+        '</div>';
+
+      // price grid
+      html += '<div class="grid grid-cols-4 gap-1.5 text-[10px]">' +
+        '<div class="rounded border border-slate-800 bg-slate-900/40 px-1.5 py-1"><div class="text-[8px] uppercase tracking-wide text-slate-600">Limit</div><div class="num font-semibold text-slate-100">' + price(s.limit_price) + '</div></div>' +
+        '<div class="rounded border border-slate-800 bg-slate-900/40 px-1.5 py-1"><div class="text-[8px] uppercase tracking-wide text-slate-600">SL</div><div class="num font-semibold text-rose-300">' + price(s.stop_loss) + '</div></div>' +
+        '<div class="rounded border border-slate-800 bg-slate-900/40 px-1.5 py-1"><div class="text-[8px] uppercase tracking-wide text-slate-600">Target</div><div class="num font-semibold text-emerald-300">' + price(s.take_profit) + '</div></div>' +
+        '<div class="rounded border border-slate-800 bg-slate-900/40 px-1.5 py-1"><div class="text-[8px] uppercase tracking-wide text-slate-600">Notional</div><div class="num font-semibold text-slate-200">' + rupee(s.notional) + '</div></div>' +
+        '</div>';
+
+      // copy box
+      html += '<div class="flex items-start gap-1.5">' +
+        '<textarea readonly rows="2" class="num flex-1 rounded border border-slate-700 bg-[#0b101a] px-2 py-1 text-[10px] text-slate-300 leading-snug focus:border-sky-500 focus:outline-none">' + esc(copy) + '</textarea>' +
+        '<button class="copy-btn shrink-0 rounded border border-slate-700 bg-slate-800/60 hover:bg-slate-700 transition text-[10px] font-semibold text-slate-300 px-2 py-1">Copy</button>' +
+        '</div>';
+
+      // accept / reject row + inline fill input
+      html += '<div class="space-y-1.5">' +
+        '<div class="flex items-center gap-1.5">' +
+          '<input type="number" step="0.05" placeholder="fill price" class="fill-input num w-28 rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-100 focus:border-emerald-500 focus:outline-none" />' +
+          '<button class="stage-action accept-btn flex-1 rounded border border-emerald-700 bg-emerald-900/30 hover:bg-emerald-800/40 transition text-[11px] font-semibold text-emerald-200 px-2 py-1"' + dataAttrs + '>Accept</button>' +
+          '<button class="stage-action reject-btn rounded border border-rose-800 bg-rose-950/30 hover:bg-rose-900/40 transition text-[11px] font-semibold text-rose-300 px-2 py-1"' + dataAttrs + '>Reject</button>' +
+        '</div>' +
+        '<div class="stage-msg text-[10px] text-slate-500"></div>' +
+      '</div>';
+
+      html += '</div>';
+      return html;
+    }
+
+    function wireStageCard(cardEl) {
+      if (!cardEl) return;
+      var copyBtn = cardEl.querySelector(".copy-btn");
+      var ta = cardEl.querySelector("textarea");
+      if (copyBtn && ta) {
+        copyBtn.addEventListener("click", function () { copyText(ta.value, copyBtn); });
+      }
+      var acceptBtn = cardEl.querySelector(".accept-btn");
+      var rejectBtn = cardEl.querySelector(".reject-btn");
+      var fillInput = cardEl.querySelector(".fill-input");
+      var msgEl = cardEl.querySelector(".stage-msg");
+
+      function paramsFrom(btn) {
+        return {
+          symbol: btn.getAttribute("data-symbol") || "",
+          instrument_token: Math.round(num(btn.getAttribute("data-token"), 0)),
+          direction: btn.getAttribute("data-side") || "",
+          intended_price: num(btn.getAttribute("data-limit"), 0),
+          qty: Math.round(num(btn.getAttribute("data-qty"), 0)),
+        };
+      }
+      function setMsg(text, cls) {
+        if (!msgEl) return;
+        msgEl.textContent = text;
+        msgEl.className = "stage-msg text-[10px] " + (cls || "text-slate-500");
+      }
+      function disableActions() {
+        if (acceptBtn) acceptBtn.disabled = true;
+        if (rejectBtn) rejectBtn.disabled = true;
+        if (acceptBtn) acceptBtn.classList.add("opacity-50");
+        if (rejectBtn) rejectBtn.classList.add("opacity-50");
+      }
+
+      if (acceptBtn) {
+        acceptBtn.addEventListener("click", function () {
+          if (stagingFrozen) { setMsg("Staging frozen — cannot accept.", "text-rose-400"); return; }
+          var p = paramsFrom(acceptBtn);
+          var fill = fillInput ? num(fillInput.value, NaN) : NaN;
+          if (!isFinite(fill)) { setMsg("Enter the actual fill price to accept.", "text-amber-400"); if (fillInput) fillInput.focus(); return; }
+          var body = {
+            symbol: p.symbol,
+            instrument_token: p.instrument_token,
+            direction: p.direction,
+            strategy: "Intraday Staging",
+            alpha_trigger: (p.direction ? p.direction.toLowerCase() : "") + " staged",
+            intended_price: p.intended_price,
+            qty: p.qty,
+            state: "Manually_Accepted",
+            actual_fill_price: fill,
+          };
+          setMsg("Logging…", "text-slate-400");
+          postJson("/api/journal/log", body).then(function () {
+            setMsg("✓ Accepted — logged to journal.", "text-emerald-400");
+            disableActions();
+            loadJournal();
+            loadPortfolio();
+            loadFreeze();
+          }).catch(function () { setMsg("Could not log — check the server.", "text-rose-400"); });
+        });
+      }
+      if (rejectBtn) {
+        rejectBtn.addEventListener("click", function () {
+          if (stagingFrozen) { setMsg("Staging frozen — cannot reject.", "text-rose-400"); return; }
+          var p = paramsFrom(rejectBtn);
+          var body = {
+            symbol: p.symbol,
+            instrument_token: p.instrument_token,
+            direction: p.direction,
+            strategy: "Intraday Staging",
+            alpha_trigger: (p.direction ? p.direction.toLowerCase() : "") + " staged",
+            intended_price: p.intended_price,
+            qty: p.qty,
+            state: "Manually_Rejected",
+          };
+          setMsg("Logging…", "text-slate-400");
+          postJson("/api/journal/log", body).then(function () {
+            setMsg("Rejected — logged to journal.", "text-slate-400");
+            disableActions();
+            loadJournal();
+          }).catch(function () { setMsg("Could not log — check the server.", "text-rose-400"); });
+        });
+      }
+    }
+
+    function renderStageColumn(containerId, rows, side, countId) {
+      var c = $(containerId);
+      rows = arr(rows);
+      $(countId).textContent = rows.length + (rows.length === 1 ? " name" : " names");
+      if (!rows.length) {
+        c.innerHTML = '<div class="text-center text-slate-600 italic py-6 text-[11px]">No qualifying ' + side + ' setups right now</div>';
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < rows.length; i++) {
+        try { html += stageCardHtml(rows[i], side, i); } catch (e) { /* skip malformed */ }
+      }
+      c.innerHTML = html;
+      // wire each card
+      for (var j = 0; j < rows.length; j++) {
+        wireStageCard($("stagecard-" + side + "-" + j));
+      }
+    }
+
+    var stagingLoading = false;
+    function loadStaging() {
+      if (stagingLoading) return;
+      stagingLoading = true;
+      $("stagingMeta").innerHTML = '<span class="inline-flex items-center gap-1.5"><span class="spin inline-block h-3 w-3 rounded-full border-2 border-slate-600 border-t-sky-400"></span>Loading staged signals (' + esc(currentTier) + ')…</span>';
+      getJson("/api/staging?risk=" + encodeURIComponent(currentTier)).then(function (res) {
+        res = res && typeof res === "object" ? res : {};
+        renderStageColumn("longCards", res.top_long, "long", "longCount");
+        renderStageColumn("shortCards", res.top_short, "short", "shortCount");
+        var cap = isNum(res.capital) ? rupee(res.capital) : "—";
+        var tier = esc(str(res.risk_tier, currentTier));
+        $("stagingMeta").textContent = "Risk tier " + tier + " · capital pool " + cap;
+        setStagingEnabled(!freezeState.frozen);
+      }).catch(function () {
+        $("stagingMeta").textContent = "Could not load staged signals — check the server.";
+        renderStageColumn("longCards", [], "long", "longCount");
+        renderStageColumn("shortCards", [], "short", "shortCount");
+      }).then(function () { stagingLoading = false; });
+    }
+
+    var tierBtns = document.querySelectorAll(".tier-btn");
+    for (var ti = 0; ti < tierBtns.length; ti++) {
+      tierBtns[ti].addEventListener("click", function () {
+        var t = this.getAttribute("data-tier");
+        if (!t || t === currentTier) return;
+        currentTier = t;
+        renderTierButtons();
+        loadStaging();
+      });
+    }
+    $("refreshStagingBtn").addEventListener("click", loadStaging);
+
+    // ================================================================
+    // 3) SWING TRADING LEDGER
+    // ================================================================
+    var SWING_COLS = [
+      { label: "Symbol", align: "left" },
+      { label: "Kind", align: "left" },
+      { label: "Side", align: "left" },
+      { label: "Last", align: "right" },
+      { label: "EMA200", align: "right" },
+      { label: "Vol ×", align: "right" },
+      { label: "Support", align: "right" },
+      { label: "Resistance", align: "right" },
+      { label: "ATR", align: "right" },
+      { label: "Note", align: "left" },
+      { label: "Score", align: "right" },
+    ];
+    function swingHeadHtml() {
+      var h = "<tr>";
+      for (var i = 0; i < SWING_COLS.length; i++) {
+        h += '<th style="text-align:' + SWING_COLS[i].align + '">' + esc(SWING_COLS[i].label) + "</th>";
+      }
+      return h + "</tr>";
+    }
+    function swingEmptyRow() {
+      return '<tr><td colspan="' + SWING_COLS.length + '" class="text-center text-slate-600 italic py-6 text-[11px]">No swing setups in today\'s catalog</td></tr>';
+    }
+    function kindBadge(kind) {
+      var k = str(kind, "");
+      var pretty = k.replace(/_/g, " ");
+      var cls = "border-slate-700 bg-slate-800/40 text-slate-300";
+      if (/breakout/i.test(k)) cls = "border-sky-800 bg-sky-950/30 text-sky-300";
+      else if (/mean_reversion|reversion|200ema|ema/i.test(k)) cls = "border-indigo-800 bg-indigo-950/30 text-indigo-300";
+      return '<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold border ' + cls + '">' + esc(pretty || "—") + '</span>';
+    }
+    function swingRowHtml(r) {
+      r = r && typeof r === "object" ? r : {};
+      var side = str(r.side, "").toUpperCase();
+      var sideClass = side === "BUY" ? "text-emerald-300" : (side === "SELL" ? "text-rose-300" : "text-slate-300");
+      var note = str(r.note, "");
+      var cells = "";
+      cells += '<td style="text-align:left"><span class="font-bold text-slate-100">' + esc(str(r.symbol, "—")) + "</span></td>";
+      cells += '<td style="text-align:left">' + kindBadge(r.kind) + "</td>";
+      cells += '<td style="text-align:left"><span class="font-semibold ' + sideClass + '">' + esc(side || "—") + "</span></td>";
+      cells += '<td style="text-align:right" class="num text-slate-200">' + price(r.last_close) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + price(r.ema200) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.vol_ratio, 2) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + price(r.support) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + price(r.resistance) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + price(r.atr) + "</td>";
+      cells += '<td style="text-align:left" class="text-slate-500 text-[11px] max-w-[280px] truncate" title="' + esc(note) + '">' + esc(note) + "</td>";
+      cells += '<td style="text-align:right" class="num font-semibold text-sky-300">' + fixed(r.score, 1) + "</td>";
+      return "<tr>" + cells + "</tr>";
+    }
+    function loadSwing() {
+      $("swingHead").innerHTML = swingHeadHtml();
+      $("swingMeta").innerHTML = '<span class="inline-flex items-center gap-1.5"><span class="spin inline-block h-3 w-3 rounded-full border-2 border-slate-600 border-t-sky-400"></span>Loading swing catalog…</span>';
+      getJson("/api/swing").then(function (res) {
+        res = res && typeof res === "object" ? res : {};
+        var setups = arr(res.setups);
+        $("swingHead").innerHTML = swingHeadHtml();
+        if (!setups.length) {
+          $("swingBody").innerHTML = swingEmptyRow();
+        } else {
+          var html = "";
+          for (var i = 0; i < setups.length; i++) {
+            try { html += swingRowHtml(setups[i]); } catch (e) {}
+          }
+          $("swingBody").innerHTML = html || swingEmptyRow();
+        }
+        var built = esc(str(res.built_ist, "—"));
+        var scanned = intFmt(res.scanned);
+        $("swingMeta").textContent = "built " + built + " · scanned " + scanned + " · " + setups.length + " setups";
+      }).catch(function () {
+        $("swingHead").innerHTML = swingHeadHtml();
+        $("swingBody").innerHTML = swingEmptyRow();
+        $("swingMeta").textContent = "Could not load swing catalog — check the server.";
+      });
+    }
+    $("refreshSwingBtn").addEventListener("click", loadSwing);
+
+    // ================================================================
+    // 4) PORTFOLIO ANALYTICS
+    // ================================================================
+    var ATTR_COLS = [
+      { label: "Key", align: "left" },
+      { label: "Trades", align: "right" },
+      { label: "Win%", align: "right" },
+      { label: "PF", align: "right" },
+      { label: "P&L", align: "right" },
+    ];
+    function attrHeadHtml() {
+      var h = "<tr>";
+      for (var i = 0; i < ATTR_COLS.length; i++) {
+        h += '<th style="text-align:' + ATTR_COLS[i].align + '">' + esc(ATTR_COLS[i].label) + "</th>";
+      }
+      return h + "</tr>";
+    }
+    function attrEmptyRow() {
+      return '<tr><td colspan="' + ATTR_COLS.length + '" class="text-center text-slate-600 italic py-5 text-[11px]">No closed trades yet</td></tr>';
+    }
+    function attrRowHtml(r) {
+      r = r && typeof r === "object" ? r : {};
+      var cells = "";
+      cells += '<td style="text-align:left" class="text-slate-200 font-medium">' + esc(str(r.key, "—")) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-400">' + intFmt(r.trades) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.win_rate, 1) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.profit_factor, 2) + "</td>";
+      cells += '<td style="text-align:right" class="num font-semibold ' + moneyClass(r.pnl) + '">' + (isNum(r.pnl) ? signedRupee(r.pnl) : "—") + "</td>";
+      return "<tr>" + cells + "</tr>";
+    }
+    function renderAttr(headEl, bodyEl, rows) {
+      headEl.innerHTML = attrHeadHtml();
+      rows = arr(rows);
+      if (!rows.length) { bodyEl.innerHTML = attrEmptyRow(); return; }
+      var html = "";
+      for (var i = 0; i < rows.length; i++) {
+        try { html += attrRowHtml(rows[i]); } catch (e) {}
+      }
+      bodyEl.innerHTML = html || attrEmptyRow();
+    }
+
+    // Inline SVG equity curve — no chart lib.
+    function renderEquityCurve(points) {
+      var svg = $("eqChart");
+      points = arr(points);
+      // each point is [label, cumulative]
+      var ys = [];
+      for (var i = 0; i < points.length; i++) {
+        var p = points[i];
+        var y = NaN;
+        if (Array.isArray(p)) y = num(p[1], NaN);
+        else if (p && typeof p === "object") y = num(p[1] != null ? p[1] : p.cum, NaN);
+        ys.push(y);
+      }
+      var clean = ys.filter(function (v) { return isFinite(v); });
+      if (clean.length < 2) {
+        svg.innerHTML = '<text x="500" y="110" text-anchor="middle" fill="#475569" font-size="13" font-family="ui-sans-serif">Not enough closed trades to plot an equity curve</text>';
+        $("eqMeta").textContent = clean.length ? "1 point" : "—";
+        return;
+      }
+      var W = 1000, H = 220, padX = 12, padTop = 12, padBot = 18;
+      var minV = Math.min.apply(null, clean);
+      var maxV = Math.max.apply(null, clean);
+      // Always include 0 in the range so the zero line is meaningful.
+      minV = Math.min(minV, 0);
+      maxV = Math.max(maxV, 0);
+      if (minV === maxV) { maxV = minV + 1; }
+      var range = maxV - minV;
+      var n = ys.length;
+      function xAt(i) { return padX + (n === 1 ? 0 : (i * (W - 2 * padX) / (n - 1))); }
+      function yAt(v) { return padTop + (maxV - v) * (H - padTop - padBot) / range; }
+
+      var zeroY = yAt(0);
+      var lastV = clean[clean.length - 1];
+      var lineColor = lastV >= 0 ? "#34d399" : "#fb7185";
+      var fillColor = lastV >= 0 ? "rgba(52,211,153,0.12)" : "rgba(251,113,133,0.12)";
+
+      // Build polyline points (skip NaNs by carrying last valid for continuity).
+      var pts = [], areaPts = [], lastY = null;
+      for (var k = 0; k < n; k++) {
+        var v = ys[k];
+        if (!isFinite(v)) { if (lastY == null) continue; v = null; }
+        var x = xAt(k).toFixed(1);
+        var y = (v == null ? lastY : yAt(v));
+        if (v != null) lastY = y;
+        pts.push(x + "," + y.toFixed(1));
+        areaPts.push(x + "," + y.toFixed(1));
+      }
+      if (!pts.length) {
+        svg.innerHTML = '<text x="500" y="110" text-anchor="middle" fill="#475569" font-size="13">No plottable points</text>';
+        return;
+      }
+      // area polygon: line points then back along zero baseline
+      var firstX = xAt(0).toFixed(1), lastX = xAt(n - 1).toFixed(1);
+      var area = "M " + areaPts.join(" L ") + " L " + lastX + "," + zeroY.toFixed(1) + " L " + firstX + "," + zeroY.toFixed(1) + " Z";
+
+      var svgHtml = "";
+      // zero line
+      svgHtml += '<line x1="' + padX + '" y1="' + zeroY.toFixed(1) + '" x2="' + (W - padX) + '" y2="' + zeroY.toFixed(1) + '" stroke="#334155" stroke-width="1" stroke-dasharray="4 4" />';
+      // area fill
+      svgHtml += '<path d="' + area + '" fill="' + fillColor + '" stroke="none" />';
+      // equity line
+      svgHtml += '<polyline points="' + pts.join(" ") + '" fill="none" stroke="' + lineColor + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />';
+      // last-point dot
+      var lp = pts[pts.length - 1].split(",");
+      svgHtml += '<circle cx="' + lp[0] + '" cy="' + lp[1] + '" r="3" fill="' + lineColor + '" />';
+      svg.innerHTML = svgHtml;
+
+      $("eqMeta").textContent = n + " pts · " + signedRupee(lastV) + " cum";
+    }
+
+    function loadPortfolio() {
+      getJson("/api/portfolio").then(function (pm) {
+        pm = pm && typeof pm === "object" ? pm : {};
+        $("pmTrades").textContent = intFmt(pm.trades);
+        $("pmWin").textContent = isNum(pm.win_rate) ? fixed(pm.win_rate, 1) + "%" : "—";
+        $("pmPf").textContent = fixed(pm.profit_factor, 2);
+        $("pmSharpe").textContent = fixed(pm.sharpe, 2);
+        $("pmDd").textContent = isNum(pm.max_drawdown) ? rupee(pm.max_drawdown) : "—";
+        var pnl = num(pm.total_pnl, NaN);
+        $("pmPnl").textContent = isFinite(pnl) ? signedRupee(pnl) : "—";
+        $("pmPnl").className = "num text-base font-bold " + moneyClass(pnl);
+        renderEquityCurve(pm.equity_curve);
+        renderAttr($("byStrategyHead"), $("byStrategyBody"), pm.by_strategy);
+        renderAttr($("bySectorHead"), $("bySectorBody"), pm.by_sector);
+      }).catch(function () {
+        $("pmTrades").textContent = "—";
+        $("pmWin").textContent = "—";
+        $("pmPf").textContent = "—";
+        $("pmSharpe").textContent = "—";
+        $("pmDd").textContent = "—";
+        $("pmPnl").textContent = "—";
+        renderEquityCurve([]);
+        renderAttr($("byStrategyHead"), $("byStrategyBody"), []);
+        renderAttr($("bySectorHead"), $("bySectorBody"), []);
+        $("eqMeta").textContent = "unavailable";
+      });
+    }
+    $("refreshPortfolioBtn").addEventListener("click", loadPortfolio);
+
+    // ================================================================
+    // 5) JOURNAL
+    // ================================================================
+    var JOURNAL_COLS = [
+      { label: "Generated", align: "left" },
+      { label: "Symbol", align: "left" },
+      { label: "Dir", align: "left" },
+      { label: "Strategy", align: "left" },
+      { label: "Trigger", align: "left" },
+      { label: "Intended", align: "right" },
+      { label: "Fill", align: "right" },
+      { label: "Exit", align: "right" },
+      { label: "Qty", align: "right" },
+      { label: "Slippage", align: "right" },
+      { label: "P&L", align: "right" },
+      { label: "State", align: "left" },
+      { label: "Close", align: "left" },
+    ];
+    function journalHeadHtml() {
+      var h = "<tr>";
+      for (var i = 0; i < JOURNAL_COLS.length; i++) {
+        h += '<th style="text-align:' + JOURNAL_COLS[i].align + '">' + esc(JOURNAL_COLS[i].label) + "</th>";
+      }
+      return h + "</tr>";
+    }
+    function journalEmptyRow() {
+      return '<tr><td colspan="' + JOURNAL_COLS.length + '" class="text-center text-slate-600 italic py-6 text-[11px]">No journal entries yet — accept or reject a staged signal to start</td></tr>';
+    }
+    function stateBadge(state) {
+      var s = str(state, "");
+      var cls = "border-slate-700 bg-slate-800/40 text-slate-300";
+      var label = s.replace(/_/g, " ");
+      if (s === "Manually_Accepted") cls = "border-emerald-700 bg-emerald-950/40 text-emerald-300";
+      else if (s === "Manually_Rejected") cls = "border-rose-800 bg-rose-950/40 text-rose-300";
+      else if (s === "Skipped") cls = "border-amber-800 bg-amber-950/40 text-amber-300";
+      else if (s === "Generated") cls = "border-sky-800 bg-sky-950/30 text-sky-300";
+      return '<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold border ' + cls + '">' + esc(label || "—") + '</span>';
+    }
+    function journalRowHtml(r) {
+      r = r && typeof r === "object" ? r : {};
+      var dir = str(r.direction, "").toUpperCase();
+      var dirClass = dir === "BUY" ? "text-emerald-300" : (dir === "SELL" ? "text-rose-300" : "text-slate-300");
+      var state = str(r.state, "");
+      var id = Math.round(num(r.id, 0));
+      // An accepted row that has a fill but no exit is "open" → show close UI.
+      var isAccepted = (state === "Manually_Accepted");
+      var hasExit = isNum(r.exit_price) || isNum(r.exit_ist);
+      var canClose = isAccepted && !hasExit;
+
+      var trigger = str(r.alpha_trigger, "");
+      var cells = "";
+      cells += '<td style="text-align:left" class="num text-slate-500 text-[11px]">' + esc(str(r.generated_ist, "—")) + "</td>";
+      cells += '<td style="text-align:left"><span class="font-bold text-slate-100">' + esc(str(r.symbol, "—")) + "</span></td>";
+      cells += '<td style="text-align:left"><span class="font-semibold ' + dirClass + '">' + esc(dir || "—") + "</span></td>";
+      cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.strategy, "—")) + "</td>";
+      cells += '<td style="text-align:left" class="text-slate-500 text-[11px] max-w-[160px] truncate" title="' + esc(trigger) + '">' + esc(trigger || "—") + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + price(r.intended_price) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + (isNum(r.actual_fill_price) ? price(r.actual_fill_price) : "—") + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + (isNum(r.exit_price) ? price(r.exit_price) : "—") + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + intFmt(r.qty) + "</td>";
+      cells += '<td style="text-align:right" class="num ' + (isNum(r.slippage) ? moneyClass(-num(r.slippage)) : "text-slate-500") + '">' + (isNum(r.slippage) ? signedFixed(r.slippage, 2) : "—") + "</td>";
+      cells += '<td style="text-align:right" class="num font-semibold ' + moneyClass(r.pnl) + '">' + (isNum(r.pnl) ? signedRupee(r.pnl) : "—") + "</td>";
+      cells += '<td style="text-align:left">' + stateBadge(state) + "</td>";
+      // close cell
+      if (canClose) {
+        cells += '<td style="text-align:left">' +
+          '<div class="flex items-center gap-1 journal-close" data-id="' + esc(String(id)) + '">' +
+            '<input type="number" step="0.05" placeholder="exit" class="jclose-input num w-20 rounded border border-slate-700 bg-slate-900/60 px-1.5 py-0.5 text-[11px] text-slate-100 focus:border-sky-500 focus:outline-none" />' +
+            '<button class="jclose-btn rounded border border-sky-700 bg-sky-900/30 hover:bg-sky-800/40 transition text-[10px] font-semibold text-sky-200 px-1.5 py-0.5">Close</button>' +
+          '</div>' +
+          '<div class="jclose-msg text-[9px] text-slate-500 mt-0.5"></div>' +
+        '</td>';
+      } else {
+        cells += '<td style="text-align:left" class="text-slate-700">—</td>';
+      }
+      return '<tr>' + cells + '</tr>';
+    }
+    function wireJournalCloses() {
+      var wraps = document.querySelectorAll(".journal-close");
+      for (var i = 0; i < wraps.length; i++) {
+        (function (wrap) {
+          var id = Math.round(num(wrap.getAttribute("data-id"), 0));
+          var input = wrap.querySelector(".jclose-input");
+          var btn = wrap.querySelector(".jclose-btn");
+          var msg = wrap.parentNode ? wrap.parentNode.querySelector(".jclose-msg") : null;
+          function setMsg(t, cls) { if (msg) { msg.textContent = t; msg.className = "jclose-msg text-[9px] mt-0.5 " + (cls || "text-slate-500"); } }
+          if (!btn) return;
+          btn.addEventListener("click", function () {
+            var exit = input ? num(input.value, NaN) : NaN;
+            if (!isFinite(exit)) { setMsg("Enter an exit price.", "text-amber-400"); if (input) input.focus(); return; }
+            var body = { id: id, state: "Manually_Accepted", exit_price: exit };
+            btn.disabled = true;
+            setMsg("Closing…", "text-slate-400");
+            postJson("/api/journal/update", body).then(function (res) {
+              if (res && res.ok === false) { setMsg("Update rejected.", "text-rose-400"); btn.disabled = false; return; }
+              setMsg("✓ Closed.", "text-emerald-400");
+              loadJournal();
+              loadPortfolio();
+              loadFreeze();
+            }).catch(function () { setMsg("Could not close — check the server.", "text-rose-400"); btn.disabled = false; });
+          });
+        })(wraps[i]);
+      }
+    }
+    function loadJournal() {
+      $("journalHead").innerHTML = journalHeadHtml();
+      $("journalMeta").innerHTML = '<span class="inline-flex items-center gap-1.5"><span class="spin inline-block h-3 w-3 rounded-full border-2 border-slate-600 border-t-sky-400"></span>Loading journal…</span>';
+      getJson("/api/journal").then(function (rows) {
+        rows = arr(rows);
+        // Newest first if ids present.
+        rows = rows.slice().sort(function (a, b) {
+          return num(b && b.id, 0) - num(a && a.id, 0);
+        });
+        $("journalHead").innerHTML = journalHeadHtml();
+        if (!rows.length) {
+          $("journalBody").innerHTML = journalEmptyRow();
+        } else {
+          var html = "";
+          for (var i = 0; i < rows.length; i++) {
+            try { html += journalRowHtml(rows[i]); } catch (e) {}
+          }
+          $("journalBody").innerHTML = html || journalEmptyRow();
+          wireJournalCloses();
+        }
+        var accepted = 0, rejected = 0, open = 0;
+        for (var j = 0; j < rows.length; j++) {
+          var st = str(rows[j] && rows[j].state, "");
+          if (st === "Manually_Accepted") { accepted++; if (!isNum(rows[j].exit_price)) open++; }
+          else if (st === "Manually_Rejected") rejected++;
+        }
+        $("journalMeta").textContent = rows.length + " entries · " + accepted + " accepted (" + open + " open) · " + rejected + " rejected";
+      }).catch(function () {
+        $("journalHead").innerHTML = journalHeadHtml();
+        $("journalBody").innerHTML = journalEmptyRow();
+        $("journalMeta").textContent = "Could not load journal — check the server.";
+      });
+    }
+    $("refreshJournalBtn").addEventListener("click", loadJournal);
+
+    // ================================================================
+    // BOOT
+    // ================================================================
+    renderTierButtons();
+    tickClock();
+    setInterval(tickClock, 1000);
+
+    loadFreeze();
+    setInterval(loadFreeze, FREEZE_POLL_MS);
+
+    loadStaging();
+    loadSwing();
+    loadPortfolio();
+    loadJournal();
+  })();
+  </script>
+</body>
+</html>
