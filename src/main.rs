@@ -383,8 +383,8 @@ fn run_suggest(raw: &[String]) -> Result<()> {
         Some(s) => s.to_uppercase(),
         None => anyhow::bail!("usage: ram_istp suggest SYMBOL"),
     };
-    let settings = config::UserSettings::default();
-    let s = suggestion_engine::analyze_symbol(&root, &symbol, &settings)?;
+    // Page convention: ₹1,00,000 capital @ 2.5% risk per trade.
+    let s = suggestion_engine::analyze_symbol(&root, &symbol, 100_000.0, 0.025)?;
 
     println!("\n⚡ Intraday Suggestion — {}", s.symbol);
     println!(

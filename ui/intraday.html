@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAM ISTP · Intraday Suggestion</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    html, body { background: #0a0e14; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #cbd5e1;
+    }
+    .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; }
+    ::-webkit-scrollbar-track { background: #0a0e14; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+    .pulse-dot { animation: pulse 1.6s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    input[type="range"] { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: #1e293b; outline: none; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #38bdf8; cursor: pointer; border: 2px solid #0a0e14; }
+    input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #38bdf8; cursor: pointer; border: 2px solid #0a0e14; }
+    .tbl-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; }
+    thead th {
+      position: sticky; top: 0; z-index: 5;
+      background: #0d1320; color: #64748b;
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #1e293b;
+    }
+    tbody td { padding: 5px 8px; font-size: 12px; white-space: nowrap; border-bottom: 1px solid #131b29; }
+    tbody tr:hover td { background: #11192680; }
+    .spin { animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body class="min-h-screen antialiased">
+  <!-- ===================== HEADER ===================== -->
+  <header class="sticky top-0 z-20 border-b border-slate-800 bg-[#0a0e14]/95 backdrop-blur">
+    <div class="mx-auto max-w-[1500px] px-4 py-2.5 flex items-center gap-4 flex-wrap">
+      <div class="flex items-center gap-2.5">
+        <div class="h-7 w-7 rounded-md bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm">R</div>
+        <div>
+          <div class="text-sm font-bold tracking-tight text-slate-100 leading-none">Intraday Suggestion</div>
+          <div class="text-[10px] text-slate-500 leading-none mt-0.5">RAM ISTP · per-stock deep-dive · signals only</div>
+        </div>
+      </div>
+
+      <div class="flex-1"></div>
+
+      <a href="/" class="text-[11px] font-medium text-sky-400 hover:text-sky-300 hover:underline">← Live Signals</a>
+      <div class="flex items-center gap-2 text-xs num">
+        <span class="text-slate-500">IST</span>
+        <span id="tsIst" class="font-semibold text-slate-200">—</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[1500px] px-4 py-3 space-y-3">
+
+    <!-- ===================== HONESTY BANNERS ===================== -->
+    <section class="space-y-2">
+      <div id="sessionNote" class="rounded-lg border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-[11px] leading-relaxed text-slate-300">
+        <span class="font-semibold text-slate-200">Session:</span>
+        <span id="sessionNoteText">Loading session context…</span>
+      </div>
+      <div class="rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2.5">
+        <p class="text-[11px] leading-relaxed text-amber-200/85">
+          <span class="font-bold text-amber-300">Intraday net-of-cost edge is ~zero / negative.</span>
+          These are the strongest available setups ranked by Confidence — not a profit promise.
+          The validated positive edge is the multi-day <span class="font-semibold">Swing</span>.
+        </p>
+      </div>
+    </section>
+
+    <!-- ===================== CONTROLS ===================== -->
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+      <!-- Capital -->
+      <div class="lg:col-span-4 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Capital</span>
+          <span class="text-[10px] text-slate-600">5× MIS leverage</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="num text-slate-500 text-sm">₹</span>
+          <input id="capitalInput" type="number" inputmode="numeric" min="1000" step="1000"
+                 class="num flex-1 rounded-md border border-slate-700 bg-slate-900/60 px-2.5 py-1.5 text-base font-bold text-slate-100 focus:border-sky-500 focus:outline-none"
+                 value="100000" />
+        </div>
+        <div class="num text-[11px] text-slate-500 mt-2" id="capitalPretty">₹1,00,000</div>
+      </div>
+
+      <!-- Risk -->
+      <div class="lg:col-span-4 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Risk / Trade</span>
+          <span id="riskVal" class="num text-xl font-bold text-amber-300">2.50%</span>
+        </div>
+        <input id="riskRange" type="range" class="w-full mt-1" min="0.25" max="5.0" step="0.25" value="2.5" />
+        <div class="flex justify-between text-[9px] text-slate-600 num mt-1">
+          <span>0.25%</span><span>5.00%</span>
+        </div>
+      </div>
+
+      <!-- Derived + Apply -->
+      <div class="lg:col-span-4 rounded-lg border border-slate-800 bg-[#0d1320] p-3 flex flex-col justify-between">
+        <div class="grid grid-cols-2 gap-2 text-[11px]">
+          <div>
+            <div class="text-slate-600 uppercase tracking-wide text-[9px]">₹ Risk / trade</div>
+            <div id="riskAmt" class="num text-slate-200 font-semibold text-sm">—</div>
+            <div class="text-[9px] text-slate-600">capital × risk%</div>
+          </div>
+          <div>
+            <div class="text-slate-600 uppercase tracking-wide text-[9px]">Max exposure (5×)</div>
+            <div id="maxExposure" class="num text-slate-200 font-semibold text-sm">—</div>
+            <div class="text-[9px] text-slate-600">capital × 5</div>
+          </div>
+        </div>
+        <button id="applyBtn"
+                class="mt-2 w-full rounded-md bg-sky-600 hover:bg-sky-500 active:scale-[0.99] transition text-white text-sm font-semibold py-1.5">
+          Apply
+        </button>
+      </div>
+    </section>
+
+    <!-- ===================== REGIME LINE ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] px-3 py-2">
+      <p class="text-[11px] leading-relaxed text-slate-400" id="regimeLine">
+        NIFTY regime: <span class="text-slate-500">…</span>
+      </p>
+    </section>
+
+    <!-- ===================== TABS ===================== -->
+    <section class="flex items-center gap-2">
+      <button id="tabSingle" data-tab="single"
+              class="tab-btn rounded-md px-3 py-1.5 text-[12px] font-semibold transition border border-sky-600 bg-sky-600/20 text-sky-200">
+        Single Stock Suggestion
+      </button>
+      <button id="tabScanner" data-tab="scanner"
+              class="tab-btn rounded-md px-3 py-1.5 text-[12px] font-semibold transition border border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200">
+        Top Scanner (10 Buy / 10 Sell)
+      </button>
+    </section>
+
+    <!-- ===================== SINGLE STOCK PANEL ===================== -->
+    <section id="panelSingle" class="space-y-3">
+      <div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+        <div class="flex flex-wrap items-end gap-3">
+          <div class="flex-1 min-w-[220px]">
+            <label class="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Symbol</label>
+            <input id="symbolInput" list="symbolList" autocomplete="off" spellcheck="false"
+                   placeholder="Type to search (e.g. RELIANCE)…"
+                   class="w-full rounded-md border border-slate-700 bg-slate-900/60 px-2.5 py-1.5 text-sm font-semibold text-slate-100 uppercase tracking-wide focus:border-sky-500 focus:outline-none" />
+            <datalist id="symbolList"></datalist>
+            <div id="symbolCount" class="text-[10px] text-slate-600 mt-1">Loading symbols…</div>
+          </div>
+          <button id="getSuggestionBtn"
+                  class="rounded-md bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] transition text-white text-sm font-semibold px-4 py-1.5">
+            Get Suggestion
+          </button>
+        </div>
+      </div>
+
+      <div id="suggestionOut" class="space-y-3">
+        <div class="rounded-lg border border-slate-800 bg-[#0d1320] px-4 py-8 text-center text-[12px] text-slate-600">
+          Pick a symbol and press <span class="text-slate-400 font-semibold">Get Suggestion</span> to run the deep-dive
+          (4 strategies × 6 intervals × 2 sides × 5 R:R ≈ 240 combos, last 30% held out-of-sample).
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== SCANNER PANEL ===================== -->
+    <section id="panelScanner" class="space-y-3 hidden">
+      <div class="rounded-lg border border-slate-800 bg-[#0d1320] px-3 py-2 flex flex-wrap items-center gap-3">
+        <button id="runScanBtn"
+                class="rounded-md bg-sky-600 hover:bg-sky-500 active:scale-[0.99] transition text-white text-sm font-semibold px-4 py-1.5">
+          Run / Refresh Scan
+        </button>
+        <span id="scanMeta" class="text-[11px] text-slate-500 num">Not yet scanned.</span>
+        <span class="text-[10px] text-slate-600">First load may take ~a minute.</span>
+      </div>
+
+      <div class="grid grid-cols-1 2xl:grid-cols-2 gap-3">
+        <!-- BUY -->
+        <div class="rounded-lg border border-emerald-900/50 bg-[#0d1320] overflow-hidden">
+          <div class="flex items-center justify-between px-3 py-2 border-b border-emerald-900/40 bg-emerald-950/30">
+            <div class="flex items-center gap-2">
+              <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
+              <span class="text-xs font-bold uppercase tracking-wider text-emerald-300">Top 10 · Buy</span>
+            </div>
+            <span id="scanBuyCount" class="text-[10px] text-slate-500 num">0 names</span>
+          </div>
+          <div class="tbl-wrap max-h-[60vh]">
+            <table>
+              <thead id="scanBuyHead"></thead>
+              <tbody id="scanBuyBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- SELL -->
+        <div class="rounded-lg border border-rose-900/50 bg-[#0d1320] overflow-hidden">
+          <div class="flex items-center justify-between px-3 py-2 border-b border-rose-900/40 bg-rose-950/30">
+            <div class="flex items-center gap-2">
+              <span class="h-2 w-2 rounded-full bg-rose-400"></span>
+              <span class="text-xs font-bold uppercase tracking-wider text-rose-300">Top 10 · Sell</span>
+            </div>
+            <span id="scanSellCount" class="text-[10px] text-slate-500 num">0 names</span>
+          </div>
+          <div class="tbl-wrap max-h-[60vh]">
+            <table>
+              <thead id="scanSellHead"></thead>
+              <tbody id="scanSellBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== DISCLAIMER ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] px-3 py-2.5">
+      <p id="disclaimer" class="text-[10px] leading-relaxed text-slate-500"></p>
+    </section>
+
+    <footer class="text-center text-[10px] text-slate-700 py-2">
+      RAM ISTP · local analytics · Intraday Suggestion
+    </footer>
+  </main>
+
+  <script>
+  "use strict";
+  (function () {
+    // ----------------------------------------------------------------
+    // Constants (mirror config.rs / suggestion scoring)
+    // ----------------------------------------------------------------
+    var CAPITAL_DEFAULT = 100000;
+    var CAPITAL_MIN = 1000;
+    var RISK_MIN = 0.25, RISK_MAX = 5.0, RISK_STEP = 0.25, RISK_DEFAULT = 2.5; // percent
+    var LEVERAGE = 5;
+
+    // ----------------------------------------------------------------
+    // Safe accessors / formatters
+    // ----------------------------------------------------------------
+    function num(v, fallback) {
+      var n = typeof v === "number" ? v : (v == null ? NaN : Number(v));
+      return isFinite(n) ? n : (fallback === undefined ? 0 : fallback);
+    }
+    function isNum(v) { return isFinite(typeof v === "number" ? v : (v == null ? NaN : Number(v))); }
+    function str(v, fallback) {
+      return (v == null) ? (fallback === undefined ? "" : fallback) : String(v);
+    }
+    function arr(v) { return Array.isArray(v) ? v : []; }
+
+    function groupIndian(intStr) {
+      var neg = intStr.charAt(0) === "-";
+      if (neg) intStr = intStr.slice(1);
+      if (intStr.length <= 3) return (neg ? "-" : "") + intStr;
+      var last3 = intStr.slice(-3);
+      var rest = intStr.slice(0, -3);
+      rest = rest.replace(/\B(?=(\d{2})+(?!\d))/g, ",");
+      return (neg ? "-" : "") + rest + "," + last3;
+    }
+    function rupee(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      var rounded = Math.round(n);
+      var s = groupIndian(Math.abs(rounded).toString());
+      return (rounded < 0 ? "-₹" : "₹") + s;
+    }
+    function signedRupee(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      var rounded = Math.round(n);
+      var s = groupIndian(Math.abs(rounded).toString());
+      if (rounded > 0) return "+₹" + s;
+      if (rounded < 0) return "-₹" + s;
+      return "₹0";
+    }
+    function price(v) {
+      var n = num(v, NaN);
+      return isFinite(n) ? n.toFixed(2) : "—";
+    }
+    function fixed(v, d) {
+      var n = num(v, NaN);
+      return isFinite(n) ? n.toFixed(d) : "—";
+    }
+    function signedFixed(v, d) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      return (n >= 0 ? "+" : "") + n.toFixed(d);
+    }
+    function intFmt(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      return groupIndian(Math.round(n).toString());
+    }
+    function pct1(v) {
+      var n = num(v, NaN);
+      return isFinite(n) ? n.toFixed(1) + "%" : "—";
+    }
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
+    var $ = function (id) { return document.getElementById(id); };
+
+    // ----------------------------------------------------------------
+    // IST clock (top bar)
+    // ----------------------------------------------------------------
+    function istNow() {
+      var parts;
+      try {
+        parts = new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Asia/Kolkata",
+          year: "numeric", month: "2-digit", day: "2-digit",
+          hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+        }).formatToParts(new Date());
+      } catch (e) { return null; }
+      var m = {};
+      for (var i = 0; i < parts.length; i++) m[parts[i].type] = parts[i].value;
+      return {
+        text: m.year + "-" + m.month + "-" + m.day + " " + m.hour + ":" + m.minute + ":" + m.second,
+        h: Number(m.hour), min: Number(m.minute), dow: new Date().getUTCDay(),
+        date: new Date(),
+      };
+    }
+    function sessionNote() {
+      var now = istNow();
+      if (!now) return "Showing the strongest historical setups. Entry prices are approximate until a live signal after 09:30 IST.";
+      // Approx IST weekday via offset (informational only).
+      var ist = new Date(Date.now() + (5.5 * 60 - new Date().getTimezoneOffset()) * 60000);
+      var dow = ist.getUTCDay(); // 0=Sun..6=Sat
+      var weekend = (dow === 0 || dow === 6);
+      var mins = now.h * 60 + now.min;
+      var open = 9 * 60 + 15, close = 15 * 60 + 30, sigStart = 9 * 60 + 30;
+      if (weekend) {
+        return "Market is closed (weekend). These are historical setups for the next trading session; entries become actionable only on a live signal after 09:30 IST.";
+      }
+      if (mins < open) {
+        return "Pre-market. Entry prices are approximate (last close); a setup is only actionable on a live crossover/breakout after 09:30 IST.";
+      }
+      if (mins >= close) {
+        return "Market closed for the day. These are historical setups for the next session; entries require a live signal after 09:30 IST.";
+      }
+      if (mins < sigStart) {
+        return "Opening auction / first minutes. Setups firm up after 09:30 IST once the opening range forms.";
+      }
+      return "Market open. Entry prices shown are approximate (last close) — wait for the live signal to confirm before acting.";
+    }
+    function tickClock() {
+      var now = istNow();
+      $("tsIst").textContent = now ? now.text : "—";
+    }
+
+    // ----------------------------------------------------------------
+    // Control state
+    // ----------------------------------------------------------------
+    var state = {
+      capital: CAPITAL_DEFAULT,
+      riskPct: RISK_DEFAULT, // percent (0.25..5.0)
+    };
+
+    function clampCapital(c) {
+      c = Math.round(num(c, CAPITAL_DEFAULT));
+      if (!isFinite(c) || c < CAPITAL_MIN) c = CAPITAL_MIN;
+      return c;
+    }
+    function clampRisk(r) {
+      r = num(r, RISK_DEFAULT);
+      // snap to step
+      r = Math.round(r / RISK_STEP) * RISK_STEP;
+      if (r < RISK_MIN) r = RISK_MIN;
+      if (r > RISK_MAX) r = RISK_MAX;
+      return r;
+    }
+    function riskFrac() { return state.riskPct / 100; }
+
+    function renderControls() {
+      $("capitalInput").value = String(state.capital);
+      $("capitalPretty").textContent = rupee(state.capital);
+      $("riskVal").textContent = state.riskPct.toFixed(2) + "%";
+      if ($("riskRange").value !== String(state.riskPct)) $("riskRange").value = state.riskPct;
+      $("riskAmt").textContent = rupee(state.capital * riskFrac());
+      $("maxExposure").textContent = rupee(state.capital * LEVERAGE);
+    }
+
+    // ----------------------------------------------------------------
+    // Fetch helpers (null-safe; never throw to caller)
+    // ----------------------------------------------------------------
+    function getJson(url) {
+      return fetch(url, { headers: { "Accept": "application/json" } })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        });
+    }
+
+    // ----------------------------------------------------------------
+    // Symbols + regime + disclaimer boot
+    // ----------------------------------------------------------------
+    var symbols = [];
+    function loadSymbols() {
+      getJson("/api/symbols").then(function (data) {
+        // accept either ["A","B"] or { symbols: [...] }
+        var list = Array.isArray(data) ? data : arr(data && data.symbols);
+        symbols = list.map(function (s) { return str(s, "").toUpperCase(); }).filter(Boolean);
+        var dl = $("symbolList");
+        dl.innerHTML = symbols.map(function (s) { return '<option value="' + esc(s) + '">'; }).join("");
+        $("symbolCount").textContent = symbols.length + " symbols available";
+      }).catch(function () {
+        $("symbolCount").textContent = "Could not load symbols (is the server up?)";
+      });
+    }
+
+    function loadRegime() {
+      getJson("/api/regime").then(function (r) {
+        r = r && typeof r === "object" ? r : {};
+        var regime = esc(str(r.nifty_regime, "—"));
+        var label = esc(str(r.breadth_label, "—"));
+        var up = intFmt(r.breadth_up), down = intFmt(r.breadth_down);
+        $("regimeLine").innerHTML =
+          'NIFTY regime: <span class="font-semibold text-slate-200">' + regime + '</span> · ' +
+          'Market breadth: <span class="font-semibold text-slate-200">' + label + '</span> ' +
+          '(<span class="text-emerald-400 num">' + up + ' up</span> / <span class="text-rose-400 num">' + down + ' down</span>) · ' +
+          '<span class="text-slate-600">context only, does not change any score</span>';
+      }).catch(function () {
+        $("regimeLine").innerHTML = '<span class="text-slate-600">NIFTY regime unavailable (context only).</span>';
+      });
+    }
+
+    var DEFAULT_DISCLAIMER = "Research output — not financial advice. Suggestions are derived from historical " +
+      "backtests on local data; past performance does not guarantee future results. Entry prices are approximate — " +
+      "actual entry requires a live signal after 09:30. Win rate, expectancy and profit factor are net of estimated " +
+      "slippage, brokerage and taxes (~0.16% round-trip); circuit breakers and corporate events are not modelled. " +
+      "All trading decisions and risk remain with the trader.";
+
+    // ----------------------------------------------------------------
+    // Verdict badge styling
+    // ----------------------------------------------------------------
+    function verdictClasses(verdict) {
+      var v = str(verdict, "").toLowerCase();
+      if (v === "tradeable") return "border-emerald-700 bg-emerald-950/40 text-emerald-200";
+      if (v === "shortlist") return "border-yellow-700 bg-yellow-950/40 text-yellow-200";
+      if (v === "watch")     return "border-amber-700 bg-amber-950/40 text-amber-200";
+      if (v === "skip")      return "border-rose-800 bg-rose-950/40 text-rose-200";
+      if (v === "no_edge")   return "border-slate-700 bg-slate-800/40 text-slate-400";
+      return "border-slate-700 bg-slate-800/40 text-slate-300";
+    }
+
+    // ----------------------------------------------------------------
+    // SetupCard rendering
+    // ----------------------------------------------------------------
+    function statCell(label, value, valClass) {
+      return '<div class="rounded-md border border-slate-800 bg-slate-900/40 px-2 py-1.5">' +
+             '<div class="text-[9px] uppercase tracking-wide text-slate-600">' + esc(label) + '</div>' +
+             '<div class="num text-[13px] font-semibold ' + (valClass || "text-slate-200") + '">' + value + '</div>' +
+             '</div>';
+    }
+
+    function bigCell(label, value, sub, valClass) {
+      return '<div class="rounded-md border border-slate-800 bg-slate-900/50 px-3 py-2 text-center">' +
+             '<div class="text-[9px] uppercase tracking-wide text-slate-600">' + esc(label) + '</div>' +
+             '<div class="num text-base font-bold ' + (valClass || "text-slate-100") + '">' + value + '</div>' +
+             (sub ? '<div class="text-[9px] text-slate-600 num mt-0.5">' + sub + '</div>' : '') +
+             '</div>';
+    }
+
+    function rClass(v) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "text-slate-300";
+      return n > 0 ? "text-emerald-400" : (n < 0 ? "text-rose-400" : "text-slate-300");
+    }
+
+    function renderSetupCard(c, blockName) {
+      c = c && typeof c === "object" ? c : {};
+      var symbol = esc(str(c.symbol, "—"));
+      var side = str(c.side, "").toUpperCase();
+      var sideClass = side === "BUY" ? "text-emerald-300" : (side === "SELL" ? "text-rose-300" : "text-slate-200");
+      var rrLabel = esc(str(c.rr_label, "—"));
+      var tfAgree = num(c.timeframes_agree, 0);
+      var atr = num(c.atr, NaN);
+      var slMult = num(c.sl_atr_mult, NaN);
+      var tgtMult = num(c.target_atr_mult, NaN);
+
+      var slSub = (isFinite(slMult) && isFinite(atr)) ? "−" + slMult.toFixed(2) + "× ATR (" + atr.toFixed(2) + ")" : "";
+      var tgtSub = (isFinite(tgtMult) && isFinite(atr)) ? "+" + tgtMult.toFixed(2) + "× ATR (" + atr.toFixed(2) + ")" : "";
+
+      var html = '<div class="rounded-md border border-slate-700/70 bg-[#0b101a] p-3 mt-2 space-y-2.5">';
+
+      // row1 header
+      html += '<div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">' +
+        '<span class="font-bold ' + sideClass + '">' + esc(side || "—") + '</span>' +
+        '<span class="font-bold text-slate-100">' + symbol + '</span>' +
+        '<span class="text-slate-400">' + esc(str(c.interval, "—")) + '</span>' +
+        '<span class="text-slate-600">·</span>' +
+        '<span class="text-slate-300">R:R ' + rrLabel + '</span>' +
+        '<span class="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-sky-300 num">✓ ' + intFmt(tfAgree) + ' timeframes</span>' +
+        '<span class="text-slate-600">·</span>' +
+        '<span class="text-slate-400">' + esc(str(blockName, "")) + '</span>' +
+        '<span class="ml-auto rounded bg-sky-600/30 border border-sky-700 px-1.5 py-0.5 text-[10px] font-semibold text-sky-200">Best</span>' +
+        '</div>';
+
+      // 3-up entry / sl / target
+      html += '<div class="grid grid-cols-3 gap-2">' +
+        bigCell("Entry Zone", price(c.entry), "Last close " + price(c.last_close), "text-slate-100") +
+        bigCell("Stop Loss", price(c.sl), slSub, "text-rose-300") +
+        bigCell("Target", price(c.target), tgtSub, "text-emerald-300") +
+        '</div>';
+
+      // sizing row
+      var riskPctC = num(c.risk_pct, NaN);
+      var riskPctTxt = isFinite(riskPctC) ? (riskPctC * 100).toFixed(2) + "%" : (state.riskPct.toFixed(2) + "%");
+      html += '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">' +
+        statCell("Quantity @ " + riskPctTxt, intFmt(c.quantity) + " sh", "text-slate-100") +
+        statCell("Max Risk", rupee(c.max_risk), "text-rose-300") +
+        statCell("Max Reward", rupee(c.max_reward), "text-emerald-300") +
+        statCell("ATR", price(c.atr), "text-slate-200") +
+        '</div>';
+
+      // stat grid
+      html += '<div class="grid grid-cols-3 sm:grid-cols-5 gap-2">' +
+        statCell("Win Rate", fixed(c.win_rate, 1) + "%", "text-slate-200") +
+        statCell("Profit Factor", fixed(c.profit_factor, 2), "text-slate-200") +
+        statCell("Expectancy", signedFixed(c.expectancy_r, 2) + "R", rClass(c.expectancy_r)) +
+        statCell("Hist Trades", intFmt(c.n_trades), "text-slate-400") +
+        statCell("Sharpe", fixed(c.sharpe, 2), "text-slate-200") +
+        statCell("Calmar", fixed(c.calmar, 2), "text-slate-200") +
+        statCell("MC P(profit)", fixed(c.mc_prob_profit, 1) + "%", "text-slate-200") +
+        statCell("MC P95 DD", fixed(c.mc_p95_dd_r, 2) + "R", "text-rose-300") +
+        statCell("DSR", fixed(num(c.dsr) * 100, 1) + "%", "text-slate-200") +
+        '</div>';
+
+      // expectancy CI line
+      html += '<p class="text-[11px] text-slate-400 num">' +
+        'Expectancy ' + signedFixed(c.expectancy_r, 2) + 'R · 90% CI [' +
+        signedFixed(c.exp_ci_low, 2) + 'R, ' + signedFixed(c.exp_ci_high, 2) + 'R] · shrunk ' +
+        signedFixed(c.exp_shrunk, 2) + 'R ' +
+        '<span class="text-slate-600">(bootstrap, display only)</span></p>';
+
+      // probability line
+      html += '<p class="text-[11px] text-slate-400 num">' +
+        'Probability ' + fixed(c.prob_score, 0) + '/100 — best estimate this trade ends in profit (historical win rate) · ' +
+        '<span class="text-slate-500">honest floor ' + fixed(c.prob_floor, 0) + '/100 at 95%</span></p>';
+
+      // confidence/conviction note
+      html += '<p class="text-[10px] text-slate-600">' +
+        'Confidence = is the edge real · Conviction = is the setup good now · neither is a probability.</p>';
+
+      // Confidence line
+      var conf = c.confidence;
+      var confBand = esc(str(c.confidence_band, "—"));
+      var confLine;
+      if (conf == null || !isFinite(Number(conf))) {
+        confLine = '<span class="text-slate-300">' + confBand + '</span>';
+      } else {
+        confLine = '<span class="font-semibold text-sky-300 num">Confidence ' + intFmt(conf) + '/100</span> · ' +
+          '<span class="text-slate-300">' + confBand + '</span> · ' +
+          '<span class="text-slate-500 num">t=' + fixed(c.t_stat, 2) + ' · p~' + fixed(c.p_value, 3) + '</span>';
+      }
+      html += '<p class="text-[11px]">' + confLine + '</p>';
+
+      // Conviction line + deltas
+      var deltas = arr(c.conviction_deltas).map(function (d) {
+        d = d && typeof d === "object" ? d : {};
+        var nm = esc(str(d.name, ""));
+        var pts = num(d.points, NaN);
+        var ptsTxt = isFinite(pts) ? (pts >= 0 ? "+" + fixed(pts, pts % 1 === 0 ? 0 : 1) : fixed(pts, pts % 1 === 0 ? 0 : 1)) : "";
+        return nm + " " + ptsTxt;
+      }).filter(function (s) { return s.trim().length; });
+      html += '<p class="text-[11px]">' +
+        '<span class="font-semibold text-indigo-300 num">Conviction ' + intFmt(c.conviction) + '/100</span> · ' +
+        '<span class="text-slate-300">' + esc(str(c.conviction_label, "—")) + '</span>' +
+        (deltas.length ? '<span class="text-slate-600"> · </span><span class="text-slate-500 num">' + esc(deltas.join(" · ")) + '</span>' : '') +
+        '</p>';
+
+      // selection artifact warning
+      var artifact = c.selection_artifact;
+      if (artifact != null && str(artifact, "").trim().length) {
+        html += '<div class="rounded-md border border-amber-800 bg-amber-950/40 px-2.5 py-1.5 text-[11px] text-amber-200">' +
+          '<span class="font-semibold">⚠ </span>' + esc(str(artifact, "")) + '</div>';
+      }
+
+      html += '</div>';
+      return html;
+    }
+
+    // ----------------------------------------------------------------
+    // Strategy block rendering
+    // ----------------------------------------------------------------
+    function renderBlock(b) {
+      b = b && typeof b === "object" ? b : {};
+      var emoji = str(b.emoji, "");
+      var name = esc(str(b.name, "—"));
+      var desc = esc(str(b.description, ""));
+      var verdict = str(b.verdict, "");
+      var verdictText = esc(str(b.verdict_text, ""));
+      var confNote = esc(str(b.confidence_note, ""));
+      var valid = num(b.valid_setups, 0);
+
+      var html = '<div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">';
+      // header
+      html += '<div class="flex flex-wrap items-center gap-2">' +
+        '<span class="text-base">' + esc(emoji) + '</span>' +
+        '<span class="text-sm font-bold text-slate-100">' + name + '</span>' +
+        '<span class="rounded-md border px-2 py-0.5 text-[10px] font-semibold ' + verdictClasses(verdict) + '">' + (verdictText || esc(verdict.toUpperCase())) + '</span>' +
+        '<span class="ml-auto text-[10px] text-slate-600 num">All ' + intFmt(valid) + ' valid setups</span>' +
+        '</div>';
+      // description
+      if (desc) html += '<p class="text-[11px] text-slate-500 mt-1">' + desc + '</p>';
+      // confidence note
+      if (confNote) html += '<p class="text-[11px] text-slate-400 mt-1">' + confNote + '</p>';
+      // headline
+      var headline = b.headline;
+      if (headline != null && str(headline, "").trim().length) {
+        html += '<p class="text-[12px] text-slate-200 font-medium mt-1.5">' + esc(str(headline, "")) + '</p>';
+      }
+      // best setup card
+      if (b.best && typeof b.best === "object") {
+        html += renderSetupCard(b.best, str(b.name, ""));
+      }
+      html += '</div>';
+      return html;
+    }
+
+    // ----------------------------------------------------------------
+    // Suggestion rendering
+    // ----------------------------------------------------------------
+    function renderSuggestion(s) {
+      s = s && typeof s === "object" ? s : {};
+      var out = $("suggestionOut");
+      var symbol = esc(str(s.symbol, "—"));
+      var intervals = arr(s.intervals_available).join(", ");
+      var tdays = intFmt(s.trading_days);
+      var lastDate = esc(str(s.last_date, "—"));
+      var daysOld = intFmt(s.days_old);
+
+      var html = "";
+
+      // header card
+      html += '<div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">';
+      html += '<div class="text-sm font-bold text-slate-100">' + symbol +
+        '<span class="text-[11px] font-normal text-slate-500"> · ' + esc(intervals) +
+        ' · ' + tdays + ' trading days · last ' + lastDate + ' (' + daysOld + 'd old)</span></div>';
+      var bestOverall = s.best_overall;
+      if (bestOverall != null && str(bestOverall, "").trim().length) {
+        html += '<div class="mt-1.5 text-[12px] text-slate-300"><span class="font-semibold text-sky-300">Best:</span> ' +
+          esc(str(bestOverall, "")) + '</div>';
+      } else {
+        html += '<div class="mt-1.5 text-[12px] text-slate-500">Best: <span class="italic">no after-cost edge stood out — see blocks below.</span></div>';
+      }
+      var totalCfg = num(s.total_configs, NaN);
+      if (isFinite(totalCfg)) {
+        html += '<div class="text-[10px] text-slate-600 mt-1 num">' + intFmt(totalCfg) + ' configs evaluated · last 30% held out-of-sample · net of ~0.16% round-trip</div>';
+      }
+      html += '</div>';
+
+      // blocks
+      var blocks = arr(s.blocks);
+      if (!blocks.length) {
+        html += '<div class="rounded-lg border border-slate-800 bg-[#0d1320] px-4 py-6 text-center text-[12px] text-slate-600">No strategy blocks returned for this symbol.</div>';
+      } else {
+        for (var i = 0; i < blocks.length; i++) {
+          html += renderBlock(blocks[i]);
+        }
+      }
+
+      out.innerHTML = html;
+
+      // per-payload disclaimer override
+      var disc = str(s.disclaimer, "");
+      if (disc.trim().length) $("disclaimer").textContent = disc;
+    }
+
+    function loadingBox(msg) {
+      return '<div class="rounded-lg border border-slate-800 bg-[#0d1320] px-4 py-8 text-center">' +
+        '<div class="inline-flex items-center gap-2 text-[12px] text-slate-400">' +
+        '<span class="spin inline-block h-3.5 w-3.5 rounded-full border-2 border-slate-600 border-t-sky-400"></span>' +
+        esc(msg) + '</div></div>';
+    }
+    function errorBox(msg) {
+      return '<div class="rounded-lg border border-rose-900/50 bg-rose-950/20 px-4 py-6 text-center text-[12px] text-rose-300">' +
+        esc(msg) + '</div>';
+    }
+
+    function getSuggestion() {
+      var sym = str($("symbolInput").value, "").trim().toUpperCase();
+      if (!sym) {
+        $("suggestionOut").innerHTML = errorBox("Enter a symbol first.");
+        return;
+      }
+      var url = "/api/suggest/" + encodeURIComponent(sym) +
+        "?capital=" + encodeURIComponent(state.capital) +
+        "&risk=" + encodeURIComponent(state.riskPct); // server expects a percent (e.g. 2.5)
+      $("suggestionOut").innerHTML = loadingBox("Analyzing " + sym + " — backtesting ~240 combos…");
+      getJson(url).then(function (s) {
+        try { renderSuggestion(s); }
+        catch (e) { $("suggestionOut").innerHTML = errorBox("Received a response but could not render it."); }
+      }).catch(function () {
+        $("suggestionOut").innerHTML = errorBox("Could not fetch a suggestion for " + sym + ". Check the symbol and that the server is running.");
+      });
+    }
+
+    // ----------------------------------------------------------------
+    // Scanner rendering
+    // ----------------------------------------------------------------
+    var SCAN_COLS = [
+      { label: "Symbol", align: "left" },
+      { label: "Strategy", align: "left" },
+      { label: "Interval", align: "left" },
+      { label: "R:R", align: "left" },
+      { label: "Conf", align: "right" },
+      { label: "Exp(R)", align: "right" },
+      { label: "Win%", align: "right" },
+      { label: "PF", align: "right" },
+      { label: "n", align: "right" },
+      { label: "Entry", align: "right" },
+    ];
+
+    function scanHeadHtml() {
+      var h = "<tr>";
+      for (var i = 0; i < SCAN_COLS.length; i++) {
+        h += '<th style="text-align:' + SCAN_COLS[i].align + '">' + esc(SCAN_COLS[i].label) + "</th>";
+      }
+      return h + "</tr>";
+    }
+    function scanEmptyRow() {
+      return '<tr><td colspan="' + SCAN_COLS.length + '" class="text-center text-slate-600 italic py-6 text-[11px]">No qualifying setups</td></tr>';
+    }
+    function scanRowHtml(r, kind) {
+      r = r && typeof r === "object" ? r : {};
+      var symColor = kind === "buy" ? "text-emerald-300" : "text-rose-300";
+      var cells = "";
+      cells += '<td style="text-align:left"><span class="font-bold ' + symColor + '">' + esc(str(r.symbol, "—")) + "</span></td>";
+      cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.strategy, "—")) + "</td>";
+      cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.interval, "—")) + "</td>";
+      cells += '<td style="text-align:left" class="text-slate-400 num">' + esc(str(r.rr_label, "—")) + "</td>";
+      cells += '<td style="text-align:right" class="num font-semibold text-sky-300">' + intFmt(r.confidence) + "</td>";
+      cells += '<td style="text-align:right" class="num ' + rClass(r.expectancy_r) + '">' + signedFixed(r.expectancy_r, 2) + "R</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.win_rate, 1) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.profit_factor, 2) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-500">' + intFmt(r.n_trades) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-200">' + price(r.entry) + "</td>";
+      return "<tr>" + cells + "</tr>";
+    }
+    function renderScanTable(headEl, bodyEl, rows, kind) {
+      headEl.innerHTML = scanHeadHtml();
+      rows = arr(rows);
+      if (!rows.length) { bodyEl.innerHTML = scanEmptyRow(); return; }
+      var html = "";
+      for (var i = 0; i < rows.length; i++) html += scanRowHtml(rows[i], kind);
+      bodyEl.innerHTML = html;
+    }
+
+    var scanLoaded = false, scanLoading = false;
+    function runScan(force) {
+      if (scanLoading) return;
+      if (scanLoaded && !force) return;
+      scanLoading = true;
+      $("scanMeta").innerHTML = '<span class="inline-flex items-center gap-1.5"><span class="spin inline-block h-3 w-3 rounded-full border-2 border-slate-600 border-t-sky-400"></span>Scanning universe — this can take ~a minute…</span>';
+      $("scanBuyBody").innerHTML = scanEmptyRow();
+      $("scanSellBody").innerHTML = scanEmptyRow();
+      $("scanBuyHead").innerHTML = scanHeadHtml();
+      $("scanSellHead").innerHTML = scanHeadHtml();
+      var url = "/api/scanner?capital=" + encodeURIComponent(state.capital) +
+        "&risk=" + encodeURIComponent(state.riskPct); // server expects a percent (e.g. 2.5)
+      getJson(url).then(function (res) {
+        res = res && typeof res === "object" ? res : {};
+        renderScanTable($("scanBuyHead"), $("scanBuyBody"), res.top_buy, "buy");
+        renderScanTable($("scanSellHead"), $("scanSellBody"), res.top_sell, "sell");
+        $("scanBuyCount").textContent = arr(res.top_buy).length + " names";
+        $("scanSellCount").textContent = arr(res.top_sell).length + " names";
+        var scanned = intFmt(res.scanned);
+        var built = esc(str(res.built_ist, "—"));
+        $("scanMeta").textContent = "scanned " + scanned + " · built " + built;
+        scanLoaded = true;
+      }).catch(function () {
+        $("scanMeta").textContent = "Scan failed — check the server and try again.";
+        $("scanBuyBody").innerHTML = scanEmptyRow();
+        $("scanSellBody").innerHTML = scanEmptyRow();
+      }).then(function () { scanLoading = false; });
+    }
+
+    // ----------------------------------------------------------------
+    // Tabs
+    // ----------------------------------------------------------------
+    function setTab(tab) {
+      var single = tab === "single";
+      $("panelSingle").classList.toggle("hidden", !single);
+      $("panelScanner").classList.toggle("hidden", single);
+      $("tabSingle").className = "tab-btn rounded-md px-3 py-1.5 text-[12px] font-semibold transition border " +
+        (single ? "border-sky-600 bg-sky-600/20 text-sky-200" : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200");
+      $("tabScanner").className = "tab-btn rounded-md px-3 py-1.5 text-[12px] font-semibold transition border " +
+        (!single ? "border-sky-600 bg-sky-600/20 text-sky-200" : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200");
+      if (!single) runScan(false); // lazy load on first view
+    }
+
+    // ----------------------------------------------------------------
+    // Wiring
+    // ----------------------------------------------------------------
+    $("capitalInput").addEventListener("input", function () {
+      // live preview without forcing clamp mid-typing
+      var raw = num($("capitalInput").value, NaN);
+      $("capitalPretty").textContent = isFinite(raw) ? rupee(raw) : "—";
+      var c = isFinite(raw) ? raw : state.capital;
+      $("riskAmt").textContent = rupee(c * riskFrac());
+      $("maxExposure").textContent = rupee(c * LEVERAGE);
+    });
+    $("capitalInput").addEventListener("change", function () {
+      state.capital = clampCapital($("capitalInput").value);
+      renderControls();
+    });
+
+    $("riskRange").addEventListener("input", function () {
+      state.riskPct = clampRisk($("riskRange").value);
+      $("riskVal").textContent = state.riskPct.toFixed(2) + "%";
+      $("riskAmt").textContent = rupee(state.capital * riskFrac());
+    });
+    $("riskRange").addEventListener("change", function () {
+      state.riskPct = clampRisk($("riskRange").value);
+      renderControls();
+    });
+
+    $("applyBtn").addEventListener("click", function () {
+      state.capital = clampCapital($("capitalInput").value);
+      state.riskPct = clampRisk($("riskRange").value);
+      renderControls();
+      // Re-run whichever view is active so figures reflect new sizing.
+      if (!$("panelScanner").classList.contains("hidden")) {
+        runScan(true);
+      } else if (str($("symbolInput").value, "").trim()) {
+        getSuggestion();
+      }
+    });
+
+    $("getSuggestionBtn").addEventListener("click", getSuggestion);
+    $("symbolInput").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); getSuggestion(); }
+    });
+
+    $("runScanBtn").addEventListener("click", function () { runScan(true); });
+
+    $("tabSingle").addEventListener("click", function () { setTab("single"); });
+    $("tabScanner").addEventListener("click", function () { setTab("scanner"); });
+
+    // ----------------------------------------------------------------
+    // Boot
+    // ----------------------------------------------------------------
+    $("disclaimer").textContent = DEFAULT_DISCLAIMER;
+    $("sessionNoteText").textContent = sessionNote();
+    renderControls();
+    tickClock();
+    setInterval(function () { tickClock(); }, 1000);
+    setInterval(function () { $("sessionNoteText").textContent = sessionNote(); }, 30000);
+    loadSymbols();
+    loadRegime();
+  })();
+  </script>
+</body>
+</html>
