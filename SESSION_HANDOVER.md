@@ -16,9 +16,17 @@ Open this folder. Then:
 . "$HOME/.cargo/env"
 cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
 git checkout feat/latency-warmcache-and-robust-backtester   # this session's work (pushed)
+pkill -f "ram_istp serve"; pkill -f "ram_istp live"         # STOP any leftover instance first (see note ↓)
 cargo build && cargo test                                   # 118 tests should pass
 ./target/debug/ram_istp serve 30min                         # dashboards at http://127.0.0.1:8787
 ```
+
+> ⚠️ **Single-instance: stop the old server before starting a new one.** The port `:8787` AND the
+> journal DuckDB file are both single-instance — a leftover `serve`/`live` process from a prior
+> session will make a new one fail with a port-bind error or `Conflicting lock ... journal_2026.duckdb`.
+> Always `pkill -f "ram_istp serve"; pkill -f "ram_istp live"` first (the `pkill` step above), confirm
+> with `pgrep -fl ram_istp`, then launch. `serve` (replay) and `live` (Kite) cannot run at the same
+> time — they share the port and journal.
 Read `UPGRADE_PLAN.md` (engineering history + live go-live checklist) and `PRODUCT_ROADMAP.md`
 (competitive analysis + feature catalog + what's next) for full context.
 
