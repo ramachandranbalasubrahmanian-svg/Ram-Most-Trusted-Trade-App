@@ -103,15 +103,25 @@ Remaining (not yet built):
 ## 0. Regression anchor (this Rust project)
 
 `63MOONS` is the *Python* project's anchor — **not present in this Rust archive**. This project's
-regression reference is:
+regression reference is now codified as RE-COMPUTING tests (they re-run the engine, not read a cache):
 
-- **Cached edge maps** (must be byte-identical in legacy/pessimistic mode):
-  - `cache/edge_map_15min.json` → `sha1 34d4659c…`
-  - `cache/edge_map_30min.json` → `sha1 a337c222…`
-- **Eyeball anchor edge:** `BAJFINANCE · gap_and_go · Short · 15min · n=130 · exp=0.1433565560483712 · PF=1.2659776591373888`
-- **84 inline unit tests** green.
+- **Edge-map tier:** `BAJFINANCE · gap_and_go · Short · 15min · n=130 · exp=0.13012804335828682 · PF=1.2383992474235814`
+  → `strategy_engine::tests::anchor_bajfinance_edge_map_stable`.
+- **Deep-dive tier:** `63MOONS · VWAP · SELL · 30 Minutes · n=2603 · +0.07R · PF 1.18 · conf 59`
+  → `suggestion_engine::tests::anchor_63moons_deep_dive_stable`.
+- **165 inline unit tests** green.
 
-Any change in *legacy/pessimistic* mode that moves these → stop and surface it.
+> **RE-BASELINED 2026-06-28** after a full-universe rebuild (`backtest 5min/15min/30min/60min`, all 1,752 symbols).
+> The previous edge-map anchor (`exp=0.1433565560483712 / PF=1.2659776591373888`) and the cached-file SHA1s
+> (`34d4659c` / `a337c222`) were STALE — those maps had been built before the **itemized cost model** (commit
+> `7ec0a3f`) and never rebuilt, so they under-counted cost. The rebuild applies the current cost (same n=130 trades,
+> byte-identical fill engine) → systematically ~0.01R lower expectancy across all records (verified: 100% of 14,066
+> comparable 30min records dropped, median −0.0102R). The old cache-READING anchor test masked this by asserting the
+> stale file; the new tests RE-COMPUTE, so future drift fails loudly. **Edge-map SHA1s are now informational only**
+> (any rebuild/onboard legitimately changes them); the value-level re-computing tests are the canonical guard.
+> Current post-rebuild SHA1s: 15min `c7aaf1ae`, 30min `2a127eac`, 5min `6575c4d2`, 60min `3968964d`.
+
+Any change in *legacy/pessimistic* mode that moves the re-computing anchors → stop and surface it.
 
 ---
 

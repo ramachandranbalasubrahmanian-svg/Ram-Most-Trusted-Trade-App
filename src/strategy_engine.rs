@@ -1468,38 +1468,44 @@ mod tests {
     }
 
     /// REGRESSION ANCHOR (edge-map tier) — the Rust project's documented anchor
-    /// edge (UPGRADE_PLAN.md §0). Guards the cheap edge-map pass (13-strategy
-    /// library, fixed SL/RR, `eligible()` gate) byte-for-byte at the metric
-    /// level, complementing the SHA1 file guard. Skips cleanly when the local
-    /// cache is absent (fresh clone / CI). This is the TRUE Rust anchor — the
-    /// `63MOONS·15m·n=51` figure was the *Python* project's anchor and never
-    /// applied here (the Rust deep-dive is separately anchored in
+    /// edge (UPGRADE_PLAN.md §0). RE-COMPUTES BAJFINANCE·gap_and_go·Short on 15min
+    /// via the live engine (not the cached JSON), so it guards the actual
+    /// COMPUTATION rather than a possibly-stale file. Skips when the archive is
+    /// absent (fresh clone / CI).
+    ///
+    /// RE-BASELINED 2026-06-28 after a full-universe rebuild. The prior anchor
+    /// (`exp=0.1433565560483712 / PF=1.2659776591373888`) was a STALE CACHE value
+    /// from before the itemized cost model (commit 7ec0a3f): the cached 15min map
+    /// had never been rebuilt, so it under-counted cost. Current code — current
+    /// itemized cost, SAME n=130 trades, byte-identical fill engine — produces the
+    /// values below. The earlier cache-READING version of this test masked the
+    /// divergence (it asserted the stale file and passed); re-computing prevents
+    /// that. The `63MOONS·15m·n=51` figure was the *Python* project's anchor and
+    /// never applied here (deep-dive anchored separately in
     /// `suggestion_engine::tests::anchor_63moons_deep_dive_stable`).
     #[test]
     fn anchor_bajfinance_edge_map_stable() {
-        let records = match load_edge_map(Timeframe::Min15) {
-            Ok(r) => r,
-            Err(_) => {
-                eprintln!("SKIP anchor_bajfinance_edge_map_stable: cache/edge_map_15min.json absent");
-                return;
-            }
-        };
+        let root = config::data_root();
+        let f = config::parquet_path(&root, "BAJFINANCE", Timeframe::Min15);
+        if !f.exists() {
+            eprintln!("SKIP anchor_bajfinance_edge_map_stable: archive absent ({})", f.display());
+            return;
+        }
+        let conn = storage_kernel::open_conn().expect("duckdb conn");
+        let records =
+            backtest_symbol(&conn, &root, "BAJFINANCE", Timeframe::Min15).expect("backtest BAJFINANCE 15min");
         let r = records
             .iter()
-            .find(|r| {
-                r.symbol == "BAJFINANCE"
-                    && r.strategy == "gap_and_go"
-                    && r.direction == Direction::Short
-            })
-            .expect("BAJFINANCE gap_and_go Short edge present in 15min map");
+            .find(|r| r.strategy == "gap_and_go" && r.direction == Direction::Short)
+            .expect("BAJFINANCE gap_and_go Short edge present");
         assert_eq!(r.metrics.n, 130, "anchor n drifted");
         assert!(
-            (r.metrics.expectancy - 0.1433565560483712).abs() < 1e-12,
+            (r.metrics.expectancy - 0.13012804335828682).abs() < 1e-12,
             "anchor expectancy drifted: {}",
             r.metrics.expectancy
         );
         assert!(
-            (r.metrics.profit_factor - 1.2659776591373888).abs() < 1e-12,
+            (r.metrics.profit_factor - 1.2383992474235814).abs() < 1e-12,
             "anchor PF drifted: {}",
             r.metrics.profit_factor
         );

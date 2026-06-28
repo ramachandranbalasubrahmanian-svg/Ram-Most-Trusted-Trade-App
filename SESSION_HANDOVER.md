@@ -4,10 +4,12 @@
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
 > `SESSION_HANDOVER.md` (esp. the ▶▶ NEXT-SESSION PLAN below), and continue on `main`.**
 >
-> **Git state:** the freshness-panel + onboard + tradability work below is **committed LOCALLY on `main` but NOT
-> pushed** (two commits on top of `9bad1f5`). `origin/main` is at `9bad1f5` (the prior UI/add-stock commit was pushed
-> this session). Run `git log --oneline -5`; **push when ready** with `git push origin main`. 165 tests pass; build
-> clean; both edge-map anchor SHA1s intact (`a337c222`/`34d4659c`); 63MOONS onboard verified byte-preserving then reverted.
+> **Git state:** the freshness-panel + onboard + tradability + full-rebuild work below is **committed LOCALLY on `main`
+> but NOT pushed** (three commits on top of `9bad1f5`). `origin/main` is at `9bad1f5` (the prior UI/add-stock commit was
+> pushed this session). Run `git log --oneline -5`; **push when ready** with `git push origin main`. 165 tests pass; build
+> clean. **The edge maps were FULLY REBUILT this session** (all 1,752 symbols, 5/15/30/60min; 1day empty by design) — the
+> cached maps + anchor were stale (pre-itemized-cost), now re-baselined (see §6 + the FULL REBUILD note). New 30min SHA1
+> `2a127eac`. The rebuilt maps are gitignored (local only) — a fresh clone rebuilds via `backtest`.
 
 Then run the resume command:
 ```bash
@@ -41,21 +43,30 @@ cost model untouched. **165 tests** (was 155); **2 local commits** on top of `9b
    tradingsymbol suffix), median ₹ turnover (nse_daily_all), last-price/micro-cap flags. **ASM/GSM = "not loaded"**
    (no local data — never fabricated). 1,782 symbols covered; 7 BE/T2T, 793 thin-or-worse. A caption, never a gate.
 4. **Anchor re-baseline** — the `63MOONS·15m·n=51·+0.494R` figure was the *Python* project's anchor, never the Rust
-   archive's. Codified the real Rust anchors as tests: `anchor_bajfinance_edge_map_stable` (edge-map tier, exact) +
+   archive's. Codified the real Rust anchors as tests: `anchor_bajfinance_edge_map_stable` (edge-map tier) +
    `anchor_63moons_deep_dive_stable` (deep-dive tier, 30m/n=2603/conf=59). Both skip without the archive. See §6.
+5. **FULL UNIVERSE REBUILD (user-requested)** — `backtest 5min/15min/30min/60min` over all **1,752** symbols (1day = 0,
+   intraday strategies don't fire on daily). 30min: 541→**1,752** symbols, **1,632** eligible edges; 60min 1,861; 15min
+   1,012; 5min 439. ~30min wall-clock total (30min tf alone = 23s; rayon saturates cores). Ran timeframes concurrently
+   (separate output files = no race). **KEY FINDING:** the rebuild applies the CURRENT itemized cost; the cached maps were
+   stale (pre-`7ec0a3f`), so every record's expectancy dropped ~0.01R (100% of 14,066 30min records lower, median
+   −0.0102R, same n) — this forced the anchor re-baseline above. Eligible sets are CLEAN (max exp ≤1.1R; zero pathological
+   records eligible). **Data-quality finding:** ~3–30 symbols/tf (CUPID, PRIVISCL, KAMOPAINTS…) produce non-finite/huge-
+   negative metrics from likely-unadjusted corporate actions (handover P2 split-continuity) — correctly REJECTED by the
+   gate, never in Top-10, but worth a split-continuity guard later. Backups of the pre-rebuild maps are in the session
+   scratchpad. **Restart `serve` already done** — freshness panel `new_since_build`=0 across populated tfs.
 **Not done (remaining P0):** P0-2b `add_stock` DETAILS onboarding (symbol_metadata upsert + sector + corp-actions +
-indianapi fundamentals); a one-off bulk-onboard of the ~1,093 missing 30min symbols (each onboard is anchor-safe but
-changes the 30min file — do it deliberately). Tradability is wired to the Top-10 only; extend to scanner/desk/portfolio
-cards (CapitalPick/RotationRow/HoldingAnalysis) as the plan specifies.
+indianapi fundamentals); tradability is wired to the Top-10 only — extend to scanner/desk/portfolio cards
+(CapitalPick/RotationRow/HoldingAnalysis) as the plan specifies; add the split-continuity guard for the pathological names.
 
 ## ▶▶ NEXT-SESSION PLAN (specced 2026-06-28): backtest review + stock onboarding/enrichment
 *Plan only — nothing here is built yet. Multi-agent reviewed (28 agents) against the actual code; every item below
 passed an honesty-safety pressure-test. Execute in priority order. **Guardrails for ALL items:** never loosen the
 eligibility gate, never let any new signal feed Confidence (= t-stat + behavioural penalties + DSR gate only), keep
-everything display-only / no-orders, and keep the **Rust regression anchor byte-identical** (see §"Regression anchor"
-below: edge-map SHA1s + `BAJFINANCE·gap_and_go·Short·15min·n=130·exp=0.1433565560483712·PF=1.2659776591373888`, now
-guarded by `anchor_bajfinance_edge_map_stable` + `anchor_63moons_deep_dive_stable`) — anything that moves numbers goes
-behind a flag + a SEPARATE cache file.*
+everything display-only / no-orders, and keep the **Rust regression anchors green** (see §6 / UPGRADE_PLAN §0 —
+re-baselined 2026-06-28: edge-map `BAJFINANCE·gap_and_go·Short·15min·n=130·exp=0.13012804335828682·PF=1.2383992474235814`
++ the 63MOONS deep-dive; both now RE-COMPUTE via the engine in `anchor_bajfinance_edge_map_stable` +
+`anchor_63moons_deep_dive_stable`) — anything that moves numbers goes behind a flag + a SEPARATE cache file.*
 
 ### The factual picture today (corrected & verified)
 - **Backtest universe behind the live Top-10 = the cached `cache/edge_map_30min.json`: 14,066 records over 541 distinct
@@ -326,9 +337,10 @@ Tracing now works: prefix with `RUST_LOG=info` to see connect/WS/refresh logs.
 5. **Never print/log** `KITE_API_KEY`/`KITE_ACCESS_TOKEN`/`NEWS_API_KEY`. Credentials live in `.env` only.
 6. **Regression anchor** (must stay byte-identical) — the Rust project's real anchor (UPGRADE_PLAN.md §0), now codified
    as tests so it can't silently drift:
-   - **Edge-map tier:** `cache/edge_map_15min.json` sha1 `34d4659c…`, `cache/edge_map_30min.json` sha1 `a337c222…`; edge
-     `BAJFINANCE · gap_and_go · Short · 15min · n=130 · exp=0.1433565560483712 · PF=1.2659776591373888`
-     → `strategy_engine::tests::anchor_bajfinance_edge_map_stable`.
+   - **Edge-map tier (RE-BASELINED after the 2026-06-28 full rebuild):** edge `BAJFINANCE · gap_and_go · Short · 15min ·
+     n=130 · exp=0.13012804335828682 · PF=1.2383992474235814` → `strategy_engine::tests::anchor_bajfinance_edge_map_stable`
+     (now RE-COMPUTES via the engine, not the cache). The old `exp=0.1433565560483712`/SHA1s `34d4659c`/`a337c222` were a
+     STALE pre-itemized-cost cache (see "FULL REBUILD" note below). New SHA1s: 15min `c7aaf1ae`, 30min `2a127eac`.
    - **Deep-dive tier (re-baselined 2026-06-28, 2,776 trading days):** `63MOONS · VWAP · SELL · 30 Minutes · +0.07R ·
      PF 1.18 · n=2603 · conf=59`; best overall = Prev-Day Breakout SELL 30m conf 59
      → `suggestion_engine::tests::anchor_63moons_deep_dive_stable`.
