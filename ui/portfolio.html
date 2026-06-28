@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAM ISTP · Portfolio Review</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { background: #0a0e14; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #cbd5e1; }
+    .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; }
+    ::-webkit-scrollbar-track { background: #0a0e14; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    table { border-collapse: collapse; width: 100%; }
+    thead th { background:#0d1320; color:#64748b; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; padding:8px; text-align:left; white-space:nowrap; border-bottom:1px solid #1e293b; }
+    tbody td { padding:9px 8px; font-size:13px; border-bottom:1px solid #131b29; vertical-align:middle; }
+    tbody tr:hover td { background:#11192680; }
+    .drop { transition: border-color .15s, background .15s; }
+    .drop.drag { border-color:#38bdf8; background:#0b1b2b; }
+    .spin { animation: spin .9s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
+    .badge { font-size:11px; font-weight:700; padding:3px 9px; border-radius:9999px; white-space:nowrap; }
+  </style>
+</head>
+<body class="min-h-screen antialiased">
+  <header class="sticky top-0 z-30 border-b border-slate-800 bg-[#0a0e14]/95 backdrop-blur">
+    <div class="mx-auto max-w-[1200px] px-4 py-3 flex items-center gap-3 flex-wrap">
+      <div class="h-8 w-8 rounded-md bg-gradient-to-br from-emerald-500 to-sky-600 flex items-center justify-center text-white font-bold">R</div>
+      <div>
+        <div class="text-sm font-bold text-slate-100 leading-none">Portfolio Review</div>
+        <div class="text-[11px] text-slate-500 leading-none mt-1">Your money, in plain English · signals only — never advice or an order</div>
+      </div>
+      <div class="flex-1"></div>
+      <nav class="flex items-center gap-1 text-[12px]">
+        <a href="/" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Live signals</a>
+        <a href="/intraday" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Intraday</a>
+        <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
+        <a href="/portfolio" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Portfolio</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[1200px] px-4 py-6 space-y-6">
+
+    <!-- INTRO + UPLOAD -->
+    <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
+      <h1 class="text-lg font-bold text-slate-100">See what your portfolio is really doing</h1>
+      <p class="text-[13px] text-slate-400 mt-1 max-w-3xl">
+        Upload your holdings (an <b class="text-slate-200">Excel</b> or <b class="text-slate-200">CSV</b> export works best; a broker
+        <b class="text-slate-200">PDF</b> is read best-effort), or load your saved book. You'll get a plain-English read:
+        <span class="text-emerald-400">what's winning</span>, <span class="text-amber-400">what to trim</span>,
+        <span class="text-red-400">what to rotate out</span>, where fresh money could go, and a suggested reshuffle.
+        <b class="text-slate-300">Evidence only — you decide. Nothing here places a trade.</b>
+      </p>
+
+      <div class="grid md:grid-cols-3 gap-3 mt-4">
+        <label id="drop" class="drop md:col-span-2 cursor-pointer rounded-lg border-2 border-dashed border-slate-700 bg-[#0a0f1a] hover:border-sky-700 px-4 py-6 flex flex-col items-center justify-center text-center">
+          <div class="text-3xl mb-1">📄</div>
+          <div class="text-[13px] text-slate-200 font-semibold">Drop your file here, or click to choose</div>
+          <div class="text-[11px] text-slate-500 mt-1">.xlsx · .csv · .pdf — from Zerodha, Groww, INDmoney (or any broker)</div>
+          <input id="fileInput" type="file" accept=".xlsx,.xls,.xlsm,.csv,.pdf,.ods" class="hidden" />
+        </label>
+        <div class="flex flex-col gap-2">
+          <button id="mineBtn" class="rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[13px] font-semibold px-4 py-2.5">⭐ Load my portfolio</button>
+          <button id="sampleBtn" class="rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 text-[12px] font-semibold px-4 py-2">Try a sample</button>
+          <button id="pasteToggle" class="rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 text-[12px] px-4 py-2">Paste rows instead</button>
+        </div>
+      </div>
+
+      <div id="pasteBox" class="hidden mt-3">
+        <textarea id="pasteArea" rows="4" placeholder="Paste as CSV: symbol,qty,avg_cost,broker,sector   (broker export headers are auto-detected). One stock per line."
+          class="w-full rounded-md bg-[#0a0f1a] border border-slate-800 text-slate-200 text-[12px] num p-3 focus:outline-none focus:border-sky-700"></textarea>
+        <button id="pasteBtn" class="mt-2 rounded-md bg-sky-700 hover:bg-sky-600 text-white text-[12px] font-semibold px-4 py-1.5">Analyze pasted rows</button>
+      </div>
+
+      <div id="status" class="text-[12px] text-slate-400 mt-3"></div>
+      <div id="warnings" class="text-[12px] text-amber-400/90 mt-1"></div>
+    </section>
+
+    <!-- RESULTS -->
+    <div id="results" class="hidden space-y-6">
+
+      <!-- HEADLINE -->
+      <section>
+        <div id="headline" class="grid grid-cols-2 lg:grid-cols-4 gap-3"></div>
+      </section>
+
+      <!-- CONCENTRATION -->
+      <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
+        <h2 class="text-[15px] font-bold text-slate-100">How spread out is your money?</h2>
+        <p class="text-[12px] text-slate-500 mb-3">Too much in one stock or one theme = one piece of bad news can hurt the whole book.</p>
+        <div id="concTiles" class="grid grid-cols-2 lg:grid-cols-4 gap-3"></div>
+        <div id="concNote" class="text-[12px] text-slate-300 mt-3"></div>
+      </section>
+
+      <!-- STOCKS: keep / trim / rotate -->
+      <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
+        <h2 class="text-[15px] font-bold text-slate-100">Your stocks — keep, trim, or rotate?</h2>
+        <p class="text-[12px] text-slate-500 mb-2">A plain read of each stock from its real price trend (vs the market). It describes what price <i>is</i> doing — not a prediction.</p>
+        <div class="flex flex-wrap gap-2 mb-3 text-[11px]">
+          <span class="badge bg-emerald-900/60 text-emerald-300">✅ Keep — winning</span>
+          <span class="badge bg-slate-700/60 text-slate-200">🟡 Hold — steady</span>
+          <span class="badge bg-sky-900/60 text-sky-300">🔷 Hold* — demerger</span>
+          <span class="badge bg-amber-900/60 text-amber-300">🟠 Trim — too big / fading</span>
+          <span class="badge bg-red-900/60 text-red-300">🔴 Rotate out — falling</span>
+        </div>
+        <div class="overflow-x-auto"><table>
+          <thead><tr><th>Stock</th><th>Your P&amp;L</th><th>Trend</th><th>vs market (1yr)</th><th>Verdict</th><th>Why</th></tr></thead>
+          <tbody id="stocksBody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- BUY IDEAS -->
+      <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
+        <h2 class="text-[15px] font-bold text-slate-100">Where fresh money could go</h2>
+        <p class="text-[12px] text-slate-500 mb-3">Stocks <b class="text-slate-300">currently in an uptrend AND beating the market</b>, that <b class="text-slate-300">also</b> carry a tested edge in our backtests. Not a recommendation — a screened shortlist to research.</p>
+        <div class="overflow-x-auto"><table>
+          <thead><tr><th>Stock</th><th>Price</th><th>vs market (1yr)</th><th>3-yr growth</th><th>5-yr growth</th><th>Tested edge</th></tr></thead>
+          <tbody id="buyBody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- REBALANCE -->
+      <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
+        <h2 class="text-[15px] font-bold text-slate-100">A suggested reshuffle</h2>
+        <p class="text-[12px] text-slate-500 mb-3">Move money from the fading names into the uptrend ones. <b class="text-slate-300">Illustrative — you decide amounts.</b> Check each lot's holding period for tax before selling.</p>
+        <div id="planTiles" class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3"></div>
+        <div id="planBody" class="grid md:grid-cols-2 gap-4 text-[13px]"></div>
+        <div id="planBeforeAfter" class="mt-3 rounded-lg bg-[#0a0f1a] border border-slate-800 p-3 text-[12px] text-slate-300"></div>
+      </section>
+
+      <!-- GROWTH OUTLOOK -->
+      <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
+        <h2 class="text-[15px] font-bold text-slate-100">What growth to expect</h2>
+        <p class="text-[12px] text-slate-500 mb-3">Ranges, <b class="text-slate-300">not a promise</b>. Nobody can predict a single stock's return. These are whole-portfolio scenarios.</p>
+        <div id="scenarioTiles" class="grid grid-cols-1 sm:grid-cols-3 gap-3"></div>
+        <div id="decadeNote" class="text-[12px] text-slate-400 mt-3"></div>
+      </section>
+
+      <div id="disclaimer" class="text-[11px] text-slate-600 pb-8"></div>
+    </div>
+  </main>
+
+  <script>
+    function $(id){ return document.getElementById(id); }
+    function num(v,d){ return (typeof v === "number" && isFinite(v)) ? v : (d===undefined?0:d); }
+    function isNum(v){ return typeof v === "number" && isFinite(v); }
+    function fixed(v,n){ return num(v,0).toFixed(n===undefined?0:n); }
+    function intFmt(v){ return Math.round(num(v,0)).toLocaleString('en-IN'); }
+    function rupee(v){ v=num(v,0); return (v<0?"-":"")+"₹"+Math.abs(Math.round(v)).toLocaleString('en-IN'); }
+    function pct(v){ return isNum(v) ? (v>=0?"+":"")+v.toFixed(1)+"%" : "—"; }
+    function esc(s){ return String(s===undefined||s===null?"":s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+    function str(s,d){ return (s===undefined||s===null||s==="")?(d===undefined?"":d):String(s); }
+    function gainCls(v){ return num(v,0)>0?"text-emerald-400":(num(v,0)<0?"text-red-400":"text-slate-300"); }
+
+    function tile(parent, label, value, sub, cls){
+      var el = document.createElement('div');
+      el.className = "rounded-lg bg-[#0a0f1a] border border-slate-800 p-3";
+      el.innerHTML = '<div class="text-[11px] text-slate-500">'+esc(label)+'</div>' +
+        '<div class="text-xl font-bold num '+(cls||'text-slate-100')+'">'+value+'</div>' +
+        (sub?'<div class="text-[11px] text-slate-500 num mt-0.5">'+sub+'</div>':'');
+      parent.appendChild(el);
+    }
+
+    // action → layman badge
+    var VERDICT = {
+      "Leader":     { cls:"bg-emerald-900/60 text-emerald-300", txt:"✅ Keep" },
+      "Hold":       { cls:"bg-slate-700/60 text-slate-200",     txt:"🟡 Hold" },
+      "Hold*":      { cls:"bg-sky-900/60 text-sky-300",         txt:"🔷 Hold*" },
+      "Trim":       { cls:"bg-amber-900/60 text-amber-300",     txt:"🟠 Trim" },
+      "Rotate out": { cls:"bg-red-900/60 text-red-300",         txt:"🔴 Rotate out" }
+    };
+    var ORDER = { "Rotate out":0, "Trim":1, "Hold*":2, "Hold":3, "Leader":4 };
+    function trendArrow(t){
+      if(t==="Uptrend") return '<span class="text-emerald-400">▲ Uptrend</span>';
+      if(t==="Downtrend") return '<span class="text-red-400">▼ Downtrend</span>';
+      if(t==="Demerger") return '<span class="text-sky-400">◆ Demerger</span>';
+      if(t==="No data") return '<span class="text-slate-600">— no data</span>';
+      return '<span class="text-slate-400">▬ Sideways</span>';
+    }
+
+    function render(resp){
+      resp = resp && typeof resp==="object" ? resp : {};
+      var a = resp.analysis || {}, rot = resp.rotation || {};
+      var warns = Array.isArray(resp.warnings) ? resp.warnings : [];
+      $("warnings").innerHTML = warns.length ? ("⚠ " + warns.map(esc).join(" · ")) : "";
+      if(!a.holdings || !a.holdings.length){ $("status").textContent = "No holdings found — try an Excel/CSV export."; return; }
+      $("status").textContent = "Marks " + intFmt(a.marks_live) + "/" + intFmt(a.marks_total) + " live (EOD close) · built " + str(a.built_ist,"");
+      $("results").classList.remove("hidden");
+
+      // headline
+      var hp = $("headline"); hp.innerHTML="";
+      tile(hp, "Invested", rupee(a.total_cost));
+      tile(hp, "Current value", rupee(a.total_value));
+      tile(hp, "Total profit/loss", rupee(a.total_unrealized_pnl), pct(a.total_unrealized_pct), gainCls(a.total_unrealized_pnl));
+      tile(hp, "Stocks held", intFmt(a.names_total), intFmt(a.names_with_edge)+" with a tested edge");
+
+      // concentration
+      var cp = $("concTiles"); cp.innerHTML="";
+      tile(cp, "Biggest single stock", fixed(a.top1_weight_pct,0)+"%", "of your money", num(a.top1_weight_pct,0)>=25?"text-amber-400":"text-slate-100");
+      tile(cp, "Top 5 stocks", fixed(a.top5_weight_pct,0)+"%", "combined");
+      tile(cp, "Spread (HHI)", esc(str(a.hhi_label,"—")), num(a.hhi,0)>=2500?"concentrated":"", num(a.hhi,0)>=2500?"text-amber-400":"text-slate-100");
+      tile(cp, "Real independent bets", "≈ "+fixed(a.effective_names,1), "of "+intFmt(a.names_total)+" stocks");
+      var clusters = Array.isArray(a.clusters)?a.clusters:[];
+      $("concNote").innerHTML = "You hold <b>"+intFmt(a.names_total)+" stocks</b>, but they behave like only <b>≈"+fixed(a.effective_names,1)+" independent bets</b> — the rest overlap (same theme moves together)." +
+        (clusters.length ? (" <span class='text-amber-400'>Moves together:</span> " + clusters.map(function(c){ return esc(c.label)+" ("+fixed(c.combined_weight_pct,0)+"%)"; }).join(" · ")) : "");
+
+      // stocks table (merge analysis P&L with rotation verdict)
+      var rmap = {}; (rot.holdings||[]).forEach(function(r){ rmap[r.symbol]=r; });
+      var rows = (a.holdings||[]).map(function(h){
+        var r = rmap[h.symbol] || {};
+        return { sym:h.symbol, pnl:h.unrealized_pnl, pnlpct:h.unrealized_pct, wt:h.weight_pct,
+                 trend:r.trend, rs12:r.rs_12m, action:r.action||"Hold", reason:r.reason||"" };
+      });
+      rows.sort(function(x,y){ return (ORDER[x.action]===undefined?5:ORDER[x.action]) - (ORDER[y.action]===undefined?5:ORDER[y.action]) || num(y.wt)-num(x.wt); });
+      $("stocksBody").innerHTML = rows.map(function(x){
+        var v = VERDICT[x.action] || VERDICT["Hold"];
+        return '<tr>' +
+          '<td class="font-semibold text-slate-200">'+esc(x.sym)+'<div class="text-[10px] text-slate-500 num">'+fixed(x.wt,1)+'% of book</div></td>' +
+          '<td class="num '+gainCls(x.pnl)+'">'+rupee(x.pnl)+'<div class="text-[10px] '+gainCls(x.pnl)+'">'+pct(x.pnlpct)+'</div></td>' +
+          '<td class="num">'+trendArrow(x.trend)+'</td>' +
+          '<td class="num '+gainCls(x.rs12)+'">'+(isNum(x.rs12)?pct(x.rs12):"—")+'</td>' +
+          '<td><span class="badge '+v.cls+'">'+v.txt+'</span></td>' +
+          '<td class="text-[12px] text-slate-400">'+esc(x.reason)+'</td>' +
+          '</tr>';
+      }).join("");
+
+      // buy candidates
+      var bc = Array.isArray(rot.buy_candidates)?rot.buy_candidates:[];
+      $("buyBody").innerHTML = bc.length ? bc.map(function(c){
+        return '<tr>' +
+          '<td class="font-semibold text-slate-200">'+esc(c.symbol)+'</td>' +
+          '<td class="num text-slate-300">'+rupee(c.last)+'</td>' +
+          '<td class="num text-emerald-400">'+pct(c.rs_12m)+'</td>' +
+          '<td class="num text-slate-300">'+(isNum(c.cagr_3y)?pct(c.cagr_3y):"—")+'</td>' +
+          '<td class="num text-slate-300">'+(isNum(c.cagr_5y)?pct(c.cagr_5y):"—")+'</td>' +
+          '<td class="text-[12px] text-slate-400">'+esc(str(c.edge_strategy,""))+' <span class="text-slate-600">(PF '+fixed(c.edge_profit_factor,2)+' · '+intFmt(c.edge_n)+' trades)</span></td>' +
+          '</tr>';
+      }).join("") : '<tr><td colspan="6" class="text-slate-600 py-3">No uptrend + edge-backed names outside your book right now.</td></tr>';
+
+      // rebalance
+      var plan = rot.plan || null;
+      var pt = $("planTiles"); pt.innerHTML="";
+      if(plan){
+        tile(pt, "Cash you'd free up", rupee(plan.cash_raised));
+        tile(pt, "Profit booked", rupee(plan.realized_gain), "", gainCls(plan.realized_gain));
+        tile(pt, "Est. tax (LTCG)", rupee(plan.ltcg_tax_est), "12.5% over ₹1.25L — verify lots");
+        tile(pt, "To reinvest", rupee(plan.to_redeploy));
+        var sells = (plan.sells||[]).map(function(s){ return '<div class="py-0.5">🔻 Sell <b class="text-slate-200">'+esc(s.symbol)+'</b> '+fixed(s.frac*100,0)+'% → '+rupee(s.cash)+' <span class="text-slate-500">(profit '+rupee(s.realized_gain)+')</span></div>'; }).join("");
+        var buys = (plan.buys||[]).map(function(b){ return '<div class="py-0.5">🟢 Buy <b class="text-slate-200">'+esc(b.symbol)+'</b> ~'+rupee(b.amount)+' <span class="text-slate-500">(~'+intFmt(b.shares)+' shares)</span></div>'; }).join("");
+        $("planBody").innerHTML =
+          '<div><div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Sell the fading names</div>'+(sells||'<span class="text-slate-600">—</span>')+'</div>' +
+          '<div><div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Reinvest into uptrend names</div>'+(buys||'<span class="text-slate-600">—</span>')+'</div>';
+        var b=plan.before||{}, af=plan.after||{};
+        $("planBeforeAfter").innerHTML = "<b class='text-slate-200'>What this does:</b> stocks in an uptrend <b class='text-emerald-400'>"+fixed(b.uptrend_pct,0)+"% → "+fixed(af.uptrend_pct,0)+"%</b> · sectors "+intFmt(b.sectors)+" → "+intFmt(af.sectors)+" · risky-theme weight "+fixed(b.theme_pct,0)+"% → "+fixed(af.theme_pct,0)+"% · concentration "+intFmt(b.hhi)+" → "+intFmt(af.hhi)+" (lower = safer). It doesn't promise a return — it makes the book healthier.";
+      } else {
+        $("planBody").innerHTML = '<span class="text-slate-500">Nothing is in a confirmed downtrend lagging the market — no reshuffle needed right now. 👍</span>';
+        $("planBeforeAfter").innerHTML = "";
+      }
+
+      // growth scenarios
+      var sc = Array.isArray(rot.scenarios)?rot.scenarios:[];
+      var st = $("scenarioTiles"); st.innerHTML="";
+      var scCls = { "Bear":"text-red-300", "Base":"text-slate-100", "Bull":"text-emerald-300" };
+      sc.forEach(function(s){
+        var el=document.createElement('div'); el.className="rounded-lg bg-[#0a0f1a] border border-slate-800 p-3";
+        el.innerHTML='<div class="text-[12px] font-semibold '+(scCls[s.name]||'text-slate-200')+'">'+esc(s.name)+'</div>' +
+          '<div class="text-lg font-bold num text-slate-100">'+fixed(s.cagr_low,0)+'–'+fixed(s.cagr_high,0)+'% <span class="text-[11px] font-normal text-slate-500">a year</span></div>' +
+          '<div class="text-[11px] text-slate-500 mt-0.5">'+esc(s.assumes)+'</div>';
+        st.appendChild(el);
+      });
+      $("decadeNote").textContent = str(rot.decade_note,"");
+      $("disclaimer").textContent = str(rot.disclaimer, str(a.disclaimer,""));
+      window.scrollTo({ top: $("results").offsetTop - 70, behavior: "smooth" });
+    }
+
+    function busy(msg){ $("status").innerHTML = '<span class="inline-block spin">⏳</span> '+esc(msg); }
+    function postJson(body){
+      busy("Analyzing your portfolio…");
+      fetch("/api/holdings", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) })
+        .then(function(r){ return r.json(); }).then(render)
+        .catch(function(e){ $("status").textContent = "Error: "+e; });
+    }
+    function uploadFile(file){
+      busy("Reading " + file.name + " …");
+      var fd = new FormData(); fd.append("file", file, file.name);
+      fetch("/api/portfolio/upload", { method:"POST", body: fd })
+        .then(function(r){ return r.json(); }).then(render)
+        .catch(function(e){ $("status").textContent = "Error: "+e; });
+    }
+
+    $("mineBtn").addEventListener("click", function(){ postJson({ use_mine:true }); });
+    $("sampleBtn").addEventListener("click", function(){ postJson({ use_sample:true }); });
+    $("pasteToggle").addEventListener("click", function(){ $("pasteBox").classList.toggle("hidden"); });
+    $("pasteBtn").addEventListener("click", function(){
+      var raw = ($("pasteArea").value||"").trim();
+      if(!raw){ return; }
+      postJson(raw.indexOf(",")>=0 ? { csv: raw } : { text: raw });
+    });
+    $("fileInput").addEventListener("change", function(e){ if(e.target.files && e.target.files[0]) uploadFile(e.target.files[0]); });
+    var drop = $("drop");
+    ["dragenter","dragover"].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add("drag"); }); });
+    ["dragleave","drop"].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove("drag"); }); });
+    drop.addEventListener("drop", function(e){ if(e.dataTransfer.files && e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]); });
+  </script>
+</body>
+</html>

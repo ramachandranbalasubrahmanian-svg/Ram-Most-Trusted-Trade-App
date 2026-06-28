@@ -422,6 +422,36 @@ pub fn sample_holdings() -> Vec<Holding> {
     ]
 }
 
+/// The owner's REAL consolidated book (Groww / Zerodha / INDmoney merged), as a
+/// one-click preset for the Portfolio page. Sectors are factual classifications;
+/// avg costs are quantity-weighted across brokers. Marks come from the local
+/// archive at request time (names not in the archive fall back to cost, flagged
+/// not-live). Display-only — never an order.
+pub fn my_portfolio() -> Vec<Holding> {
+    let h = |symbol: &str, qty: f64, avg_cost: f64, broker: &str, sector: &str| Holding {
+        symbol: symbol.to_string(),
+        qty,
+        avg_cost,
+        broker: broker.to_string(),
+        sector: Some(sector.to_string()),
+    };
+    vec![
+        h("IDFCFIRSTB", 7676.0, 60.12, "Groww", "Banking"),
+        h("TATAPOWER", 1002.0, 230.60, "Groww/Zerodha", "Power"),
+        h("63MOONS", 528.0, 373.35, "Groww/INDmoney", "Technology"),
+        h("TMPV", 970.0, 306.75, "Groww", "Automobiles"),
+        h("TMLCV", 970.0, 138.79, "Groww", "Automobiles"),
+        h("RVNL", 750.0, 174.30, "Groww/INDmoney", "PSU Railways"),
+        h("SUZLON", 2900.0, 32.92, "Groww/Zerodha", "Renewables"),
+        h("IRFC", 1563.0, 41.67, "Groww/INDmoney", "PSU Finance"),
+        h("IOC", 942.0, 136.13, "Groww/INDmoney", "PSU Energy"),
+        h("WAAREEENER", 18.0, 3170.88, "Groww/INDmoney", "Renewables"),
+        h("GMRAIRPORT", 350.0, 82.69, "Groww", "Infrastructure"),
+        h("HUDCO", 177.0, 101.94, "Groww", "PSU Finance"),
+        h("GREAVESCOT", 10.0, 135.90, "INDmoney", "Automobiles"),
+    ]
+}
+
 // ---------------------------------------------------------------------------
 // Mark source (I/O — called by the endpoint, NOT by analyze())
 // ---------------------------------------------------------------------------

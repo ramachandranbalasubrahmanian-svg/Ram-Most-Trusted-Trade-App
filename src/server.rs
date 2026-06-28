@@ -19,7 +19,7 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Json, Path, Query, State};
+use axum::extract::{Json, Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -89,6 +89,9 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/swing", get(swing_handler))
         .route("/api/portfolio", get(portfolio_handler))
         .route("/api/holdings", post(holdings_handler))
+        // --- Portfolio Analytics (dedicated page: upload PDF/Excel/CSV) ---
+        .route("/portfolio", get(portfolio_page_handler))
+        .route("/api/portfolio/upload", post(portfolio_upload_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
@@ -584,6 +587,9 @@ struct HoldingsRequest {
     /// Load the built-in sample portfolio instead of any supplied holdings.
     #[serde(default)]
     use_sample: bool,
+    /// Load the owner's real consolidated book (the one-click preset).
+    #[serde(default)]
+    use_mine: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -608,7 +614,9 @@ async fn holdings_handler(State(state): State<AppState>, Json(req): Json<Holding
     let resp = tokio::task::spawn_blocking(move || {
         // Ingest from whichever source(s) the client supplied.
         let mut warnings: Vec<String> = Vec::new();
-        let holdings: Vec<crate::types::Holding> = if req.use_sample {
+        let holdings: Vec<crate::types::Holding> = if req.use_mine {
+            crate::holdings_analytics::my_portfolio()
+        } else if req.use_sample {
             crate::holdings_analytics::sample_holdings()
         } else {
             let mut inputs: Vec<HoldingInput> = Vec::new();
@@ -652,6 +660,74 @@ async fn holdings_handler(State(state): State<AppState>, Json(req): Json<Holding
     match resp {
         Ok(r) => Json(r).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("holdings task panicked: {e}")).into_response(),
+    }
+}
+
+/// `GET /portfolio` — the dedicated Portfolio Analytics page (upload PDF/Excel/CSV,
+/// or one-click your own book). Read at request time so UI edits show on refresh.
+async fn portfolio_page_handler(State(state): State<AppState>) -> Response {
+    let path = state.static_dir.join("portfolio.html");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("could not read portfolio.html: {e}")).into_response(),
+    }
+}
+
+/// `POST /api/portfolio/upload` — a multipart file (PDF / Excel / CSV) → parsed
+/// holdings → the full risk picture + rotation/growth. Display-only ingest of the
+/// user's OWN holdings; never places, modifies, or cancels an order.
+async fn portfolio_upload_handler(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+    let root = state.root.clone();
+    let edges = state.edge_index.clone();
+    let now = now_ist_string();
+
+    // Take the first uploaded file field.
+    let mut filename = String::new();
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if let Some(fname) = field.file_name() {
+            filename = fname.to_string();
+        }
+        if let Ok(b) = field.bytes().await {
+            if !b.is_empty() {
+                bytes = b.to_vec();
+                break;
+            }
+        }
+    }
+    if bytes.is_empty() {
+        return (StatusCode::BAD_REQUEST, "no file received").into_response();
+    }
+
+    let resp = tokio::task::spawn_blocking(move || {
+        let imp = crate::portfolio_import::import_bytes(&filename, &bytes);
+        let mut warnings = imp.warnings;
+        let holdings: Vec<crate::types::Holding> =
+            imp.holdings.iter().map(crate::holdings_analytics::normalize).collect();
+        if holdings.is_empty() {
+            warnings.push("No holdings were recognised — upload an Excel/CSV export or paste the rows.".to_string());
+        }
+        let conn = crate::storage_kernel::open_conn().ok();
+        let mut marks: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        if let Some(ref conn) = conn {
+            for h in &holdings {
+                if let Some(px) = crate::holdings_analytics::latest_daily_close(conn, &root, &h.symbol) {
+                    marks.insert(h.symbol.clone(), px);
+                }
+            }
+        }
+        let analysis = crate::holdings_analytics::analyze(&holdings, &marks, &edges, now.clone());
+        let rotation = match conn {
+            Some(ref c) => crate::portfolio_rotation::build(c, &root, &analysis.holdings, &edges, now),
+            None => crate::portfolio_rotation::empty(now),
+        };
+        HoldingsResponse { analysis, rotation, warnings }
+    })
+    .await;
+
+    match resp {
+        Ok(r) => Json(r).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("upload task panicked: {e}")).into_response(),
     }
 }
 
