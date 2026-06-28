@@ -657,7 +657,7 @@
 
       var cells = "";
       // Symbol
-      cells += '<td style="text-align:left"><span class="font-bold ' + symColor + '">' + esc(str(r.symbol, "—")) + "</span></td>";
+      cells += '<td style="text-align:left"><span class="font-bold ' + symColor + '">' + esc(str(r.symbol, "—")) + "</span>" + tradBadges(r.symbol) + "</td>";
       // Strategy
       cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.strategy, "—")) + "</td>";
       // Entry / SL / Target
@@ -804,6 +804,34 @@
         ? 'map file dated ' + when + ' (build time not recorded)'
         : 'built ' + when;
     }
+    // Tradability flags (display-only): symbol -> {trade_to_trade, liquidity,
+    // low_priced, caption, ...}. Joined client-side onto the Top-10 so a setup on
+    // an un-tradeable / illiquid name is captioned, never hidden or re-ranked.
+    var TRAD = {};
+    function tradBadges(sym) {
+      var t = TRAD[String(sym).toUpperCase()];
+      if (!t) return "";
+      var b = [];
+      if (t.trade_to_trade) b.push('<span class="ml-1 px-1 rounded bg-rose-900/60 text-rose-300 text-[9px] font-bold align-middle">T2T</span>');
+      if (t.liquidity === "very thin" || t.liquidity === "thin") b.push('<span class="ml-1 px-1 rounded bg-amber-900/50 text-amber-300 text-[9px] font-bold align-middle">THIN</span>');
+      if (t.low_priced) b.push('<span class="ml-1 px-1 rounded bg-amber-900/40 text-amber-300/90 text-[9px] font-bold align-middle">₹LOW</span>');
+      if (!b.length) return "";
+      // Wrap with a tooltip carrying the full caption.
+      return '<span title="' + esc(str(t.caption, "")) + '">' + b.join("") + '</span>';
+    }
+    function loadTradability() {
+      fetch("/api/tradability").then(function (r) { return r.ok ? r.json() : null; }).then(function (res) {
+        if (!res || !res.by_symbol) return;
+        var m = {};
+        Object.keys(res.by_symbol).forEach(function (k) { m[k.toUpperCase()] = res.by_symbol[k]; });
+        TRAD = m;
+        // Re-render the current tables so badges appear without waiting for the
+        // next packet.
+        if (typeof lastBuy !== "undefined" && lastBuy) renderTable(els.buyHead, els.buyBody, lastBuy, "buy");
+        if (typeof lastSell !== "undefined" && lastSell) renderTable(els.sellHead, els.sellBody, lastSell, "sell");
+      }).catch(function () { /* best-effort; flags are optional */ });
+    }
+
     function loadFreshness() {
       var wrap = $("freshWrap");
       if (!wrap) return;
@@ -883,6 +911,7 @@
     renderControls();
     runCalc();
     loadFreshness();
+    loadTradability();
     connect();
   })();
   </script>

@@ -33,6 +33,7 @@ use tracing::{info, warn};
 use crate::cache::{CapRiskKey, Cached, KeyedCache};
 use crate::config::UserSettings;
 use crate::strategy_engine::EdgeIndex;
+use crate::tradability::TradabilityResult;
 use crate::types::{
     FinderResult, HoldingInput, JournalEntry, JournalUpdate, PortfolioAnalysis, PortfolioMetrics,
     RegimeInfo, ScanResult, SignalPacket, StockSuggestion, SwingCatalog,
@@ -71,6 +72,8 @@ pub struct AppState {
     /// Timeframe this server loaded its edge map for (the "live" map behind the
     /// Top-10). Used by the freshness panel to mark which tf is live.
     pub edge_tf: crate::config::Timeframe,
+    /// Display-only tradability/liquidity/surveillance flags (warm cache).
+    pub tradability: Arc<Cached<TradabilityResult>>,
 }
 
 /// Run the Axum server until the process exits.
@@ -81,6 +84,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/intraday", get(intraday_handler))
         .route("/api/symbols", get(symbols_handler))
         .route("/api/edge_map_status", get(edge_map_status_handler))
+        .route("/api/tradability", get(tradability_handler))
         .route("/api/suggest/{symbol}", get(suggest_handler))
         .route("/api/scanner", get(scanner_handler))
         .route("/api/finder", get(finder_handler))
@@ -403,6 +407,29 @@ async fn edge_map_status_handler(State(state): State<AppState>) -> Response {
             warn!("edge_map_status task panicked: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "edge_map_status failed").into_response()
         }
+    }
+}
+
+/// `GET /api/tradability` — display-only tradability/liquidity/surveillance flags
+/// for the whole daily universe (series/T2T, median ₹ turnover, price floor,
+/// micro-cap; ASM/GSM honestly "not loaded"). Warm, stale-while-revalidate.
+/// Never gates, ranks, or sizes anything — the UI joins it client-side to add a
+/// caption next to a signal.
+async fn tradability_handler(State(state): State<AppState>) -> Response {
+    let root = state.root.clone();
+    let compute = move || {
+        let conn = crate::storage_kernel::open_conn().ok()?;
+        let built = now_ist_string();
+        Some(crate::tradability::build_index(
+            &conn,
+            &root,
+            std::path::Path::new("cache"),
+            built,
+        ))
+    };
+    match read_through(state.tradability.clone(), "tradability", compute, |t| t.built_ist.clone()).await {
+        Some(t) => Json(t).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "tradability scan failed").into_response(),
     }
 }
 

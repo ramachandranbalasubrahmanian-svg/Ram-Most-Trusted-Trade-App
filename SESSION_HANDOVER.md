@@ -4,27 +4,49 @@
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
 > `SESSION_HANDOVER.md` (esp. the ▶▶ NEXT-SESSION PLAN below), and continue on `main`.**
 >
-> **Git state:** the previous session's UI + add-stock work is **committed LOCALLY on `main` but NOT pushed** —
-> `origin/main` is still at `5a29b6e` (Portfolio v2). Run `git log --oneline -3`; **push when ready** with
-> `git push origin main`. That local tip commit adds: consistent 5-link nav on every page; a sortable Live-Signals
-> Top-10 (click any header) with a **Score** column + a "📘 How to read Win%" explainer/calculator + per-column
-> tooltips & a column guide; a new `/add_stock` page + `/api/add_stock` + `download_stock.py` (Yahoo max-daily + Kite
-> minute→resampled into the archive); **Clear-portfolio + localStorage persistence** on `/portfolio`. 155 tests pass,
-> JS parses, real-data verified.
+> **Git state:** the freshness-panel + onboard + tradability work below is **committed LOCALLY on `main` but NOT
+> pushed** (two commits on top of `9bad1f5`). `origin/main` is at `9bad1f5` (the prior UI/add-stock commit was pushed
+> this session). Run `git log --oneline -5`; **push when ready** with `git push origin main`. 165 tests pass; build
+> clean; both edge-map anchor SHA1s intact (`a337c222`/`34d4659c`); 63MOONS onboard verified byte-preserving then reverted.
 
 Then run the resume command:
 ```bash
 . "$HOME/.cargo/env"
 cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
-git log --oneline -3                                        # ← last session's work is committed LOCALLY (push when ready)
+git log --oneline -5                                        # ← freshness+onboard+tradability committed LOCALLY (push when ready)
 pkill -f "ram_istp serve"; pkill -f "ram_istp live"         # stop any leftover instance (single-instance!)
-cargo build && cargo test                                   # 155 tests should pass
+cargo build && cargo test                                   # 165 tests should pass
 ./target/debug/ram_istp serve 30min                         # dashboards at http://127.0.0.1:8787
-#   /            → Live Signals: sortable Top-10 (click headers) + "📘 How to read Win%" explainer
-#   /add_stock   → type an NSE code → downloads ~20y daily + 1/3/5/10/15/30/60m + 1day parquet (Kite needs a fresh token)
-#   /portfolio   → upload xlsx/CSV or paste, "Load my portfolio", Clear, + the ₹-horizon planner
-# THEN: execute the ▶▶ NEXT-SESSION PLAN (backtest freshness panel → auto-onboard the ~125 new stocks → details/tradability).
+#   /            → Live Signals: Top-10 + EDGE-MAP FRESHNESS banner + tradability badges (T2T/THIN/₹LOW)
+#   /add_stock   → add an NSE code → downloads candles → AUTO-ONBOARDS (backtest+merge) → shows eligible edges found
+#   /api/edge_map_status  → per-tf universe/backtested/eligible/new-since-build/files-changed
+#   /api/onboard_symbol   → POST {symbol}: incremental per-symbol backtest+merge (byte-preserving, anchor-safe)
+#   /api/tradability      → series/T2T + median ₹ turnover + price/micro-cap flags (ASM/GSM honestly "not loaded")
+# THEN: remaining P0 — P0-2b add_stock DETAILS onboarding (symbol_metadata/sector/corp-actions/fundamentals via Python),
+#       then P1 (robustness columns, shrunk ranking, CPCV/PBO, fundamentals, coverage panel).
 ```
+
+## ◀ THIS SESSION (2026-06-28) — freshness panel + incremental onboarding + tradability + anchor re-baseline
+Three NEXT-SESSION-PLAN P0s + a regression-anchor fix. All display-only / signals-only; eligibility gate, Confidence,
+cost model untouched. **165 tests** (was 155); **2 local commits** on top of `9bad1f5` (NOT pushed).
+1. **P0-1 Edge-map freshness panel** — `EdgeMapMeta` sidecar (`save_edge_map_meta`) + `GET /api/edge_map_status` +
+   `/` banner. Surfaces universe 1,634 vs 541 backtested (1,093 not yet onboarded), per-tf, new-since-build, stale files.
+2. **P0-2 Incremental onboarding** — `strategy_engine::merge_edge_records` (byte-preserving text-splice for new symbols,
+   validated, with safe re-serialize fallback) + `POST /api/onboard_symbol` + `add_stock` auto-chains download→onboard.
+   Verified: onboarding 63MOONS preserved the full 5.78 MB map as an exact byte-prefix (5 eligible Short edges found).
+   ⚠ **Effective in the live Top-10 only on `serve` restart** (in-memory universe is fixed at startup); immediate in the
+   freshness panel + deep-dive. Hot-reload of the live universe was deliberately NOT done (dropped on review).
+3. **P0-3 Tradability flags** — NEW `tradability.rs` (firewalled: imports only config/storage_kernel/kite_instruments).
+   `GET /api/tradability` + warm cache + Top-10 badges (T2T/THIN/₹LOW + tooltip). Per symbol: series/T2T (from Kite
+   tradingsymbol suffix), median ₹ turnover (nse_daily_all), last-price/micro-cap flags. **ASM/GSM = "not loaded"**
+   (no local data — never fabricated). 1,782 symbols covered; 7 BE/T2T, 793 thin-or-worse. A caption, never a gate.
+4. **Anchor re-baseline** — the `63MOONS·15m·n=51·+0.494R` figure was the *Python* project's anchor, never the Rust
+   archive's. Codified the real Rust anchors as tests: `anchor_bajfinance_edge_map_stable` (edge-map tier, exact) +
+   `anchor_63moons_deep_dive_stable` (deep-dive tier, 30m/n=2603/conf=59). Both skip without the archive. See §6.
+**Not done (remaining P0):** P0-2b `add_stock` DETAILS onboarding (symbol_metadata upsert + sector + corp-actions +
+indianapi fundamentals); a one-off bulk-onboard of the ~1,093 missing 30min symbols (each onboard is anchor-safe but
+changes the 30min file — do it deliberately). Tradability is wired to the Top-10 only; extend to scanner/desk/portfolio
+cards (CapitalPick/RotationRow/HoldingAnalysis) as the plan specifies.
 
 ## ▶▶ NEXT-SESSION PLAN (specced 2026-06-28): backtest review + stock onboarding/enrichment
 *Plan only — nothing here is built yet. Multi-agent reviewed (28 agents) against the actual code; every item below

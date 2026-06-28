@@ -34,6 +34,7 @@ mod strategy_engine;
 mod suggestion_engine;
 mod swing_analyzer;
 mod symbol_resolver;
+mod tradability;
 mod types;
 mod validation;
 
@@ -383,6 +384,8 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
     let regime = Arc::new(cache::Cached::<types::RegimeInfo>::new(Duration::from_secs(120)));
     let swing = Arc::new(cache::Cached::<types::SwingCatalog>::new(Duration::from_secs(300)));
     let finder = Arc::new(cache::KeyedCache::<types::FinderResult>::new(Duration::from_secs(180), 16));
+    // Tradability is date-stable (daily turnover + series + caps) — a long TTL is fine.
+    let tradability = Arc::new(cache::Cached::<tradability::TradabilityResult>::new(Duration::from_secs(3600)));
 
     let state = server::AppState {
         packet: packet.clone(),
@@ -398,6 +401,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
         journal: journal_arc.clone(),
         edge_index: edge_index_arc.clone(),
         edge_tf: tf,
+        tradability: tradability.clone(),
     };
 
     // Startup precompute: warm all heavy caches in parallel so the first page
@@ -405,8 +409,8 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
     // path. Each thread claims the cache's single-flight slot, so a user request
     // arriving mid-warm waits for (rather than duplicates) the scan.
     {
-        let (root, sc, rg, sw, fd) =
-            (root.clone(), scanner.clone(), regime.clone(), swing.clone(), finder.clone());
+        let (root, sc, rg, sw, fd, td) =
+            (root.clone(), scanner.clone(), regime.clone(), swing.clone(), finder.clone(), tradability.clone());
         std::thread::spawn(move || {
             let warm: Vec<std::thread::JoinHandle<()>> = vec![
                 {
@@ -459,6 +463,31 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
                             let stamp = r.built_ist.clone();
                             slot.store(r, stamp);
                             eprintln!("warm: finder (default key) ready");
+                        }
+                    })
+                },
+                {
+                    let (root, td) = (root.clone(), td.clone());
+                    std::thread::spawn(move || {
+                        if td.try_begin_refresh() {
+                            let stamp = chrono::Utc::now()
+                                .with_timezone(&config::IST)
+                                .format("%Y-%m-%d %H:%M:%S")
+                                .to_string();
+                            match storage_kernel::open_conn() {
+                                Ok(conn) => {
+                                    let r = tradability::build_index(
+                                        &conn,
+                                        &root,
+                                        std::path::Path::new("cache"),
+                                        stamp,
+                                    );
+                                    let s = r.built_ist.clone();
+                                    td.store(r, s);
+                                    eprintln!("warm: tradability ready");
+                                }
+                                Err(_) => td.abort_refresh(),
+                            }
                         }
                     })
                 },
