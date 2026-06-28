@@ -30,8 +30,10 @@ cargo build && cargo test                                   # 155 tests should p
 *Plan only — nothing here is built yet. Multi-agent reviewed (28 agents) against the actual code; every item below
 passed an honesty-safety pressure-test. Execute in priority order. **Guardrails for ALL items:** never loosen the
 eligibility gate, never let any new signal feed Confidence (= t-stat + behavioural penalties + DSR gate only), keep
-everything display-only / no-orders, and keep the **63MOONS anchor byte-identical** (`63MOONS·VWAP·SELL·15m·+0.494R·
-PF 2.01·n=51·conf=72`) — anything that moves numbers goes behind a flag + a SEPARATE cache file.*
+everything display-only / no-orders, and keep the **Rust regression anchor byte-identical** (see §"Regression anchor"
+below: edge-map SHA1s + `BAJFINANCE·gap_and_go·Short·15min·n=130·exp=0.1433565560483712·PF=1.2659776591373888`, now
+guarded by `anchor_bajfinance_edge_map_stable` + `anchor_63moons_deep_dive_stable`) — anything that moves numbers goes
+behind a flag + a SEPARATE cache file.*
 
 ### The factual picture today (corrected & verified)
 - **Backtest universe behind the live Top-10 = the cached `cache/edge_map_30min.json`: 14,066 records over 541 distinct
@@ -75,7 +77,7 @@ PF 2.01·n=51·conf=72`) — anything that moves numbers goes behind a flag + a 
   trade). Only ever makes numbers more honest.
 - **[P1] Harden walk-forward for sparse/short history:** `walkforward_consistency` returns a neutral 1.0 when <2 folds
   populate → new stocks & sparse strategies get a free consistency pass. Return an "unknown" sentinel + require ≥5
-  trades/fold. *Anchor-affecting (it's a Confidence input) — verify 63MOONS (n=51) is unchanged + re-baseline.*
+  trades/fold. *Anchor-affecting (it's a Confidence input) — re-run both anchor tests + re-baseline if they move.*
 - **[P2] Rolling edge-stability (expectancy decay)** as a display-only early-warning + optional tie-break only.
 - **[Flagged, not a clean rec] Reconcile the two passes' cost constants (0.0013/0.0016/0.0012)** and the strategy/R:R
   contract so Top-10 ≈ drill-down. Careful: any change here moves numbers → anchor re-baseline. Treat as a deliberate,
@@ -300,7 +302,16 @@ Tracing now works: prefix with `RUST_LOG=info` to see connect/WS/refresh logs.
    shortlist are **display-only** and never gate or inflate it. `holdings_analytics` imports only `types`+`EdgeIndex`.
 4. **Net-of-cost truth**; **15:15 square-off is an ALERT**; **cached values carry `built_ist`** (never stale-as-live).
 5. **Never print/log** `KITE_API_KEY`/`KITE_ACCESS_TOKEN`/`NEWS_API_KEY`. Credentials live in `.env` only.
-6. **Regression anchor** (deep-dive must stay byte-identical): `63MOONS · VWAP · SELL · 15m · +0.494R · PF 2.01 · n=51 · conf=72`.
+6. **Regression anchor** (must stay byte-identical) — the Rust project's real anchor (UPGRADE_PLAN.md §0), now codified
+   as tests so it can't silently drift:
+   - **Edge-map tier:** `cache/edge_map_15min.json` sha1 `34d4659c…`, `cache/edge_map_30min.json` sha1 `a337c222…`; edge
+     `BAJFINANCE · gap_and_go · Short · 15min · n=130 · exp=0.1433565560483712 · PF=1.2659776591373888`
+     → `strategy_engine::tests::anchor_bajfinance_edge_map_stable`.
+   - **Deep-dive tier (re-baselined 2026-06-28, 2,776 trading days):** `63MOONS · VWAP · SELL · 30 Minutes · +0.07R ·
+     PF 1.18 · n=2603 · conf=59`; best overall = Prev-Day Breakout SELL 30m conf 59
+     → `suggestion_engine::tests::anchor_63moons_deep_dive_stable`.
+   - ⚠ The old `63MOONS · 15m · n=51 · +0.494R · conf=72` was the **Python** project's anchor, never the Rust archive's —
+     retired here. A data refresh that moves `n_trades` is expected to require a conscious re-baseline of the deep-dive test.
 
 ## Git
 **All work is on `main`** (and mirrored on the feature branch), pushed to GitHub. Latest tip: `15206ad`.

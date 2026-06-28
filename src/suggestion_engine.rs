@@ -1775,4 +1775,63 @@ mod tests {
             shortlist: false,
         }
     }
+
+    /// REGRESSION ANCHOR — re-baselined 2026-06-28 against the current archive
+    /// (2,776 trading days, last bar 2026-06-25). The legacy
+    /// `VWAP·SELL·15m·n=51·+0.494R·conf=72` anchor is RETIRED: the 63MOONS
+    /// history has grown ~50× since it was first set, so those numbers no longer
+    /// exist on disk. This freezes the *current* canonical deep-dive so any
+    /// future code change that silently moves the numbers fails loudly.
+    ///
+    /// The deep-dive needs the ~14 GB archive, so the test SKIPS cleanly when it
+    /// is absent (CI / a fresh clone) — it is a live guard on the owner's box.
+    /// NOTE: a data refresh that adds 63MOONS bars will move `n_trades` and is
+    /// expected to require a conscious re-baseline (update the constants here).
+    #[test]
+    fn anchor_63moons_deep_dive_stable() {
+        let root = config::data_root();
+        let minute = config::parquet_path(&root, "63MOONS", Timeframe::Minute);
+        if !minute.exists() {
+            eprintln!(
+                "SKIP anchor_63moons_deep_dive_stable: archive absent ({})",
+                minute.display()
+            );
+            return;
+        }
+        // Capital/risk match the CLI `suggest` defaults; they affect sizing only,
+        // never the backtest statistics asserted below.
+        let s = analyze_symbol(&root, "63MOONS", 100_000.0, 0.025).expect("analyze 63MOONS");
+
+        // Headline pick.
+        let best = s.best_overall.as_deref().unwrap_or("");
+        assert!(best.contains("Prev-Day Breakout"), "best_overall drifted: {best}");
+        assert!(best.contains("SELL on 30 Minutes"), "best_overall drifted: {best}");
+        assert!(best.contains("Confidence 59"), "best_overall drifted: {best}");
+
+        // Canonical anchor block: VWAP Trend → SELL · 30 Minutes · R:R 1 : 2.0.
+        let vwap = s
+            .blocks
+            .iter()
+            .find(|b| b.key == crate::types::SuggestStrategy::VwapTrend.key())
+            .expect("VWAP block present");
+        let c = vwap.best.as_ref().expect("VWAP best setup present");
+
+        let approx = |got: f64, want: f64, tol: f64, what: &str| {
+            assert!(
+                (got - want).abs() <= tol,
+                "anchor {what} drifted: got {got}, expected {want} ± {tol}"
+            );
+        };
+
+        assert_eq!(c.side, "SELL", "anchor side drifted");
+        assert_eq!(c.interval, "30 Minutes", "anchor interval drifted");
+        approx(c.rr, 2.0, 1e-9, "rr");
+        assert_eq!(c.n_trades, 2603, "anchor n_trades drifted (data refresh? re-baseline)");
+        assert_eq!(c.confidence, Some(59), "anchor confidence drifted");
+        approx(c.win_rate, 51.4, 0.1, "win_rate");
+        approx(c.profit_factor, 1.18, 0.01, "profit_factor");
+        approx(c.expectancy_r, 0.07, 0.01, "expectancy_r");
+        approx(c.sharpe, 0.07, 0.01, "sharpe");
+        approx(c.t_stat, 3.46, 0.01, "t_stat");
+    }
 }

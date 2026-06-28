@@ -142,6 +142,17 @@
       </div>
     </section>
 
+    <!-- ===================== EDGE-MAP FRESHNESS ===================== -->
+    <section id="freshWrap" class="hidden">
+      <div id="freshBanner" class="rounded-lg border px-3 py-2 text-[12px] flex items-center gap-x-3 gap-y-1 flex-wrap">
+        <span id="freshTitle" class="font-bold uppercase tracking-wider text-[10px]">Edge map</span>
+        <span id="freshSummary" class="text-slate-300"></span>
+        <span class="flex-1"></span>
+        <button id="freshToggle" class="text-[11px] text-sky-300 hover:underline shrink-0">details ▸</button>
+      </div>
+      <div id="freshDetails" class="hidden mt-1 rounded-lg border border-slate-800 bg-[#0d1320] p-3 text-[11px] text-slate-300 overflow-x-auto"></div>
+    </section>
+
     <!-- ===================== ALERTS ===================== -->
     <section id="alertsWrap" class="space-y-1.5 hidden"></section>
 
@@ -783,6 +794,86 @@
     })();
 
     // ----------------------------------------------------------------
+    // Edge-map freshness / scope banner (honesty-layer, display-only).
+    // Surfaces how much of the on-disk universe the live Top-10 actually
+    // covers, so a stale/partial map is never read as "covers everything".
+    // ----------------------------------------------------------------
+    function builtLabel(t) {
+      var when = esc(str(t.built_ist, "unknown"));
+      return t.built_is_file_mtime
+        ? 'map file dated ' + when + ' (build time not recorded)'
+        : 'built ' + when;
+    }
+    function loadFreshness() {
+      var wrap = $("freshWrap");
+      if (!wrap) return;
+      fetch("/api/edge_map_status").then(function (r) {
+        return r.ok ? r.json() : null;
+      }).then(function (s) {
+        if (!s || !arr(s.per_tf).length) return;
+        var per = s.per_tf;
+        var live = per.filter(function (t) { return t.is_live_tf; })[0] || per[0];
+        var universe = intFmt(s.universe_now);
+        var gap = num(live.new_since_build, 0);
+        var changed = num(live.files_changed, 0);
+        var hasGap = gap > 0 || changed > 0;
+
+        // Banner colour: amber when there's a coverage/staleness gap, else calm slate.
+        var banner = $("freshBanner");
+        banner.className = "rounded-lg border px-3 py-2 text-[12px] flex items-center gap-x-3 gap-y-1 flex-wrap " +
+          (hasGap ? "border-amber-700/60 bg-amber-950/30" : "border-slate-800 bg-[#0d1320]");
+        $("freshTitle").className = "font-bold uppercase tracking-wider text-[10px] " +
+          (hasGap ? "text-amber-300" : "text-slate-500");
+
+        var parts = [];
+        parts.push('<b class="text-slate-100">' + esc(live.timeframe) + '</b> <span class="text-slate-500">(live)</span>');
+        parts.push('backtested <b class="text-slate-200">' + intFmt(live.backtested_symbols) + '</b> / ' + universe + ' on disk');
+        parts.push('<b class="text-emerald-300">' + intFmt(live.eligible_symbols) + '</b> eligible · ' + intFmt(live.eligible_edges) + ' edges');
+        parts.push('<span class="text-slate-500">' + builtLabel(live) + '</span>');
+        if (gap > 0) {
+          var sample = arr(live.new_symbols_sample).slice(0, 12).join(", ");
+          parts.push('<span class="text-amber-300" title="' + esc(sample) + '">⚠ ' + intFmt(gap) + ' not yet backtested</span>');
+        }
+        if (changed > 0) {
+          parts.push('<span class="text-amber-300">' + intFmt(changed) + ' with fresher candles since build</span>');
+        }
+        $("freshSummary").innerHTML = parts.join(' <span class="text-slate-700">·</span> ');
+
+        // Details: every populated timeframe, full counts.
+        var rows = '<table class="num w-full text-[11px]"><thead><tr class="text-slate-500 text-left">' +
+          '<th class="pr-3 py-0.5">TF</th><th class="pr-3">Built</th>' +
+          '<th class="pr-3 text-right">Backtested</th><th class="pr-3 text-right">Eligible</th>' +
+          '<th class="pr-3 text-right">Edges</th><th class="pr-3 text-right">Records</th>' +
+          '<th class="pr-3 text-right">New</th><th class="pr-3 text-right">Stale files</th></tr></thead><tbody>';
+        for (var i = 0; i < per.length; i++) {
+          var t = per[i];
+          rows += '<tr class="border-t border-slate-800/60">' +
+            '<td class="pr-3 py-0.5 text-slate-200">' + esc(t.timeframe) + (t.is_live_tf ? ' <span class="text-sky-400">live</span>' : '') + '</td>' +
+            '<td class="pr-3 text-slate-400">' + esc(str(t.built_ist, "—")) + (t.built_is_file_mtime ? ' <span class="text-slate-600">(mtime)</span>' : '') + '</td>' +
+            '<td class="pr-3 text-right text-slate-200">' + intFmt(t.backtested_symbols) + (t.universe_at_build != null ? ' <span class="text-slate-600">/ ' + intFmt(t.universe_at_build) + '</span>' : '') + '</td>' +
+            '<td class="pr-3 text-right text-emerald-300">' + intFmt(t.eligible_symbols) + '</td>' +
+            '<td class="pr-3 text-right text-slate-300">' + intFmt(t.eligible_edges) + '</td>' +
+            '<td class="pr-3 text-right text-slate-400">' + intFmt(t.total_records) + '</td>' +
+            '<td class="pr-3 text-right ' + (num(t.new_since_build, 0) > 0 ? "text-amber-300" : "text-slate-500") + '">' + intFmt(t.new_since_build) + '</td>' +
+            '<td class="pr-3 text-right ' + (num(t.files_changed, 0) > 0 ? "text-amber-300" : "text-slate-500") + '">' + intFmt(t.files_changed) + '</td>' +
+            '</tr>';
+        }
+        rows += '</tbody></table>' +
+          '<div class="text-[10px] text-slate-600 mt-2">Universe = symbols with intraday (minute) data on disk. "New" = on disk but not in this map (rebuild with <code>backtest ' + esc(s.live_tf) + '</code> or add via /add_stock onboarding). Display-only — never gates or ranks signals. Checked ' + esc(str(s.checked_ist, "")) + ' IST.</div>';
+        $("freshDetails").innerHTML = rows;
+
+        wrap.classList.remove("hidden");
+      }).catch(function () { /* freshness is best-effort; never block the page */ });
+    }
+    (function () {
+      var ft = $("freshToggle"), fd = $("freshDetails");
+      if (ft && fd) ft.addEventListener("click", function () {
+        var nowHidden = fd.classList.toggle("hidden");
+        ft.textContent = nowHidden ? "details ▸" : "details ▾";
+      });
+    })();
+
+    // ----------------------------------------------------------------
     // Boot
     // ----------------------------------------------------------------
     els.buyHead.innerHTML = headHtml();
@@ -791,6 +882,7 @@
     els.sellBody.innerHTML = emptyRow();
     renderControls();
     runCalc();
+    loadFreshness();
     connect();
   })();
   </script>

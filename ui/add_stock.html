@@ -197,6 +197,62 @@
         : '<span class="text-amber-400 font-semibold">Finished with issues — see below.</span>';
     }
 
+    // After candles land, backtest + merge the symbol into the edge map so it
+    // can reach the live Top-10 — without a full-universe rebuild. Display-only.
+    function renderOnboard(resp){
+      resp = resp && typeof resp === "object" ? resp : {};
+      var tf = str(resp.timeframe, "live");
+      var edges = Array.isArray(resp.eligible_edges) ? resp.eligible_edges : [];
+      var good = (resp.eligible_added || 0) > 0;
+      var border = good ? "border-emerald-900/60 bg-emerald-950/20" : "border-slate-800 bg-slate-900/30";
+      var parts = [];
+      parts.push('<div class="rounded-lg border ' + border + ' p-3 mt-2">');
+      parts.push('<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Edge validation · ' + esc(tf) + '</div>');
+      parts.push('<div class="text-[12px] text-slate-300">' + esc(str(resp.note, "")) + '</div>');
+      if (edges.length){
+        parts.push('<div class="mt-2 space-y-1 num">');
+        edges.forEach(function(e){
+          var dir = String(e.direction).toUpperCase().indexOf("SHORT") >= 0 ? "SELL" : "BUY";
+          var dcls = dir === "SELL" ? "text-rose-300" : "text-emerald-300";
+          parts.push('<div class="text-[12px] text-slate-300">' +
+            '<span class="font-semibold ' + dcls + '">' + dir + '</span> · ' +
+            esc(str(e.strategy, "")) + ' · exp ' + (isNum(e.expectancy_r) ? (e.expectancy_r >= 0 ? "+" : "") + e.expectancy_r.toFixed(2) + "R" : "—") +
+            ' · PF ' + (isNum(e.profit_factor) ? e.profit_factor.toFixed(2) : "—") +
+            ' · win ' + (isNum(e.win_pct) ? e.win_pct.toFixed(0) + "%" : "—") +
+            ' · n=' + intFmt(e.n) + '</div>');
+        });
+        parts.push('</div>');
+      }
+      parts.push('</div>');
+      $("result").insertAdjacentHTML("beforeend", parts.join(""));
+    }
+
+    function onboard(sym){
+      $("status").innerHTML = '<span class="text-sky-300">Validating edges for <span class="num">' + esc(sym) + '</span>…</span>';
+      return fetch("/api/onboard_symbol", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: sym })
+      })
+        .then(function(r){ return r.json(); })
+        .then(function(resp){
+          if (resp && resp.error){
+            $("result").insertAdjacentHTML("beforeend",
+              '<div class="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3 text-[12px] text-amber-300 mt-2">' +
+              'Saved, but edge validation failed: ' + esc(resp.error) + '</div>');
+          } else {
+            renderOnboard(resp);
+          }
+          $("status").innerHTML = '<span class="text-emerald-400 font-semibold">✓ Done.</span>';
+        })
+        .catch(function(e){
+          $("result").insertAdjacentHTML("beforeend",
+            '<div class="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3 text-[12px] text-amber-300 mt-2">' +
+            'Saved, but edge validation could not run: ' + esc(String(e)) + '</div>');
+          $("status").innerHTML = '<span class="text-emerald-400 font-semibold">✓ Done.</span>';
+        });
+    }
+
     function download(){
       var sym = (input.value || "").trim().toUpperCase();
       if (!sym){ return; }
@@ -210,8 +266,12 @@
       })
         .then(function(r){ return r.json(); })
         .then(function(resp){
-          if (resp && resp.error){ showError(resp.error); return; }
+          if (resp && resp.error){ showError(resp.error); return null; }
           renderResult(resp);
+          // Chain into edge onboarding only when the daily candles actually saved.
+          var dailyOk = resp && resp.daily && str(resp.daily.status, "") === "ok";
+          if (dailyOk){ return onboard(sym); }
+          return null;
         })
         .catch(function(e){ showError(String(e)); })
         .then(function(){ done(); });

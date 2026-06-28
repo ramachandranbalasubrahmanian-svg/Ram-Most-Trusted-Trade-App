@@ -238,6 +238,12 @@ fn run_backtest(raw: &[String]) -> Result<()> {
     let elapsed = start.elapsed();
 
     strategy_engine::save_edge_map(&records, tf)?;
+    // Freshness sidecar (honesty-layer): report the gap against the *full* on-disk
+    // universe, even when only a subset of symbols was requested.
+    let universe_at_build = storage_kernel::discover_symbols(&root)
+        .map(|v| v.len())
+        .unwrap_or(symbols.len());
+    strategy_engine::save_edge_map_meta(&records, tf, universe_at_build)?;
     let eligible: Vec<&EdgeRecord> = records.iter().filter(|r| r.eligible).collect();
 
     println!(
@@ -322,6 +328,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
             let syms = storage_kernel::discover_symbols(&root)?;
             let (r, _f) = strategy_engine::backtest_universe(&root, &syms, tf);
             strategy_engine::save_edge_map(&r, tf)?;
+            strategy_engine::save_edge_map_meta(&r, tf, syms.len())?;
             r
         }
     };
@@ -390,6 +397,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
         freeze: freeze.clone(),
         journal: journal_arc.clone(),
         edge_index: edge_index_arc.clone(),
+        edge_tf: tf,
     };
 
     // Startup precompute: warm all heavy caches in parallel so the first page

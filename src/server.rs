@@ -26,7 +26,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tracing::{info, warn};
 
@@ -68,6 +68,9 @@ pub struct AppState {
     /// Eligible-edge index, for cross-referencing the user's holdings against
     /// our edge map (honest context — never advice).
     pub edge_index: Arc<EdgeIndex>,
+    /// Timeframe this server loaded its edge map for (the "live" map behind the
+    /// Top-10). Used by the freshness panel to mark which tf is live.
+    pub edge_tf: crate::config::Timeframe,
 }
 
 /// Run the Axum server until the process exits.
@@ -77,6 +80,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/ws/live_signals", get(ws_handler))
         .route("/intraday", get(intraday_handler))
         .route("/api/symbols", get(symbols_handler))
+        .route("/api/edge_map_status", get(edge_map_status_handler))
         .route("/api/suggest/{symbol}", get(suggest_handler))
         .route("/api/scanner", get(scanner_handler))
         .route("/api/finder", get(finder_handler))
@@ -95,6 +99,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/capital_plan", get(capital_plan_handler))
         .route("/add_stock", get(add_stock_page_handler))
         .route("/api/add_stock", post(add_stock_handler))
+        .route("/api/onboard_symbol", post(onboard_symbol_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
@@ -171,6 +176,234 @@ async fn symbols_handler(State(state): State<AppState>) -> Response {
     .await
     .unwrap_or_default();
     Json(symbols).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Edge-map freshness / scope panel (honesty-layer, display-only)
+// ---------------------------------------------------------------------------
+
+/// Per-timeframe scope+freshness for the freshness banner.
+#[derive(Serialize)]
+struct EdgeMapTfStatus {
+    timeframe: String,
+    /// This is the tf the running server loaded its live Top-10 from.
+    is_live_tf: bool,
+    /// Build timestamp (IST). From the `.meta.json` sidecar when present,
+    /// otherwise the map file's last-modified time (see `built_is_file_mtime`).
+    built_ist: String,
+    /// True when `built_ist` is the map file's mtime, not a recorded build stamp
+    /// (i.e. the map predates freshness tracking). Surfaced so the UI never
+    /// presents an approximate time as an exact one.
+    built_is_file_mtime: bool,
+    /// Universe size recorded at build time (None when only the mtime is known).
+    universe_at_build: Option<usize>,
+    /// Distinct symbols carried in the map.
+    backtested_symbols: usize,
+    /// Distinct symbols with ≥1 eligible edge.
+    eligible_symbols: usize,
+    /// Total eligible edges.
+    eligible_edges: usize,
+    /// Total records (eligible + ineligible).
+    total_records: usize,
+    /// Symbols on disk now that are NOT in this map (incl. just-added stocks).
+    new_since_build: usize,
+    /// First handful of those new names, for the UI tooltip.
+    new_symbols_sample: Vec<String>,
+    /// Backtested symbols whose `minute/` candles were modified after the build
+    /// (their rows in the map may be stale).
+    files_changed: usize,
+}
+
+/// Top-level freshness payload across all populated timeframes.
+#[derive(Serialize)]
+struct EdgeMapStatus {
+    checked_ist: String,
+    /// The tf the live Top-10 is served from.
+    live_tf: String,
+    /// Current on-disk intraday universe (symbols with a `minute/` file).
+    universe_now: usize,
+    per_tf: Vec<EdgeMapTfStatus>,
+}
+
+/// File last-modified as a `SystemTime`, if it can be read.
+fn file_mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(p).ok()?.modified().ok()
+}
+
+/// `SystemTime` → `YYYY-MM-DD HH:MM:SS` in IST.
+fn systemtime_to_ist(t: std::time::SystemTime) -> String {
+    let dt: chrono::DateTime<chrono::Utc> = t.into();
+    dt.with_timezone(&crate::config::IST)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
+/// Parse a recorded `YYYY-MM-DD HH:MM:SS` IST build stamp back to a `SystemTime`
+/// (best-effort; used only to count candle files modified since the build).
+fn parse_ist_to_systemtime(s: &str) -> Option<std::time::SystemTime> {
+    use chrono::TimeZone;
+    let naive = chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+    let dt = crate::config::IST.from_local_datetime(&naive).single()?;
+    let unix = dt.timestamp();
+    if unix < 0 {
+        return None;
+    }
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(unix as u64))
+}
+
+/// `GET /api/edge_map_status` — honest freshness/scope of every populated edge
+/// map: how many symbols were backtested vs how many are on disk now, how many
+/// carry an eligible edge, and how many are new or have fresher candles since
+/// the map was built. Pure display surface — never gates or ranks anything.
+async fn edge_map_status_handler(State(state): State<AppState>) -> Response {
+    use crate::config::Timeframe;
+    use std::collections::BTreeSet;
+
+    let root = state.root.clone();
+    let live_tf = state.edge_tf;
+
+    let status = tokio::task::spawn_blocking(move || {
+        // Live universe (the diff target), computed once.
+        let universe_syms = crate::storage_kernel::discover_symbols(&root).unwrap_or_default();
+        let universe_now = universe_syms.len();
+
+        // Candidate timeframes the product builds edge maps for; include only
+        // those with a map file actually present.
+        let candidates = [
+            Timeframe::Min5,
+            Timeframe::Min15,
+            Timeframe::Min30,
+            Timeframe::Min60,
+            Timeframe::Daily,
+        ];
+
+        let mut per_tf: Vec<EdgeMapTfStatus> = Vec::new();
+        for tf in candidates {
+            let map_path = crate::strategy_engine::edge_map_path(tf);
+            if !map_path.exists() {
+                continue;
+            }
+
+            // Prefer the freshness sidecar; fall back to parsing the map and
+            // using its file mtime as an honestly-labelled approximate build time.
+            let (
+                built_ist,
+                built_is_file_mtime,
+                universe_at_build,
+                backtested_set,
+                eligible_symbols,
+                eligible_edges,
+                total_records,
+                build_instant,
+            ): (String, bool, Option<usize>, BTreeSet<String>, usize, usize, usize, Option<std::time::SystemTime>) =
+                match crate::strategy_engine::load_edge_map_meta(tf) {
+                    Ok(meta) => {
+                        let set: BTreeSet<String> = meta.symbols.iter().cloned().collect();
+                        let instant = parse_ist_to_systemtime(&meta.built_ist);
+                        (
+                            meta.built_ist,
+                            false,
+                            Some(meta.universe_at_build),
+                            set,
+                            meta.eligible_symbols,
+                            meta.eligible_edges,
+                            meta.total_records,
+                            instant,
+                        )
+                    }
+                    Err(_) => {
+                        // No sidecar (map predates freshness tracking): derive
+                        // counts from the map, time from the file mtime.
+                        let records = crate::strategy_engine::load_edge_map(tf).unwrap_or_default();
+                        let mut set: BTreeSet<String> = BTreeSet::new();
+                        let mut elig_syms: BTreeSet<String> = BTreeSet::new();
+                        let mut elig_edges = 0usize;
+                        for r in &records {
+                            set.insert(r.symbol.clone());
+                            if r.eligible {
+                                elig_syms.insert(r.symbol.clone());
+                                elig_edges += 1;
+                            }
+                        }
+                        let mtime = file_mtime(&map_path);
+                        let stamp = mtime.map(systemtime_to_ist).unwrap_or_else(|| "unknown".to_string());
+                        (
+                            stamp,
+                            true,
+                            None,
+                            set,
+                            elig_syms.len(),
+                            elig_edges,
+                            records.len(),
+                            mtime,
+                        )
+                    }
+                };
+
+            // NEW-since-build: on disk now but not in this map.
+            let new_syms: Vec<String> = universe_syms
+                .iter()
+                .filter(|s| !backtested_set.contains(s.as_str()))
+                .cloned()
+                .collect();
+            let new_since_build = new_syms.len();
+            let new_symbols_sample: Vec<String> = new_syms.into_iter().take(20).collect();
+
+            // files-changed: backtested symbols whose minute candles were touched
+            // after the build (their map rows may be stale).
+            let files_changed = match build_instant {
+                Some(build_t) => backtested_set
+                    .iter()
+                    .filter(|sym| {
+                        let p = crate::config::parquet_path(&root, sym, Timeframe::Minute);
+                        file_mtime(&p).map(|m| m > build_t).unwrap_or(false)
+                    })
+                    .count(),
+                None => 0,
+            };
+
+            per_tf.push(EdgeMapTfStatus {
+                timeframe: tf.dir().to_string(),
+                is_live_tf: tf == live_tf,
+                built_ist,
+                built_is_file_mtime,
+                universe_at_build,
+                backtested_symbols: backtested_set.len(),
+                eligible_symbols,
+                eligible_edges,
+                total_records,
+                new_since_build,
+                new_symbols_sample,
+                files_changed,
+            });
+        }
+
+        // Live tf first, then by name — so the banner leads with the live map.
+        per_tf.sort_by(|a, b| {
+            b.is_live_tf
+                .cmp(&a.is_live_tf)
+                .then_with(|| a.timeframe.cmp(&b.timeframe))
+        });
+
+        EdgeMapStatus {
+            checked_ist: chrono::Utc::now()
+                .with_timezone(&crate::config::IST)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+            live_tf: live_tf.dir().to_string(),
+            universe_now,
+            per_tf,
+        }
+    })
+    .await;
+
+    match status {
+        Ok(s) => Json(s).into_response(),
+        Err(e) => {
+            warn!("edge_map_status task panicked: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "edge_map_status failed").into_response()
+        }
+    }
 }
 
 /// `GET /api/suggest/:symbol` — full per-stock deep-dive (4 strategy blocks).
@@ -838,6 +1071,15 @@ async fn add_stock_page_handler(State(state): State<AppState>) -> Response {
     }
 }
 
+/// True for a syntactically valid NSE trading code (alphanumeric + `&-`, ≤24
+/// chars). The strict whitelist is what lets us hand the symbol to a subprocess
+/// arg / archive path with no shell-injection or path-escape risk.
+fn valid_nse_symbol(sym: &str) -> bool {
+    !sym.is_empty()
+        && sym.len() <= 24
+        && sym.chars().all(|c| c.is_ascii_alphanumeric() || c == '&' || c == '-')
+}
+
 #[derive(serde::Deserialize)]
 struct AddStockRequest {
     symbol: String,
@@ -851,7 +1093,7 @@ struct AddStockRequest {
 /// `spawn_blocking`. Read-only w.r.t. trading: it only fetches market data.
 async fn add_stock_handler(State(state): State<AppState>, Json(req): Json<AddStockRequest>) -> Response {
     let sym = req.symbol.trim().to_uppercase();
-    if sym.is_empty() || sym.len() > 24 || !sym.chars().all(|c| c.is_ascii_alphanumeric() || c == '&' || c == '-') {
+    if !valid_nse_symbol(&sym) {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "invalid symbol — use the NSE trading code, e.g. 63MOONS"})),
@@ -892,6 +1134,110 @@ async fn add_stock_handler(State(state): State<AppState>, Json(req): Json<AddSto
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("add_stock task panicked: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct OnboardRequest {
+    symbol: String,
+}
+
+/// Result of onboarding one symbol into the live edge map.
+#[derive(Serialize)]
+struct OnboardResult {
+    symbol: String,
+    timeframe: String,
+    records_added: usize,
+    eligible_added: usize,
+    replaced_existing: bool,
+    total_records: usize,
+    eligible_edges: Vec<crate::types::EligibleEdge>,
+    note: String,
+}
+
+/// `POST /api/onboard_symbol` {symbol} — backtest ONE already-downloaded symbol
+/// on the live timeframe and merge its rows into the edge map, replacing only
+/// that symbol (every other symbol stays byte-identical, so the documented
+/// anchor edge is untouched). This is the incremental alternative to a ~20-minute
+/// full-universe rebuild: a single stock onboards in seconds.
+///
+/// Honesty/scope: same eligibility gate and cost model as the full pass (zero
+/// drift for unchanged symbols). It takes effect in the live Top-10 on the next
+/// `serve` restart (the in-memory live universe is fixed at startup); it is
+/// reflected immediately in the freshness panel and the per-stock deep-dive.
+/// Signals-only — touches market data + the cache, never a broker.
+async fn onboard_symbol_handler(State(state): State<AppState>, Json(req): Json<OnboardRequest>) -> Response {
+    let sym = req.symbol.trim().to_uppercase();
+    if !valid_nse_symbol(&sym) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid symbol — use the NSE trading code, e.g. 63MOONS"})),
+        )
+            .into_response();
+    }
+    let root = state.root.clone();
+    let tf = state.edge_tf;
+
+    let result = tokio::task::spawn_blocking(move || -> std::result::Result<OnboardResult, String> {
+        let conn = crate::storage_kernel::open_conn().map_err(|e| format!("duckdb open failed: {e:#}"))?;
+        // backtest_symbol errors only when the candles can't be loaded (not
+        // downloaded yet); <100 bars / no signals returns an empty Vec.
+        let rows = crate::strategy_engine::backtest_symbol(&conn, &root, &sym, tf).map_err(|e| {
+            format!(
+                "couldn't load {sym} candles on {} — download it first via /add_stock ({e:#})",
+                tf.dir()
+            )
+        })?;
+        let universe = crate::storage_kernel::discover_symbols(&root).map(|v| v.len()).unwrap_or(0);
+        let eligible_edges: Vec<crate::types::EligibleEdge> = rows
+            .iter()
+            .filter(|r| r.eligible)
+            .map(|r| crate::types::EligibleEdge {
+                strategy: r.strategy.clone(),
+                direction: r.direction,
+                expectancy_r: r.metrics.expectancy,
+                profit_factor: r.metrics.profit_factor,
+                win_pct: r.metrics.win_pct,
+                n: r.metrics.n,
+            })
+            .collect();
+        let outcome = crate::strategy_engine::merge_edge_records(&sym, rows, tf, universe)
+            .map_err(|e| format!("merge into edge map failed: {e:#}"))?;
+        let note = if outcome.records_added == 0 {
+            format!(
+                "{sym}: insufficient history (<100 bars) or no signals on {} — nothing added.",
+                tf.dir()
+            )
+        } else if outcome.eligible_added == 0 {
+            format!(
+                "Backtested {} config(s) for {sym}; none cleared the eligibility gate (n≥30, PF≥1.2, exp>0). Honest result: no {} edge right now.",
+                outcome.records_added,
+                tf.dir()
+            )
+        } else {
+            format!(
+                "Onboarded {sym} to the {} edge map: {} eligible edge(s). Restart `serve` to include it in the live Top-10; visible now in the freshness panel and deep-dive.",
+                tf.dir(),
+                outcome.eligible_added
+            )
+        };
+        Ok(OnboardResult {
+            symbol: outcome.symbol,
+            timeframe: outcome.timeframe,
+            records_added: outcome.records_added,
+            eligible_added: outcome.eligible_added,
+            replaced_existing: outcome.replaced_existing,
+            total_records: outcome.total_records,
+            eligible_edges,
+            note,
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(r)) => Json(r).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("onboard task panicked: {e}")).into_response(),
     }
 }
 

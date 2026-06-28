@@ -1023,6 +1023,228 @@ pub fn load_edge_map(tf: Timeframe) -> Result<Vec<EdgeRecord>> {
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+// ===========================================================================
+// Edge-map freshness sidecar (honesty-layer only)
+// ===========================================================================
+//
+// `EdgeMapMeta` records *when* and *over what scope* a map was built, so the
+// dashboard can honestly report freshness ("541 of 1,558 symbols backtested;
+// 125 new on disk since this map was built") instead of silently presenting a
+// stale Top-10 as if it covered everything. It is written as a sibling
+// `.meta.json` and never read by the eligibility gate, Confidence, ranking, or
+// any decision path — purely a display surface. The map JSON itself is byte-
+// identical to before this change, so the 63MOONS anchor is untouched.
+
+/// Build-time scope/freshness metadata for an edge map. Display-only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeMapMeta {
+    pub timeframe: String,
+    /// IST wall-clock at the moment the map was saved.
+    pub built_ist: String,
+    /// Universe size at build time (symbols with a `minute/` file).
+    pub universe_at_build: usize,
+    /// Distinct symbols actually carried in the map (had ≥100 bars + signals).
+    pub backtested_symbols: usize,
+    /// Distinct symbols with ≥1 eligible edge.
+    pub eligible_symbols: usize,
+    /// Total eligible edges across all symbols.
+    pub eligible_edges: usize,
+    /// Total records written (eligible + ineligible).
+    pub total_records: usize,
+    /// Sorted distinct symbols carried in the map — lets the status endpoint
+    /// diff against the live universe to surface NEW-since-build names.
+    pub symbols: Vec<String>,
+}
+
+impl EdgeMapMeta {
+    /// Derive the sidecar from the records being saved. `universe_at_build` is
+    /// the true on-disk universe (caller-supplied so a partial `backtest FOO`
+    /// still reports the gap against the full universe, not just the subset).
+    pub fn from_records(records: &[EdgeRecord], tf: Timeframe, universe_at_build: usize) -> Self {
+        use std::collections::BTreeSet;
+        let mut backtested: BTreeSet<&str> = BTreeSet::new();
+        let mut eligible_syms: BTreeSet<&str> = BTreeSet::new();
+        let mut eligible_edges = 0usize;
+        for r in records {
+            backtested.insert(r.symbol.as_str());
+            if r.eligible {
+                eligible_syms.insert(r.symbol.as_str());
+                eligible_edges += 1;
+            }
+        }
+        EdgeMapMeta {
+            timeframe: tf.dir().to_string(),
+            built_ist: now_ist_string(),
+            universe_at_build,
+            backtested_symbols: backtested.len(),
+            eligible_symbols: eligible_syms.len(),
+            eligible_edges,
+            total_records: records.len(),
+            symbols: backtested.into_iter().map(str::to_string).collect(),
+        }
+    }
+}
+
+/// IST wall-clock as `YYYY-MM-DD HH:MM:SS` (mirrors the suggestion engine's
+/// `built_ist` format so timestamps read consistently across the UI).
+fn now_ist_string() -> String {
+    chrono::Utc::now()
+        .with_timezone(&config::IST)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
+/// Path to the freshness sidecar for a timeframe (`cache/edge_map_{tf}.meta.json`).
+pub fn edge_map_meta_path(tf: Timeframe) -> std::path::PathBuf {
+    std::path::PathBuf::from("cache").join(format!("edge_map_{}.meta.json", tf.dir()))
+}
+
+/// Write the freshness sidecar alongside an already-saved edge map. A best-effort
+/// honesty surface — callers may ignore the result (the map itself is the source
+/// of truth; the sidecar is pure decoration).
+pub fn save_edge_map_meta(records: &[EdgeRecord], tf: Timeframe, universe_at_build: usize) -> Result<()> {
+    std::fs::create_dir_all("cache").context("create cache dir")?;
+    let meta = EdgeMapMeta::from_records(records, tf, universe_at_build);
+    let path = edge_map_meta_path(tf);
+    let json = serde_json::to_vec_pretty(&meta)?;
+    std::fs::write(&path, json).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+/// Load a previously-saved freshness sidecar, if present.
+pub fn load_edge_map_meta(tf: Timeframe) -> Result<EdgeMapMeta> {
+    let path = edge_map_meta_path(tf);
+    let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// Outcome of merging one symbol's freshly-backtested rows into an edge map.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeOutcome {
+    pub symbol: String,
+    pub timeframe: String,
+    /// New rows written for this symbol (all strategy×direction records).
+    pub records_added: usize,
+    /// Of those, how many are eligible edges.
+    pub eligible_added: usize,
+    /// Whether this symbol already had rows in the map (replaced) or is brand new.
+    pub replaced_existing: bool,
+    /// Total records in the map after the merge.
+    pub total_records: usize,
+}
+
+/// Merge one symbol's freshly-backtested records into the on-disk edge map for
+/// `tf`, replacing only that symbol's rows and leaving every other symbol's
+/// records byte-identical (they keep their values and relative order, so they
+/// re-serialize unchanged). This is the incremental alternative to a full
+/// universe rebuild: onboard a single stock in seconds without re-touching the
+/// other ~1,500.
+///
+/// Anchor-safety: because unchanged symbols are byte-identical, the documented
+/// edge-level anchor (e.g. `BAJFINANCE · gap_and_go · Short`) is untouched when
+/// a *different* symbol is merged. The whole-file SHA1 does change — that is the
+/// expected, intentional cost of adding data, and is why the regression guard is
+/// the per-edge test, not a file hash. Persists both the map and its freshness
+/// sidecar before returning.
+pub fn merge_edge_records(
+    symbol: &str,
+    new_rows: Vec<EdgeRecord>,
+    tf: Timeframe,
+    universe_at_build: usize,
+) -> Result<MergeOutcome> {
+    let mut existing = load_edge_map(tf).unwrap_or_default();
+    let records_added = new_rows.len();
+    let eligible_added = new_rows.iter().filter(|r| r.eligible).count();
+    let replaced_existing = existing.iter().any(|r| r.symbol == symbol);
+    let path = edge_map_path(tf);
+
+    // Fast path — onboarding a BRAND-NEW symbol. Splice the new records onto the
+    // existing file as raw text so every other symbol's bytes are preserved
+    // EXACTLY (not even a 1-ULP float-reserialization nudge). The maps on disk
+    // were written by an older float formatter, so a load→save round-trip would
+    // otherwise rewrite ~⅓ of all records at the last significant digit and churn
+    // the SHA1 anchor. The splice is validated (re-parsed + counted) before any
+    // write, falling back to the safe re-serialize path if anything looks off —
+    // so it can never emit a malformed map.
+    if !replaced_existing && !existing.is_empty() {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(spliced) = splice_append_records(&text, &new_rows) {
+                let expected = existing.len() + new_rows.len();
+                if let Ok(parsed) = serde_json::from_str::<Vec<EdgeRecord>>(&spliced) {
+                    if parsed.len() == expected {
+                        std::fs::write(&path, &spliced)
+                            .with_context(|| format!("write {}", path.display()))?;
+                        save_edge_map_meta(&parsed, tf, universe_at_build)?;
+                        return Ok(MergeOutcome {
+                            symbol: symbol.to_string(),
+                            timeframe: tf.dir().to_string(),
+                            records_added,
+                            eligible_added,
+                            replaced_existing: false,
+                            total_records: parsed.len(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // General path — replacing an existing symbol, an empty/absent map, or a
+    // splice that failed validation. Parse → merge → save. (For a replace, the
+    // re-serialize may ULP-nudge unchanged records; acceptable and rare.)
+    merge_into(&mut existing, symbol, new_rows);
+    save_edge_map(&existing, tf)?;
+    save_edge_map_meta(&existing, tf, universe_at_build)?;
+
+    Ok(MergeOutcome {
+        symbol: symbol.to_string(),
+        timeframe: tf.dir().to_string(),
+        records_added,
+        eligible_added,
+        replaced_existing,
+        total_records: existing.len(),
+    })
+}
+
+/// Pure in-memory merge: drop `symbol`'s existing rows, append `new_rows` at the
+/// end. Returns whether any existing rows were replaced. Every other symbol's
+/// records keep their value and relative order, so they re-serialize unchanged.
+fn merge_into(existing: &mut Vec<EdgeRecord>, symbol: &str, mut new_rows: Vec<EdgeRecord>) -> bool {
+    let before = existing.len();
+    existing.retain(|r| r.symbol != symbol);
+    let replaced = existing.len() != before;
+    existing.append(&mut new_rows);
+    replaced
+}
+
+/// Append `new_rows` to a pretty-printed edge-map JSON array as raw text,
+/// preserving the existing bytes verbatim. Produces output byte-identical to
+/// `serde_json::to_vec_pretty` of the concatenated Vec *when the existing file
+/// was written by the same formatter* — and, regardless, leaves every existing
+/// record's bytes untouched. Returns the spliced document; the caller validates
+/// it before writing.
+fn splice_append_records(existing: &str, new_rows: &[EdgeRecord]) -> Result<String> {
+    if new_rows.is_empty() {
+        return Ok(existing.to_string());
+    }
+    // New records pretty-printed, with the outer array brackets stripped so they
+    // sit at the same 2-space indent as the existing records.
+    let new_pretty = serde_json::to_string_pretty(new_rows)?;
+    let inner = new_pretty
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .map(|s| s.trim_matches('\n'))
+        .context("unexpected pretty-JSON shape for new records")?;
+
+    let close = existing.rfind(']').context("edge map has no closing ]")?;
+    let head = existing[..close].trim_end(); // up to and including the last record's '}'
+    if head == "[" {
+        // Existing array was empty (`[]` / `[\n]`).
+        return Ok(format!("[\n{inner}\n]"));
+    }
+    Ok(format!("{head},\n{inner}\n]"))
+}
+
 /// Fast per-symbol lookup of eligible edges, consumed by the live analytics
 /// layer to confirm currently-firing setups.
 pub type EdgeIndex = std::collections::HashMap<String, Vec<crate::types::EligibleEdge>>;
@@ -1135,5 +1357,151 @@ mod tests {
         assert!(out[0].ambiguous, "should flag the spanning bar");
         assert!(!out[0].intrabar_resolved);
         assert!((out[0].r + 1.0).abs() < 1e-9, "pessimistic ⇒ −1R, got {}", out[0].r);
+    }
+
+    /// The freshness sidecar counts DISTINCT backtested symbols, distinct
+    /// eligible symbols, and total eligible edges — and preserves the supplied
+    /// universe size so the dashboard can report the coverage gap honestly.
+    #[test]
+    fn edge_map_meta_counts_distinct_symbols_and_edges() {
+        let rec = |sym: &str, eligible: bool| EdgeRecord {
+            symbol: sym.to_string(),
+            strategy: "VWAP".to_string(),
+            direction: Direction::Long,
+            timeframe: "30min".to_string(),
+            metrics: Metrics::from_rs(&[]),
+            eligible,
+        };
+        let records = vec![
+            rec("AAA", true),
+            rec("AAA", false), // same symbol, a second (ineligible) edge
+            rec("BBB", true),
+            rec("BBB", true), // two eligible edges on BBB
+            rec("CCC", false), // backtested but nothing eligible
+        ];
+        let meta = EdgeMapMeta::from_records(&records, Timeframe::Min30, 1558);
+        assert_eq!(meta.universe_at_build, 1558);
+        assert_eq!(meta.total_records, 5);
+        assert_eq!(meta.backtested_symbols, 3); // AAA, BBB, CCC
+        assert_eq!(meta.eligible_symbols, 2); // AAA, BBB
+        assert_eq!(meta.eligible_edges, 3); // AAA×1 + BBB×2
+        assert_eq!(meta.symbols, vec!["AAA", "BBB", "CCC"]); // sorted, distinct
+        assert_eq!(meta.timeframe, "30min");
+    }
+
+    /// The per-symbol merge must leave every OTHER symbol byte-identical (this is
+    /// the anchor-safety guarantee for onboarding), be idempotent when replacing
+    /// a symbol that already exists, and append a brand-new symbol cleanly.
+    #[test]
+    fn merge_into_preserves_unchanged_symbols_and_is_idempotent() {
+        let rec = |sym: &str, strat: &str, eligible: bool| EdgeRecord {
+            symbol: sym.to_string(),
+            strategy: strat.to_string(),
+            direction: Direction::Short,
+            timeframe: "15min".to_string(),
+            metrics: Metrics::from_rs(&[1.0, -0.5, 1.0]),
+            eligible,
+        };
+        let mut map = vec![
+            rec("AAA", "vwap_trend", true),
+            rec("BAJFINANCE", "gap_and_go", true), // the anchor edge — must not move
+            rec("CCC", "opening_range", false),
+        ];
+        // Snapshot the anchor row's exact serialization.
+        let anchor_before = serde_json::to_string(&map[1]).unwrap();
+
+        // Merge a BRAND-NEW symbol: nothing replaced, anchor untouched.
+        let replaced = merge_into(&mut map, "NEWSTK", vec![rec("NEWSTK", "gap_and_go", true)]);
+        assert!(!replaced, "new symbol should not replace anything");
+        let anchor_after = serde_json::to_string(map.iter().find(|r| r.symbol == "BAJFINANCE").unwrap()).unwrap();
+        assert_eq!(anchor_before, anchor_after, "anchor symbol drifted on unrelated merge");
+        assert!(map.iter().any(|r| r.symbol == "NEWSTK"), "new symbol added");
+        assert_eq!(map.len(), 4);
+
+        // Replace an EXISTING symbol: old rows gone, anchor still untouched.
+        let replaced = merge_into(&mut map, "AAA", vec![rec("AAA", "prev_day_breakout", false)]);
+        assert!(replaced, "existing symbol should be replaced");
+        assert_eq!(map.iter().filter(|r| r.symbol == "AAA").count(), 1, "no duplicate AAA rows");
+        assert_eq!(map.iter().find(|r| r.symbol == "AAA").unwrap().strategy, "prev_day_breakout");
+        let anchor_after2 = serde_json::to_string(map.iter().find(|r| r.symbol == "BAJFINANCE").unwrap()).unwrap();
+        assert_eq!(anchor_before, anchor_after2, "anchor symbol drifted on replace");
+    }
+
+    /// The byte-preserving append splice must (a) leave the existing records'
+    /// bytes verbatim, (b) round-trip to the right records, and (c) be identical
+    /// to a full pretty-serialize when the existing file used the same formatter.
+    #[test]
+    fn splice_append_preserves_existing_bytes() {
+        let rec = |sym: &str, strat: &str, eligible: bool| EdgeRecord {
+            symbol: sym.to_string(),
+            strategy: strat.to_string(),
+            direction: Direction::Short,
+            timeframe: "30min".to_string(),
+            metrics: Metrics::from_rs(&[0.3, -0.7, 1.1, -0.4]),
+            eligible,
+        };
+        let a = rec("AAA", "vwap_cross", true);
+        let b = rec("BAJFINANCE", "gap_and_go", true);
+        let c = rec("ZZZNEW", "orb_15m", false);
+
+        let existing = serde_json::to_string_pretty(&vec![a.clone(), b.clone()]).unwrap();
+        let spliced = splice_append_records(&existing, std::slice::from_ref(&c)).unwrap();
+
+        // (a) the unchanged prefix (everything up to the last '}') is verbatim.
+        let prefix = &existing[..=existing.rfind('}').unwrap()];
+        assert!(spliced.starts_with(prefix), "existing bytes were not preserved");
+
+        // (b) parses back to exactly A, B, C.
+        let parsed: Vec<EdgeRecord> = serde_json::from_str(&spliced).unwrap();
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].symbol, "AAA");
+        assert_eq!(parsed[1].symbol, "BAJFINANCE");
+        assert_eq!(parsed[2].symbol, "ZZZNEW");
+
+        // (c) canonical: identical to a full pretty-serialize of [A,B,C].
+        let full = serde_json::to_string_pretty(&vec![a, b, c]).unwrap();
+        assert_eq!(spliced, full, "splice diverged from canonical serialization");
+
+        // empty-array edge case.
+        let from_empty = splice_append_records("[]", std::slice::from_ref(&parsed[2])).unwrap();
+        assert_eq!(serde_json::from_str::<Vec<EdgeRecord>>(&from_empty).unwrap().len(), 1);
+    }
+
+    /// REGRESSION ANCHOR (edge-map tier) — the Rust project's documented anchor
+    /// edge (UPGRADE_PLAN.md §0). Guards the cheap edge-map pass (13-strategy
+    /// library, fixed SL/RR, `eligible()` gate) byte-for-byte at the metric
+    /// level, complementing the SHA1 file guard. Skips cleanly when the local
+    /// cache is absent (fresh clone / CI). This is the TRUE Rust anchor — the
+    /// `63MOONS·15m·n=51` figure was the *Python* project's anchor and never
+    /// applied here (the Rust deep-dive is separately anchored in
+    /// `suggestion_engine::tests::anchor_63moons_deep_dive_stable`).
+    #[test]
+    fn anchor_bajfinance_edge_map_stable() {
+        let records = match load_edge_map(Timeframe::Min15) {
+            Ok(r) => r,
+            Err(_) => {
+                eprintln!("SKIP anchor_bajfinance_edge_map_stable: cache/edge_map_15min.json absent");
+                return;
+            }
+        };
+        let r = records
+            .iter()
+            .find(|r| {
+                r.symbol == "BAJFINANCE"
+                    && r.strategy == "gap_and_go"
+                    && r.direction == Direction::Short
+            })
+            .expect("BAJFINANCE gap_and_go Short edge present in 15min map");
+        assert_eq!(r.metrics.n, 130, "anchor n drifted");
+        assert!(
+            (r.metrics.expectancy - 0.1433565560483712).abs() < 1e-12,
+            "anchor expectancy drifted: {}",
+            r.metrics.expectancy
+        );
+        assert!(
+            (r.metrics.profit_factor - 1.2659776591373888).abs() < 1e-12,
+            "anchor PF drifted: {}",
+            r.metrics.profit_factor
+        );
     }
 }
