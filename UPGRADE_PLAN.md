@@ -1,5 +1,30 @@
 # RAM_ISTP — Product Evaluation & Upgrade Plan
 
+## 🔴 LIVE Kite feed — status + Monday go-live checklist
+
+`ram_istp live [TF]` is wired (mirrors `serve`, swapping replay → the authenticated
+Kite WebSocket; subscribes the edge universe by integer `instrument_token` in Full
+mode; signals-only). **Verified end-to-end on a closed-market Sunday:** instrument
+map (9,903) → 170/170 edge symbols → tokens → Full-mode subscribe → **TLS connect OK**.
+Kite then returned **HTTP 400** = stale/expired access token (tokens expire ~6 AM IST
+daily). The TLS backend (`native-tls`) was missing and is now fixed.
+
+**To actually trade live (each morning):**
+1. Re-authenticate with Kite to mint a fresh `access_token` (tokens die ~6 AM IST).
+2. Update `KITE_ACCESS_TOKEN=` in `.env` (gitignored; never commit it).
+3. During the session (09:15–15:30 IST): `RUST_LOG=info ./target/debug/ram_istp live 30min`
+   - Watch for `kite ws: connected; subscribing instruments=N` (success).
+   - Dashboard at http://127.0.0.1:8787 (mode = "live").
+4. If a *fresh* token still gives HTTP 400, it's a handshake detail to debug (header
+   / endpoint), not the token — flag it.
+
+Still signals-only: live mode stages signals + alerts; it never places/modifies/cancels
+an order. Credentials feed the connection URL only and are never logged (verified clean
+even on connect failure).
+
+---
+
+
 ## 🇮🇳 Indian-market constraint conformance (session 2026-06-28, decisions taken)
 
 Audited the 4-point NSE spec (timezone/hours, Kite instrument mapping, news API, parquet) against the
