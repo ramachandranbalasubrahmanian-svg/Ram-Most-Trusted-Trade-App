@@ -314,6 +314,14 @@ fn set_read_timeout(stream: &mut MaybeTlsStream<std::net::TcpStream>, dur: Durat
     }
 }
 
+/// Synchronous entry point for the live feed, for callers running it on their own
+/// `std::thread` (no async runtime needed). Same connect→subscribe→read loop as
+/// [`run_live`], minus the `spawn_blocking` wrapper. Credentials are used only to
+/// build the connection URL and are never logged.
+pub fn run_live_blocking(cfg: LiveConfig, tx: Sender<Tick>, stop: Arc<AtomicBool>) -> Result<()> {
+    live_blocking(cfg, tx, stop)
+}
+
 /// The synchronous connect → subscribe → read loop. Runs on a blocking thread.
 fn live_blocking(cfg: LiveConfig, tx: Sender<Tick>, stop: Arc<AtomicBool>) -> Result<()> {
     let tokens: Vec<u32> = cfg.instruments.iter().map(|(_, t)| *t).collect();

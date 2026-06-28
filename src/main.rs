@@ -49,6 +49,7 @@ fn main() -> Result<()> {
         "premarket" => run_premarket(&args[2..]),
         "backtest" => run_backtest(&args[2..]),
         "serve" => run_serve(&args[2..]),
+        "live" => run_live_cmd(&args[2..]),
         "suggest" => run_suggest(&args[2..]),
         "instruments" => run_instruments(),
         "" | "help" | "-h" | "--help" => {
@@ -57,6 +58,7 @@ fn main() -> Result<()> {
             println!("  ram_istp premarket [SYMBOL ...]         pre-market historical scan");
             println!("  ram_istp backtest [TF] [SYMBOL ...]     backtest + build edge map");
             println!("  ram_istp serve [TF]                     run replay + dashboard server");
+            println!("  ram_istp live [TF]                      LIVE Kite feed + dashboard (needs creds + market hours)");
             println!("  ram_istp suggest SYMBOL                 per-stock intraday suggestion");
             println!("  ram_istp instruments                    refresh NSE token map (pre-market)");
             Ok(())
@@ -265,11 +267,34 @@ fn print_top_edges(eligible: &[&EdgeRecord], dir: config::Direction, title: &str
 /// stream, rank Top-10 Buy/Sell each second, and serve the dashboard. This is
 /// the integration point wiring ingestion → analytics → risk → server.
 fn run_serve(raw: &[String]) -> Result<()> {
+    serve_pipeline(raw, IngestionSource::Replay)
+}
+
+/// Where the tick stream for [`serve_pipeline`] comes from. The entire analytics
+/// → risk → server pipeline is identical for both; only the ingestion source and
+/// the packet `mode` tag differ.
+enum IngestionSource {
+    /// Offline replay of the latest session (deterministic; NOT wall-clock gated).
+    Replay,
+    /// Live Kite WebSocket. Credentials feed the connection URL only (never
+    /// logged); the universe is the edge symbols mapped to integer tokens.
+    Live {
+        api_key: String,
+        access_token: String,
+        map: kite_instruments::InstrumentMap,
+    },
+}
+
+fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
     let root = config::data_root();
     if !root.exists() {
         anyhow::bail!("data root {} not found", root.display());
     }
     let tf = raw.first().and_then(|s| parse_timeframe(s)).unwrap_or(Timeframe::Min30);
+    let mode_str: &'static str = match &source {
+        IngestionSource::Replay => "replay",
+        IngestionSource::Live { .. } => "live",
+    };
 
     // Edge map: load cache, or build it now.
     let records = match strategy_engine::load_edge_map(tf) {
@@ -310,7 +335,7 @@ fn run_serve(raw: &[String]) -> Result<()> {
     let settings0 = *settings.read().unwrap();
     let packet = Arc::new(std::sync::RwLock::new(types::SignalPacket::empty(
         types::SettingsView { budget: settings0.budget, risk_pct: settings0.risk_pct },
-        "replay",
+        mode_str,
     )));
     let notify = Arc::new(tokio::sync::Notify::new());
     // Trading Desk: signal-freeze state + manual-validation journal (DuckDB file).
@@ -416,15 +441,43 @@ fn run_serve(raw: &[String]) -> Result<()> {
         });
     }
 
-    // Ingestion thread: replay the latest session.
-    let ing = {
-        let (root, symbols, stop) = (root.clone(), symbols.clone(), stop.clone());
-        std::thread::spawn(move || {
-            let opts = ingestion_engine::ReplayOptions { tf, days_back: 1, speed: 0.0 };
-            if let Err(e) = ingestion_engine::run_replay(&root, &symbols, &opts, tx, stop) {
-                eprintln!("replay ended: {e:#}");
+    // Ingestion thread: replay the latest session, or stream the live Kite feed.
+    let ing = match source {
+        IngestionSource::Replay => {
+            let (root, symbols, stop) = (root.clone(), symbols.clone(), stop.clone());
+            std::thread::spawn(move || {
+                let opts = ingestion_engine::ReplayOptions { tf, days_back: 1, speed: 0.0 };
+                if let Err(e) = ingestion_engine::run_replay(&root, &symbols, &opts, tx, stop) {
+                    eprintln!("replay ended: {e:#}");
+                }
+            })
+        }
+        IngestionSource::Live { api_key, access_token, map } => {
+            // Subscribe only the edge-universe symbols we actually analyse, mapped
+            // to integer tokens, capped at the live-universe limit.
+            let cap = config::live_universe_max();
+            let pairs = kite_instruments::select_universe(&map, &symbols, cap);
+            eprintln!(
+                "live: subscribing {} of {} edge symbols as instrument_tokens (cap {}) in Full mode",
+                pairs.len(),
+                symbols.len(),
+                cap
+            );
+            if pairs.is_empty() {
+                anyhow::bail!(
+                    "live: none of the {} edge symbols resolved to an NSE instrument_token — \
+                     run `ram_istp instruments` and check the map",
+                    symbols.len()
+                );
             }
-        })
+            let cfg = ingestion_engine::LiveConfig { api_key, access_token, instruments: pairs };
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = ingestion_engine::run_live_blocking(cfg, tx, stop) {
+                    eprintln!("live ingestion ended: {e:#}");
+                }
+            })
+        }
     };
 
     // Analytics + risk thread: fold ticks, emit a ranked packet every second.
@@ -490,7 +543,7 @@ fn run_serve(raw: &[String]) -> Result<()> {
                     }
                     *packet.write().unwrap() = types::SignalPacket {
                         ts_ist: now_ist_string(),
-                        mode: "replay".to_string(),
+                        mode: mode_str.to_string(),
                         settings: types::SettingsView { budget: set.budget, risk_pct: set.risk_pct },
                         top_buy,
                         top_sell,
@@ -630,6 +683,47 @@ fn run_serve(raw: &[String]) -> Result<()> {
     let _ = ana.join();
     let _ = sched.join();
     res
+}
+
+/// `live [TF]` — the LIVE counterpart of `serve`: stream the authenticated Kite
+/// WebSocket (by integer instrument_token, Full mode for L2 depth/OBI) into the
+/// same analytics → risk → dashboard pipeline. Reads `KITE_API_KEY` /
+/// `KITE_ACCESS_TOKEN` from the environment (.env); they are never logged.
+///
+/// Signals-only: this consumes market data and stages signals/alerts. It NEVER
+/// places, modifies, or cancels an order. Outside 09:15–15:30 IST the socket
+/// connects but the market-hours gate drops any ticks (no live signal off-session).
+fn run_live_cmd(raw: &[String]) -> Result<()> {
+    // Load .env (best-effort) then read creds. Never printed.
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("KITE_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let access_token = std::env::var("KITE_ACCESS_TOKEN").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let (Some(api_key), Some(access_token)) = (api_key, access_token) else {
+        anyhow::bail!(
+            "KITE_API_KEY / KITE_ACCESS_TOKEN not set — add them to .env (see .env.example). \
+             Re-auth each morning; the access token expires ~6 AM IST."
+        );
+    };
+
+    // Build (or load the day's cached) NSE instrument→token map for the universe.
+    let ist_date = chrono::Utc::now().with_timezone(&config::IST).format("%Y-%m-%d").to_string();
+    let map = {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(kite_instruments::load_or_refresh(std::path::Path::new("cache"), &ist_date))?
+    };
+    eprintln!("live: NSE instrument map ready ({} symbols, {ist_date})", map.len());
+
+    // Friendly heads-up if the market is closed — the feed still connects.
+    let now_ist = chrono::Utc::now().with_timezone(&config::IST);
+    if !config::is_regular_session(now_ist.time()) {
+        eprintln!(
+            "live: NOTE — {} IST is outside the 09:15–15:30 session; the socket will connect but \
+             no ticks/signals will flow until the market opens.",
+            now_ist.format("%a %H:%M")
+        );
+    }
+
+    serve_pipeline(raw, IngestionSource::Live { api_key, access_token, map })
 }
 
 /// `instruments` — daily pre-market job: refresh the NSE `tradingsymbol →
