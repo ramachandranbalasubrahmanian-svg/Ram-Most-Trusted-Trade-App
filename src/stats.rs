@@ -506,6 +506,25 @@ pub struct ConfidenceResult {
 ///     (Low band) to avoid presenting a selection artifact as a real edge. This
 ///     is a cap, not a deduction, so it is recorded with 0 points but still
 ///     surfaced in `penalties` for the UI. The band is recomputed AFTER the cap.
+/// High-conviction shortlist predicate — the honest version of a ">60%" filter.
+///
+/// A setup is shortlisted only if ALL three clear their bars: Confidence (already
+/// computed by `build_confidence`), the 95% Wilson win-FLOOR (deliberately the
+/// conservative lower bound, not the optimistic point win rate), and the DSR
+/// reliability gate. This is a DERIVED label over already-scored output: it takes
+/// no `ConfInput` and calls nothing in `build_confidence`, so it is structurally
+/// incapable of changing the score. It is a shortlist, never a "sure shot".
+pub fn is_high_conviction_shortlist(
+    confidence: Option<u32>,
+    prob_floor_pct: f64,
+    dsr: f64,
+    min_conf: u32,
+    min_prob: f64,
+    dsr_min: f64,
+) -> bool {
+    matches!(confidence, Some(c) if c >= min_conf) && prob_floor_pct >= min_prob && dsr >= dsr_min
+}
+
 pub fn build_confidence(inp: &ConfInput) -> ConfidenceResult {
     let n = inp.n_trades;
     let p_value = t_to_p_onesided(inp.t_stat);
@@ -854,6 +873,36 @@ pub fn compute_conviction(inp: &ConvInput) -> (u32, String, Vec<ConvictionDelta>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortlist_gate_thresholds_and_uses_floor() {
+        // All three clear → shortlisted.
+        assert!(is_high_conviction_shortlist(Some(72), 61.0, 0.55, 70, 60.0, 0.50));
+        // Boundary: exactly at the bars → still qualifies.
+        assert!(is_high_conviction_shortlist(Some(70), 60.0, 0.50, 70, 60.0, 0.50));
+        // Each single failure disqualifies.
+        assert!(!is_high_conviction_shortlist(Some(69), 61.0, 0.55, 70, 60.0, 0.50)); // conf
+        assert!(!is_high_conviction_shortlist(Some(72), 59.9, 0.55, 70, 60.0, 0.50)); // floor
+        assert!(!is_high_conviction_shortlist(Some(72), 61.0, 0.49, 70, 60.0, 0.50)); // dsr (gate)
+        assert!(!is_high_conviction_shortlist(None, 61.0, 0.55, 70, 60.0, 0.50)); // no score
+    }
+
+    #[test]
+    fn shortlist_never_changes_confidence() {
+        // Calling the predicate cannot move build_confidence's output (firewall).
+        let inp = ConfInput {
+            n_trades: 120, win_rate_pct: 58.0, expectancy_r: 0.3, profit_factor: 1.6,
+            max_drawdown_r: 8.0, total_r: 36.0, recent_20_wr_pct: 60.0,
+            oos_win_rate_pct: Some(57.0), oos_expectancy_r: Some(0.25), max_loss_streak: 4,
+            t_stat: 2.6, dsr: 0.7, wf_consistency: 0.8, robustness_pct: 0.8, regime_consistent: Some(true),
+        };
+        let before = build_confidence(&inp);
+        let _ = is_high_conviction_shortlist(before.score, 61.0, inp.dsr, 70, 60.0, 0.50);
+        let after = build_confidence(&inp);
+        assert_eq!(before.score, after.score);
+        assert_eq!(before.band, after.band);
+        assert_eq!(before.penalties.len(), after.penalties.len());
+    }
 
     #[test]
     fn std_dev_sample_ddof1() {

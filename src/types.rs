@@ -327,6 +327,11 @@ pub struct SetupCard {
 
     // honest caveats
     pub selection_artifact: Option<String>, // DSR-based overfit warning
+
+    /// Display-only: passes the high-conviction shortlist gate (Confidence +
+    /// Wilson win-floor + DSR). A shortlist, NOT a "sure shot"; never gates score.
+    #[serde(default)]
+    pub shortlist: bool,
 }
 
 /// The four page strategies, each rendered as a block.
@@ -433,6 +438,12 @@ pub struct ScannerRow {
     /// here tells the UI to footnote "open the deep-dive for the final score".
     #[serde(default)]
     pub reliability: String,
+    /// 95% Wilson lower bound on win rate (the honest probability floor).
+    #[serde(default)]
+    pub prob_floor: f64,
+    /// Display-only high-conviction shortlist flag (Confidence + floor + DSR).
+    #[serde(default)]
+    pub shortlist: bool,
 }
 
 /// The scanner result: top-N best Buy and Sell setups across the universe.

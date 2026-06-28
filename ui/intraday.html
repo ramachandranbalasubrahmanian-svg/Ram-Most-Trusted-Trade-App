@@ -641,6 +641,14 @@
       }
       html += '<p class="text-[11px]">' + confLine + '</p>';
 
+      // High-conviction shortlist badge + MANDATORY caveat (the honest ">60%").
+      if (c.shortlist === true) {
+        html += '<p class="text-[11px] mt-1">' +
+          '<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-bold border border-yellow-700 bg-yellow-950/40 text-yellow-200">★ HIGH-CONVICTION SHORTLIST</span> ' +
+          '<span class="text-slate-500">Confidence ≥ ' + intFmt(c.confidence) + ', win-floor ≥ ' + fixed(c.prob_floor, 0) + '%, passed the reliability gate.</span></p>' +
+          '<p class="text-[10px] text-slate-600 italic">Shortlist, NOT a sure shot — this is not a prediction this trade wins. Past edge ≠ future return; size small and wait for the live trigger.</p>';
+      }
+
       // Conviction line + deltas
       var deltas = arr(c.conviction_deltas).map(function (d) {
         d = d && typeof d === "object" ? d : {};
@@ -811,8 +819,11 @@
     function scanRowHtml(r, kind) {
       r = r && typeof r === "object" ? r : {};
       var symColor = kind === "buy" ? "text-emerald-300" : "text-rose-300";
+      var star = r.shortlist === true
+        ? '<span class="text-yellow-300" title="High-conviction shortlist (Confidence + win-floor ≥ ' + fixed(r.prob_floor, 0) + '% + reliability gate) — a shortlist, not a sure shot">★ </span>'
+        : "";
       var cells = "";
-      cells += '<td style="text-align:left"><span class="font-bold ' + symColor + '">' + esc(str(r.symbol, "—")) + "</span></td>";
+      cells += '<td style="text-align:left">' + star + '<span class="font-bold ' + symColor + '">' + esc(str(r.symbol, "—")) + "</span></td>";
       cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.strategy, "—")) + "</td>";
       cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.interval, "—")) + "</td>";
       cells += '<td style="text-align:left" class="text-slate-400 num">' + esc(str(r.rr_label, "—")) + "</td>";

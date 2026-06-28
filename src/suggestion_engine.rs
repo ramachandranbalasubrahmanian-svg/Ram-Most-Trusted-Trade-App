@@ -664,6 +664,16 @@ trade only minimum size.",
         conviction_deltas,
 
         selection_artifact,
+        // Display-only shortlist gate: Confidence + Wilson floor + DSR. Computed
+        // from already-scored values; cannot feed back into Confidence.
+        shortlist: stats::is_high_conviction_shortlist(
+            cs.confidence,
+            prob_floor,
+            dsr,
+            config::shortlist_min_confidence(),
+            config::shortlist_min_prob(),
+            config::SHORTLIST_DSR_MIN,
+        ),
     }
 }
 
@@ -1053,6 +1063,8 @@ struct ScanBest {
     profit_factor: f64,
     n: usize,
     entry: f64,
+    prob_floor: f64,
+    shortlist: bool,
 }
 
 /// Run the LIGHT search for one symbol: Min15/Min30/Min60 only, all 4 strategies
@@ -1134,6 +1146,15 @@ fn gate_and_pick(cands: Vec<ConfigStat>, trial_sharpes: &[f64]) -> Option<ScanBe
         if conf < 50 {
             continue;
         }
+        let prob_floor = stats::wilson_lower(cs.win_rate / 100.0, cs.n) * 100.0;
+        let shortlist = stats::is_high_conviction_shortlist(
+            cs.confidence,
+            prob_floor,
+            cs.dsr,
+            crate::config::shortlist_min_confidence(),
+            crate::config::shortlist_min_prob(),
+            crate::config::SHORTLIST_DSR_MIN,
+        );
         let cand = ScanBest {
             strat: cs.strat,
             tf: cs.tf,
@@ -1144,6 +1165,8 @@ fn gate_and_pick(cands: Vec<ConfigStat>, trial_sharpes: &[f64]) -> Option<ScanBe
             profit_factor: cs.profit_factor,
             n: cs.n,
             entry: cs.entry,
+            prob_floor,
+            shortlist,
         };
         let better = match &best {
             None => true,
@@ -1170,6 +1193,8 @@ fn scan_best_to_row(symbol: &str, side: &str, b: &ScanBest) -> ScannerRow {
         n_trades: b.n,
         entry: b.entry,
         reliability: "scan".to_string(),
+        prob_floor: b.prob_floor,
+        shortlist: b.shortlist,
     }
 }
 
@@ -1747,6 +1772,7 @@ mod tests {
             conviction_label: String::new(),
             conviction_deltas: Vec::new(),
             selection_artifact: None,
+            shortlist: false,
         }
     }
 }

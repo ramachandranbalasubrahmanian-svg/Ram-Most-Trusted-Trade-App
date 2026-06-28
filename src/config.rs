@@ -281,6 +281,33 @@ pub const LIVE_UNIVERSE_MAX: usize = 1600;
 /// Top-10 names that cross the volatility + VWAP-extension triggers.
 pub const NEWS_DAILY_CAP: u32 = 90;
 
+// --- High-conviction shortlist thresholds (DISPLAY-ONLY) ------------------
+// The honest version of a ">60%" filter: a setup is shortlisted only if its
+// Confidence AND its 95% Wilson win-FLOOR AND the DSR reliability gate all clear
+// these bars. It is a derived LABEL over already-scored output — it never feeds
+// back into Confidence. `SHORTLIST_DSR_MIN` is pinned to the same 0.50 the
+// Confidence gate uses, so the shortlist can never disagree with the gate.
+pub const SHORTLIST_MIN_CONFIDENCE: u32 = 70;
+pub const SHORTLIST_MIN_PROB: f64 = 60.0;
+pub const SHORTLIST_DSR_MIN: f64 = 0.50;
+
+/// Shortlist min-Confidence, honouring `RAM_ISTP_SHORTLIST_MIN_CONFIDENCE`.
+pub fn shortlist_min_confidence() -> u32 {
+    std::env::var("RAM_ISTP_SHORTLIST_MIN_CONFIDENCE")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(SHORTLIST_MIN_CONFIDENCE)
+}
+/// Shortlist min win-floor %, honouring `RAM_ISTP_SHORTLIST_MIN_PROB`.
+pub fn shortlist_min_prob() -> f64 {
+    std::env::var("RAM_ISTP_SHORTLIST_MIN_PROB")
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|n| *n > 0.0)
+        .unwrap_or(SHORTLIST_MIN_PROB)
+}
+
 /// Resolve the live-universe cap, honouring `RAM_ISTP_LIVE_UNIVERSE_MAX`.
 pub fn live_universe_max() -> usize {
     std::env::var("RAM_ISTP_LIVE_UNIVERSE_MAX")
@@ -347,6 +374,17 @@ mod tests {
     fn direction_sign_and_label() {
         assert_eq!(Direction::Long.sign(), 1.0);
         assert_eq!(Direction::Short.as_str(), "SELL");
+    }
+
+    #[test]
+    fn shortlist_min_conf_above_dsr_gate_cap() {
+        // The DSR gate caps a flagged name's Confidence at 59; the shortlist needs
+        // >= 70. So a DSR-gated name can NEVER be shortlisted — the two can't
+        // disagree. Accessors fall back to the consts when env is unset.
+        assert!(SHORTLIST_MIN_CONFIDENCE > 59);
+        assert_eq!(shortlist_min_confidence(), SHORTLIST_MIN_CONFIDENCE);
+        assert_eq!(shortlist_min_prob(), SHORTLIST_MIN_PROB);
+        assert!((SHORTLIST_DSR_MIN - 0.50).abs() < 1e-9);
     }
 
     #[test]
