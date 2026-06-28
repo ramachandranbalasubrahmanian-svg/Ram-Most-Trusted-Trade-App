@@ -315,6 +315,31 @@
       </div>
     </section>
 
+    <!-- ===================== ROTATION & GROWTH ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] overflow-hidden">
+      <div class="flex flex-wrap items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/30">
+        <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Rotation &amp; Growth</span>
+        <span class="text-[10px] text-slate-500">leaders to keep · laggards to rotate · edge-backed uptrend buys — descriptive evidence, not advice</span>
+      </div>
+      <div class="px-3 py-2.5 space-y-3">
+        <div>
+          <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Your holdings — trend &amp; relative strength</div>
+          <div class="tbl-wrap max-h-[40vh]"><table><thead id="rotHead"></thead><tbody id="rotBody"></tbody></table></div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Buy candidates — uptrend &amp; edge-backed (excludes your holdings)</div>
+          <div class="tbl-wrap max-h-[40vh]"><table><thead id="rotBuyHead"></thead><tbody id="rotBuyBody"></tbody></table></div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Illustrative rebalance (you decide amounts)</div>
+          <div id="rotPlanTiles" class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2"></div>
+          <div id="rotPlanBody"></div>
+        </div>
+        <div id="rotScenarios" class="text-[11px] text-slate-300"></div>
+        <div id="rotDisclaimer" class="text-[10px] text-slate-600"></div>
+      </div>
+    </section>
+
     <!-- ===================== JOURNAL ===================== -->
     <section class="rounded-lg border border-slate-800 bg-[#0d1320] overflow-hidden">
       <div class="flex flex-wrap items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/30">
@@ -1265,6 +1290,79 @@
       $("hldWarnings").innerHTML = warns.length ? "⚠ " + warns.map(esc).join(" · ") : "";
       $("hldMeta").textContent = "marks " + intFmt(a.marks_live) + "/" + intFmt(a.marks_total) + " live · built " + str(a.built_ist, "");
       $("hldDisclaimer").textContent = str(a.disclaimer, "");
+      renderRotation(resp.rotation);
+    }
+    function actionChip(a) {
+      var map = { "Leader": "text-emerald-400/90", "Hold": "text-slate-400", "Hold*": "text-sky-400/80", "Trim": "text-amber-400/90", "Rotate out": "text-red-400/90" };
+      return '<span class="' + (map[a] || "text-slate-400") + ' font-semibold">' + esc(str(a, "—")) + '</span>';
+    }
+    function renderRotation(rot) {
+      rot = rot && typeof rot === "object" ? rot : {};
+      var rows = Array.isArray(rot.holdings) ? rot.holdings : [];
+      $("rotHead").innerHTML = '<tr class="text-[9px] uppercase tracking-wider text-slate-500">' +
+        ["Symbol", "Wt%", "Trend", "RS 12m", "vs 200-DMA", "Off-high", "Edge", "Action"]
+          .map(function (h) { return '<th class="text-left px-2 py-1">' + h + '</th>'; }).join("") + '</tr>';
+      $("rotBody").innerHTML = rows.map(function (r) {
+        return '<tr class="border-t border-slate-800/60">' +
+          '<td class="px-2 py-1 font-semibold text-slate-200">' + esc(r.symbol) + '</td>' +
+          '<td class="px-2 py-1 num text-slate-300">' + fixed(r.weight_pct, 1) + '</td>' +
+          '<td class="px-2 py-1 text-slate-400">' + esc(str(r.trend, "—")) + '</td>' +
+          '<td class="px-2 py-1 num ' + moneyClass(num(r.rs_12m, 0)) + '">' + (isNum(r.rs_12m) ? pct1(r.rs_12m) : "—") + '</td>' +
+          '<td class="px-2 py-1 num ' + moneyClass(num(r.vs_dma200, 0)) + '">' + (isNum(r.vs_dma200) ? pct1(r.vs_dma200) : "—") + '</td>' +
+          '<td class="px-2 py-1 num text-slate-400">' + (isNum(r.off_high_pct) ? pct1(r.off_high_pct) : "—") + '</td>' +
+          '<td class="px-2 py-1 text-[10px]">' + (r.edge_eligible ? '<span class="text-emerald-400/70">✓</span>' : '<span class="text-slate-600">—</span>') + '</td>' +
+          '<td class="px-2 py-1 text-[11px]" title="' + esc(str(r.reason, "")) + '">' + actionChip(r.action) + '</td>' +
+          '</tr>';
+      }).join("");
+
+      var bc = Array.isArray(rot.buy_candidates) ? rot.buy_candidates : [];
+      $("rotBuyHead").innerHTML = '<tr class="text-[9px] uppercase tracking-wider text-slate-500">' +
+        ["Symbol", "Last", "RS 12m", "vs 200-DMA", "Off-high", "3y CAGR", "5y CAGR", "Edge (PF · n)"]
+          .map(function (h) { return '<th class="text-left px-2 py-1">' + h + '</th>'; }).join("") + '</tr>';
+      $("rotBuyBody").innerHTML = bc.length ? bc.map(function (c) {
+        return '<tr class="border-t border-slate-800/60">' +
+          '<td class="px-2 py-1 font-semibold text-slate-200">' + esc(c.symbol) + '</td>' +
+          '<td class="px-2 py-1 num text-slate-300">' + rupee(c.last) + '</td>' +
+          '<td class="px-2 py-1 num text-emerald-400/80">' + pct1(c.rs_12m) + '</td>' +
+          '<td class="px-2 py-1 num text-slate-300">' + pct1(c.vs_dma200) + '</td>' +
+          '<td class="px-2 py-1 num text-slate-400">' + pct1(c.off_high_pct) + '</td>' +
+          '<td class="px-2 py-1 num text-slate-300">' + (isNum(c.cagr_3y) ? pct1(c.cagr_3y) : "—") + '</td>' +
+          '<td class="px-2 py-1 num text-slate-300">' + (isNum(c.cagr_5y) ? pct1(c.cagr_5y) : "—") + '</td>' +
+          '<td class="px-2 py-1 text-[10px] text-slate-400">' + esc(str(c.edge_strategy, "")) + ' (PF ' + fixed(c.edge_profit_factor, 2) + ' · n' + intFmt(c.edge_n) + ')</td>' +
+          '</tr>';
+      }).join("") : '<tr><td class="px-2 py-2 text-slate-600" colspan="8">No edge-backed uptrend names outside your book on the current data.</td></tr>';
+
+      var plan = rot.plan && typeof rot.plan === "object" ? rot.plan : null;
+      if (plan) {
+        $("rotPlanTiles").innerHTML =
+          tile("Cash raised", rupee(num(plan.cash_raised, 0))) +
+          tile("Realized gain", rupee(num(plan.realized_gain, 0))) +
+          tile("Est. LTCG tax", rupee(num(plan.ltcg_tax_est, 0)), "12.5% over ₹1.25L — verify lots") +
+          tile("To redeploy", rupee(num(plan.to_redeploy, 0)));
+        var sells = Array.isArray(plan.sells) ? plan.sells : [];
+        var buys = Array.isArray(plan.buys) ? plan.buys : [];
+        var b = plan.before || {}, af = plan.after || {};
+        var sellHtml = sells.map(function (s) {
+          return '<div>• Sell <b>' + esc(s.symbol) + '</b> ' + fixed(s.frac * 100, 0) + '% → ' + rupee(s.cash) + ' <span class="text-slate-500">(gain ' + rupee(s.realized_gain) + ')</span></div>';
+        }).join("");
+        var buyHtml = buys.map(function (x) {
+          return '<div>• Buy <b>' + esc(x.symbol) + '</b> ~' + rupee(x.amount) + ' <span class="text-slate-500">(~' + intFmt(x.shares) + ' sh · ' + esc(str(x.edge_strategy, "")) + ')</span></div>';
+        }).join("");
+        $("rotPlanBody").innerHTML =
+          '<div class="grid grid-cols-1 lg:grid-cols-2 gap-3 text-[11px] text-slate-300">' +
+          '<div><div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Rotate out (laggards, in profit)</div>' + sellHtml + '</div>' +
+          '<div><div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Redeploy (edge-backed, uptrend)</div>' + (buyHtml || '<span class="text-slate-600">—</span>') + '</div></div>' +
+          '<div class="mt-2 text-[11px] text-slate-400">Before → After: uptrend <b>' + fixed(b.uptrend_pct, 0) + '% → ' + fixed(af.uptrend_pct, 0) + '%</b> · sectors ' + intFmt(b.sectors) + ' → ' + intFmt(af.sectors) + ' · theme ' + fixed(b.theme_pct, 0) + '% → ' + fixed(af.theme_pct, 0) + '% · HHI ' + intFmt(b.hhi) + ' → ' + intFmt(af.hhi) + ' · top-2 ' + fixed(b.top2_pct, 0) + '% → ' + fixed(af.top2_pct, 0) + '%</div>';
+      } else {
+        $("rotPlanTiles").innerHTML = "";
+        $("rotPlanBody").innerHTML = '<span class="text-slate-600 text-[11px]">No rotate-out candidates — nothing in a confirmed downtrend while lagging the market.</span>';
+      }
+
+      var sc = Array.isArray(rot.scenarios) ? rot.scenarios : [];
+      $("rotScenarios").innerHTML = '<span class="text-slate-400 font-semibold">Growth (scenarios, not forecasts):</span> ' +
+        sc.map(function (x) { return esc(x.name) + ' ' + fixed(x.cagr_low, 0) + '–' + fixed(x.cagr_high, 0) + '%'; }).join(" · ") +
+        ' <span class="text-slate-600">— ' + esc(str(rot.decade_note, "")) + '</span>';
+      $("rotDisclaimer").textContent = str(rot.disclaimer, "");
     }
     function postHoldings(body) {
       $("hldMeta").textContent = "analyzing…";

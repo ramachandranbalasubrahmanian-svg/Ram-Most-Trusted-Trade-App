@@ -796,6 +796,106 @@ pub struct PortfolioAnalysis {
     pub built_ist: String,
 }
 
+// ---------------------------------------------------------------------------
+// Rotation & growth (Page-equivalent for the Desk: leaders / laggards / buys).
+// Display-only contracts — descriptive evidence, never advice or an order.
+// ---------------------------------------------------------------------------
+
+/// One holding's rotation read. `action` is a descriptive bucket
+/// (Leader / Hold / Trim / Rotate out / Hold*), never a directive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RotationRow {
+    pub symbol: String,
+    pub weight_pct: f64,
+    pub vs_dma200: Option<f64>,
+    pub rs_12m: Option<f64>,
+    pub off_high_pct: Option<f64>,
+    pub trend: String,
+    pub edge_eligible: bool,
+    pub action: String,
+    pub reason: String,
+}
+
+/// A screened buy candidate: an eligible-edge name ALSO in a price uptrend that
+/// is beating NIFTY. CAGRs are historical/descriptive, not forecasts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuyCandidate {
+    pub symbol: String,
+    pub last: f64,
+    pub vs_dma200: f64,
+    pub rs_6m: f64,
+    pub rs_12m: f64,
+    pub off_high_pct: f64,
+    pub cagr_3y: Option<f64>,
+    pub cagr_5y: Option<f64>,
+    pub edge_strategy: String,
+    pub edge_expectancy_r: f64,
+    pub edge_profit_factor: f64,
+    pub edge_win_pct: f64,
+    pub edge_n: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebalanceSell {
+    pub symbol: String,
+    pub action: String,
+    pub frac: f64,
+    pub cash: f64,
+    pub realized_gain: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebalanceBuy {
+    pub symbol: String,
+    pub amount: f64,
+    pub shares: i64,
+    pub edge_strategy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebalanceProfile {
+    pub uptrend_pct: f64,
+    pub sectors: usize,
+    pub theme_pct: f64,
+    pub top2_pct: f64,
+    pub hhi: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebalancePlan {
+    pub sells: Vec<RebalanceSell>,
+    pub buys: Vec<RebalanceBuy>,
+    pub cash_raised: f64,
+    pub realized_gain: f64,
+    pub ltcg_tax_est: f64,
+    pub to_redeploy: f64,
+    pub before: RebalanceProfile,
+    pub after: RebalanceProfile,
+}
+
+/// Portfolio-level forward scenario band — a RANGE, never a point forecast.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrowthScenario {
+    pub name: String,
+    pub cagr_low: f64,
+    pub cagr_high: f64,
+    pub assumes: String,
+}
+
+/// The full rotation/growth payload attached to the holdings response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RotationAnalysis {
+    pub holdings: Vec<RotationRow>,
+    pub buy_candidates: Vec<BuyCandidate>,
+    pub plan: Option<RebalancePlan>,
+    pub scenarios: Vec<GrowthScenario>,
+    pub decade_note: String,
+    pub disclaimer: String,
+    #[serde(default)]
+    pub built_ist: String,
+}
+
 /// NIFTY regime + market breadth context (display-only; never changes a score).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegimeInfo {

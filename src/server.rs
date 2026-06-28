@@ -589,6 +589,10 @@ struct HoldingsRequest {
 #[derive(serde::Serialize)]
 struct HoldingsResponse {
     analysis: PortfolioAnalysis,
+    /// Rotation & growth layer: per-holding leader/laggard read, edge-backed
+    /// uptrend buy candidates, an illustrative rebalance, and growth scenarios.
+    /// Display-only — descriptive evidence, never advice or an order.
+    rotation: crate::types::RotationAnalysis,
     warnings: Vec<String>,
 }
 
@@ -622,18 +626,26 @@ async fn holdings_handler(State(state): State<AppState>, Json(req): Json<Holding
             inputs.iter().map(crate::holdings_analytics::normalize).collect()
         };
 
-        // EOD marks from the local archive (read-only; flagged not-live).
+        // EOD marks from the local archive (read-only; flagged not-live). Keep the
+        // connection open to also drive the rotation layer (trend / relative strength).
+        let conn = crate::storage_kernel::open_conn().ok();
         let mut marks: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-        if let Ok(conn) = crate::storage_kernel::open_conn() {
+        if let Some(ref conn) = conn {
             for h in &holdings {
-                if let Some(px) = crate::holdings_analytics::latest_daily_close(&conn, &root, &h.symbol) {
+                if let Some(px) = crate::holdings_analytics::latest_daily_close(conn, &root, &h.symbol) {
                     marks.insert(h.symbol.clone(), px);
                 }
             }
         }
 
-        let analysis = crate::holdings_analytics::analyze(&holdings, &marks, &edges, now);
-        HoldingsResponse { analysis, warnings }
+        let analysis = crate::holdings_analytics::analyze(&holdings, &marks, &edges, now.clone());
+        // Rotation & growth (display-only): per-holding trend/relative-strength read,
+        // edge-backed uptrend buy candidates, an illustrative rebalance + scenarios.
+        let rotation = match conn {
+            Some(ref c) => crate::portfolio_rotation::build(c, &root, &analysis.holdings, &edges, now),
+            None => crate::portfolio_rotation::empty(now),
+        };
+        HoldingsResponse { analysis, rotation, warnings }
     })
     .await;
 

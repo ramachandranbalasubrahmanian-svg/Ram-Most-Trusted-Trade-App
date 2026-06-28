@@ -22,6 +22,7 @@ mod journal_sync;
 mod kite_instruments;
 mod news_engine;
 mod portfolio_analytics;
+mod portfolio_rotation;
 mod regime;
 mod risk_manager;
 mod server;
