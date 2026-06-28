@@ -283,6 +283,38 @@
       </div>
     </section>
 
+    <!-- ===================== HOLDINGS RISK PICTURE ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] overflow-hidden">
+      <div class="flex flex-wrap items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/30">
+        <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Your Holdings — Risk Picture</span>
+        <span class="text-[10px] text-slate-500">your risk picture, not advice — we never place / modify / cancel any order</span>
+        <span id="hldMeta" class="text-[10px] text-slate-500 num"></span>
+        <div class="flex-1"></div>
+        <button id="loadSampleBtn" class="rounded-md bg-slate-700 hover:bg-slate-600 transition text-slate-200 text-[11px] font-semibold px-3 py-1">Load sample</button>
+        <button id="analyzeHoldingsBtn" class="rounded-md bg-sky-700 hover:bg-sky-600 transition text-slate-100 text-[11px] font-semibold px-3 py-1">Analyze</button>
+      </div>
+      <div class="px-3 py-2.5 space-y-3">
+        <div>
+          <textarea id="holdingsInput" rows="4" placeholder="Paste holdings as CSV (symbol,qty,avg_cost,broker,sector) — broker exports work too (Zerodha/Groww headers auto-detected). Or click Load sample."
+            class="w-full rounded-md bg-[#0a0f1a] border border-slate-800 text-slate-200 text-[11px] num p-2 focus:outline-none focus:border-sky-700"></textarea>
+        </div>
+        <div id="hldTiles" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2"></div>
+        <div class="tbl-wrap max-h-[44vh]">
+          <table>
+            <thead id="hldHead"></thead>
+            <tbody id="hldBody"></tbody>
+          </table>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div><div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Sector exposure</div><div id="hldSector" class="space-y-1"></div></div>
+          <div><div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Broker exposure</div><div id="hldBroker" class="space-y-1"></div></div>
+        </div>
+        <div id="hldClusters" class="text-[11px] text-slate-300"></div>
+        <div id="hldWarnings" class="text-[11px] text-amber-400/80"></div>
+        <div id="hldDisclaimer" class="text-[10px] text-slate-600"></div>
+      </div>
+    </section>
+
     <!-- ===================== JOURNAL ===================== -->
     <section class="rounded-lg border border-slate-800 bg-[#0d1320] overflow-hidden">
       <div class="flex flex-wrap items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/30">
@@ -1152,6 +1184,101 @@
 
     loadFreeze();
     setInterval(loadFreeze, FREEZE_POLL_MS);
+
+    // ================================================================
+    // HOLDINGS RISK PICTURE
+    // ================================================================
+    function heatClass(h) {
+      return h === "high" ? "text-rose-400" : h === "elevated" ? "text-amber-400" : "text-slate-300";
+    }
+    function flagChip(flag, reason) {
+      if (!flag) return '<span class="text-emerald-400/80">ok</span>';
+      var cls = (flag === "deep_loss") ? "text-rose-400"
+        : (flag === "concentration" || flag === "sector_overweight") ? "text-amber-400" : "text-slate-400";
+      var label = flag.replace(/_/g, " ");
+      return '<span class="' + cls + '" title="' + esc(reason) + '">' + esc(label) + '</span>';
+    }
+    function tile(label, value, sub, cls) {
+      return '<div class="rounded-md bg-[#0a0f1a] border border-slate-800 px-2.5 py-2">' +
+        '<div class="text-[9px] uppercase tracking-wider text-slate-500">' + esc(label) + '</div>' +
+        '<div class="text-sm font-bold num ' + (cls || "text-slate-200") + '">' + value + '</div>' +
+        (sub ? '<div class="text-[9px] text-slate-500 num">' + esc(sub) + '</div>' : '') + '</div>';
+    }
+    function exposureBars(rows) {
+      if (!rows || !rows.length) return '<div class="text-[11px] text-slate-600">—</div>';
+      return rows.map(function (r) {
+        var w = num(r.weight_pct, 0);
+        return '<div class="flex items-center gap-2 text-[11px]">' +
+          '<div class="w-24 truncate ' + heatClass(r.heat) + '">' + esc(r.key) + '</div>' +
+          '<div class="flex-1 h-2 rounded bg-slate-800 overflow-hidden"><div class="h-full bg-sky-700" style="width:' + Math.min(100, w).toFixed(0) + '%"></div></div>' +
+          '<div class="w-28 text-right num text-slate-400">' + w.toFixed(1) + '% · ' + intFmt(r.names) + ' · ' + signedRupee(num(r.unrealized_pnl, 0)) + '</div></div>';
+      }).join("");
+    }
+    function renderHoldings(resp) {
+      resp = resp && typeof resp === "object" ? resp : {};
+      var a = resp.analysis && typeof resp.analysis === "object" ? resp.analysis : {};
+      var hs = Array.isArray(a.holdings) ? a.holdings : [];
+      var upnl = num(a.total_unrealized_pnl, 0);
+      $("hldTiles").innerHTML =
+        tile("Invested", rupee(num(a.total_cost, 0))) +
+        tile("Value", rupee(num(a.total_value, 0))) +
+        tile("Unrealized", signedRupee(upnl), pct1(a.total_unrealized_pct) + "%", moneyClass(upnl)) +
+        tile("Concentration", esc(str(a.hhi_label, "—")), "~" + fixed(a.effective_names, 1) + " eff. names", num(a.hhi, 0) >= 2500 ? "text-amber-400" : "text-slate-200") +
+        tile("Top-3 weight", fixed(a.top3_weight_pct, 0) + "%") +
+        tile("Edge coverage", intFmt(a.names_with_edge) + "/" + intFmt(a.names_total), "names with a backtested edge");
+
+      $("hldHead").innerHTML = '<tr class="text-[9px] uppercase tracking-wider text-slate-500">' +
+        ["Symbol", "Broker", "Sector", "Qty", "Avg", "Last", "Value", "Wt%", "P&L%", "Flag (why)", "Kelly (advisory)", "Edge note"]
+          .map(function (h) { return '<th class="text-left px-2 py-1">' + h + '</th>'; }).join("") + '</tr>';
+      $("hldBody").innerHTML = hs.map(function (h) {
+        var k = (num(h.kelly_band_high_pct, 0) > 0)
+          ? fixed(h.kelly_band_low_pct, 1) + "–" + fixed(h.kelly_band_high_pct, 1) + "%"
+          : "—";
+        var last = isNum(h.last_price) ? rupee(h.last_price) + ' <span class="text-[8px] text-slate-600">' + (h.mark_is_live ? "" : "EOD") + '</span>' : '<span class="text-slate-600">cost</span>';
+        return '<tr class="border-t border-slate-800/60">' +
+          '<td class="px-2 py-1 font-semibold text-slate-200">' + esc(h.symbol) + '</td>' +
+          '<td class="px-2 py-1 text-slate-400">' + esc(str(h.broker, "—")) + '</td>' +
+          '<td class="px-2 py-1 text-slate-400">' + esc(str(h.sector, "Unknown")) + '</td>' +
+          '<td class="px-2 py-1 num text-slate-300">' + intFmt(h.qty) + '</td>' +
+          '<td class="px-2 py-1 num text-slate-300">' + rupee(h.avg_cost) + '</td>' +
+          '<td class="px-2 py-1 num text-slate-300">' + last + '</td>' +
+          '<td class="px-2 py-1 num text-slate-300">' + rupee(h.market_value) + '</td>' +
+          '<td class="px-2 py-1 num text-slate-300">' + fixed(h.weight_pct, 1) + '</td>' +
+          '<td class="px-2 py-1 num ' + moneyClass(num(h.unrealized_pct, 0)) + '">' + pct1(h.unrealized_pct) + '</td>' +
+          '<td class="px-2 py-1 text-[11px]">' + flagChip(h.flag, h.flag_reason) + '</td>' +
+          '<td class="px-2 py-1 num text-slate-400">' + k + '</td>' +
+          '<td class="px-2 py-1 text-[10px] text-slate-500" title="' + esc(str(h.edge_note, "")) + '">' + (h.edge_eligible ? '<span class="text-emerald-400/70">edge ✓</span>' : '<span class="text-slate-600">no edge</span>') + '</td>' +
+          '</tr>';
+      }).join("");
+
+      $("hldSector").innerHTML = exposureBars(a.by_sector);
+      $("hldBroker").innerHTML = exposureBars(a.by_broker);
+
+      var clusters = Array.isArray(a.clusters) ? a.clusters : [];
+      $("hldClusters").innerHTML = clusters.length
+        ? '<span class="text-amber-400/90 font-semibold">Correlated clusters:</span> ' + clusters.map(function (c) {
+            return esc(c.label) + " (" + fixed(c.combined_weight_pct, 0) + "% · " + c.members.map(esc).join(", ") + " — " + esc(c.basis) + ")";
+          }).join(" · ")
+        : '<span class="text-slate-600">No same-sector clusters above the concentration cut.</span>';
+
+      var warns = Array.isArray(resp.warnings) ? resp.warnings : [];
+      $("hldWarnings").innerHTML = warns.length ? "⚠ " + warns.map(esc).join(" · ") : "";
+      $("hldMeta").textContent = "marks " + intFmt(a.marks_live) + "/" + intFmt(a.marks_total) + " live · built " + str(a.built_ist, "");
+      $("hldDisclaimer").textContent = str(a.disclaimer, "");
+    }
+    function postHoldings(body) {
+      $("hldMeta").textContent = "analyzing…";
+      fetch("/api/holdings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+        .then(function (r) { return r.json(); }).then(renderHoldings)
+        .catch(function (e) { $("hldMeta").textContent = "error: " + e; });
+    }
+    $("loadSampleBtn").addEventListener("click", function () { postHoldings({ use_sample: true }); });
+    $("analyzeHoldingsBtn").addEventListener("click", function () {
+      var raw = ($("holdingsInput").value || "").trim();
+      if (!raw) { postHoldings({ use_sample: true }); return; }
+      // Heuristic: comma-separated → CSV; else best-effort text.
+      postHoldings(raw.indexOf(",") >= 0 ? { csv: raw } : { text: raw });
+    });
 
     loadStaging();
     loadSwing();

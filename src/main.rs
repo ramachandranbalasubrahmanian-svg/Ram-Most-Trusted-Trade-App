@@ -16,6 +16,7 @@ mod circuit_breaker;
 mod config;
 mod costs;
 mod execution_staging;
+mod holdings_analytics;
 mod ingestion_engine;
 mod journal_sync;
 mod kite_instruments;
@@ -322,6 +323,8 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
     };
     let edge_index = strategy_engine::build_index(&records);
     let eligible_edges: usize = edge_index.values().map(Vec::len).sum();
+    // Shared, read-only copy for the holdings endpoint (cross-reference context).
+    let edge_index_arc = Arc::new(edge_index.clone());
     let symbols: Vec<String> = {
         let mut s: Vec<String> = edge_index.keys().cloned().collect();
         s.sort();
@@ -382,6 +385,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
         finder: finder.clone(),
         freeze: freeze.clone(),
         journal: journal_arc.clone(),
+        edge_index: edge_index_arc.clone(),
     };
 
     // Startup precompute: warm all heavy caches in parallel so the first page

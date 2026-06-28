@@ -32,9 +32,10 @@ use tracing::{info, warn};
 
 use crate::cache::{CapRiskKey, Cached, KeyedCache};
 use crate::config::UserSettings;
+use crate::strategy_engine::EdgeIndex;
 use crate::types::{
-    FinderResult, JournalEntry, JournalUpdate, PortfolioMetrics, RegimeInfo,
-    ScanResult, SignalPacket, StockSuggestion, SwingCatalog,
+    FinderResult, HoldingInput, JournalEntry, JournalUpdate, PortfolioAnalysis, PortfolioMetrics,
+    RegimeInfo, ScanResult, SignalPacket, StockSuggestion, SwingCatalog,
 };
 
 /// Shared application state handed to the server and updated by the analytics
@@ -64,6 +65,9 @@ pub struct AppState {
     /// Manual-validation journal (file-based DuckDB), behind a Mutex for the
     /// async handlers (each op runs on spawn_blocking).
     pub journal: Arc<std::sync::Mutex<duckdb::Connection>>,
+    /// Eligible-edge index, for cross-referencing the user's holdings against
+    /// our edge map (honest context — never advice).
+    pub edge_index: Arc<EdgeIndex>,
 }
 
 /// Run the Axum server until the process exits.
@@ -84,6 +88,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/staging", get(staging_handler))
         .route("/api/swing", get(swing_handler))
         .route("/api/portfolio", get(portfolio_handler))
+        .route("/api/holdings", post(holdings_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
@@ -563,6 +568,78 @@ async fn portfolio_handler(State(state): State<AppState>) -> Response {
     match metrics {
         Some(m) => Json::<PortfolioMetrics>(m).into_response(),
         None => (StatusCode::INTERNAL_SERVER_ERROR, "portfolio compute failed").into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct HoldingsRequest {
+    #[serde(default)]
+    holdings: Vec<HoldingInput>,
+    /// Raw CSV text (broker export). Parsed with header-aliasing.
+    #[serde(default)]
+    csv: Option<String>,
+    /// Pasted / PDF-extracted text. Best-effort parse.
+    #[serde(default)]
+    text: Option<String>,
+    /// Load the built-in sample portfolio instead of any supplied holdings.
+    #[serde(default)]
+    use_sample: bool,
+}
+
+#[derive(serde::Serialize)]
+struct HoldingsResponse {
+    analysis: PortfolioAnalysis,
+    warnings: Vec<String>,
+}
+
+/// `POST /api/holdings` — analyse the user's REAL holdings (manual JSON, CSV,
+/// pasted text, or the sample set) into their risk picture. Display-only: marks
+/// are local EOD closes (flagged not-live), nothing is an order, no advice. The
+/// heavy DuckDB mark reads run on `spawn_blocking`.
+async fn holdings_handler(State(state): State<AppState>, Json(req): Json<HoldingsRequest>) -> Response {
+    let root = state.root.clone();
+    let edges = state.edge_index.clone();
+    let now = now_ist_string();
+
+    let resp = tokio::task::spawn_blocking(move || {
+        // Ingest from whichever source(s) the client supplied.
+        let mut warnings: Vec<String> = Vec::new();
+        let holdings: Vec<crate::types::Holding> = if req.use_sample {
+            crate::holdings_analytics::sample_holdings()
+        } else {
+            let mut inputs: Vec<HoldingInput> = Vec::new();
+            if let Some(csv) = req.csv.as_deref() {
+                let (i, w) = crate::holdings_analytics::parse_csv(csv.as_bytes());
+                inputs.extend(i);
+                warnings.extend(w);
+            }
+            if let Some(txt) = req.text.as_deref() {
+                let (i, w) = crate::holdings_analytics::parse_text(txt);
+                inputs.extend(i);
+                warnings.extend(w);
+            }
+            inputs.extend(req.holdings);
+            inputs.iter().map(crate::holdings_analytics::normalize).collect()
+        };
+
+        // EOD marks from the local archive (read-only; flagged not-live).
+        let mut marks: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        if let Ok(conn) = crate::storage_kernel::open_conn() {
+            for h in &holdings {
+                if let Some(px) = crate::holdings_analytics::latest_daily_close(&conn, &root, &h.symbol) {
+                    marks.insert(h.symbol.clone(), px);
+                }
+            }
+        }
+
+        let analysis = crate::holdings_analytics::analyze(&holdings, &marks, &edges, now);
+        HoldingsResponse { analysis, warnings }
+    })
+    .await;
+
+    match resp {
+        Ok(r) => Json(r).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("holdings task panicked: {e}")).into_response(),
     }
 }
 

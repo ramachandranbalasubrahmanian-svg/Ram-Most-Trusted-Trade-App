@@ -682,6 +682,109 @@ pub struct PortfolioMetrics {
     pub by_sector: Vec<AttributionRow>,
 }
 
+// ===========================================================================
+// Holdings analytics (the user's REAL external portfolio across brokers).
+// Display-only: shows the user THEIR risk picture. NEVER advice, NEVER an order.
+// Distinct from PortfolioMetrics above (which analyses CLOSED simulated trades).
+// ===========================================================================
+
+/// A normalized holding (after ingest from CSV / manual / sample).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Holding {
+    pub symbol: String,
+    pub qty: f64,
+    pub avg_cost: f64,
+    pub broker: String,
+    pub sector: Option<String>,
+}
+
+/// Raw inbound holding from a POST body / CSV / pasted text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HoldingInput {
+    pub symbol: String,
+    pub qty: f64,
+    pub avg_cost: f64,
+    #[serde(default)]
+    pub broker: Option<String>,
+    #[serde(default)]
+    pub sector: Option<String>,
+}
+
+/// Per-holding analysis row. `flag`/`flag_reason` state a WHY (concentration /
+/// deep loss / sector over-weight / no eligible edge) — never a directive.
+/// `kelly_band_*` is an ADVISORY sizing band (half-Kelly, clamped); [0,0] for
+/// names with no eligible edge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HoldingAnalysis {
+    pub symbol: String,
+    pub qty: f64,
+    pub avg_cost: f64,
+    pub broker: String,
+    pub sector: Option<String>,
+    pub last_price: Option<f64>,
+    pub mark_is_live: bool,
+    pub market_value: f64,
+    pub cost_basis: f64,
+    pub unrealized_pnl: f64,
+    pub unrealized_pct: f64,
+    pub weight_pct: f64,
+    pub drawdown_vs_cost_pct: f64,
+    pub edge_eligible: bool,
+    pub edge_note: String,
+    pub flag: String,
+    pub flag_reason: String,
+    pub kelly_band_low_pct: f64,
+    pub kelly_band_high_pct: f64,
+}
+
+/// Exposure / heat for a sector or broker bucket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExposureRow {
+    pub key: String,
+    pub names: usize,
+    pub value: f64,
+    pub weight_pct: f64,
+    pub unrealized_pnl: f64,
+    pub heat: String, // "high" | "elevated" | "normal"
+}
+
+/// A cluster of names that move together. `basis` states the rule honestly
+/// (e.g. "same sector (no price-correlation data)").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrelationCluster {
+    pub label: String,
+    pub members: Vec<String>,
+    pub combined_weight_pct: f64,
+    pub basis: String,
+}
+
+/// The full holdings risk picture. Display-only; carries a disclaimer + build
+/// timestamp; `mark_is_live`/`marks_live` make staleness explicit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortfolioAnalysis {
+    pub total_cost: f64,
+    pub total_value: f64,
+    pub total_unrealized_pnl: f64,
+    pub total_unrealized_pct: f64,
+    pub holdings: Vec<HoldingAnalysis>,
+    pub top1_weight_pct: f64,
+    pub top3_weight_pct: f64,
+    pub top5_weight_pct: f64,
+    pub hhi: f64,
+    pub hhi_label: String,
+    pub effective_names: f64,
+    pub by_sector: Vec<ExposureRow>,
+    pub by_broker: Vec<ExposureRow>,
+    pub clusters: Vec<CorrelationCluster>,
+    pub names_with_edge: usize,
+    pub names_total: usize,
+    pub marks_live: usize,
+    pub marks_total: usize,
+    pub disclaimer: String,
+    #[serde(default)]
+    pub built_ist: String,
+}
+
 /// NIFTY regime + market breadth context (display-only; never changes a score).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegimeInfo {
