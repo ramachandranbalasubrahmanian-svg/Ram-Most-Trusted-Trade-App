@@ -93,6 +93,8 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/portfolio", get(portfolio_page_handler))
         .route("/api/portfolio/upload", post(portfolio_upload_handler))
         .route("/api/capital_plan", get(capital_plan_handler))
+        .route("/add_stock", get(add_stock_page_handler))
+        .route("/api/add_stock", post(add_stock_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
@@ -824,6 +826,72 @@ async fn capital_plan_handler(State(state): State<AppState>, Query(q): Query<Cap
     match resp {
         Ok(plan) => Json(plan).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("capital plan task panicked: {e}")).into_response(),
+    }
+}
+
+/// `GET /add_stock` — the "add a stock from NSE" page (text box → download).
+async fn add_stock_page_handler(State(state): State<AppState>) -> Response {
+    let path = state.static_dir.join("add_stock.html");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("could not read add_stock.html: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct AddStockRequest {
+    symbol: String,
+}
+
+/// `POST /api/add_stock` {symbol} — download one NSE stock's full history into the
+/// parquet archive via `download_stock.py` (Yahoo max daily + Kite intraday →
+/// resampled). The symbol is strictly validated (alphanumeric + `&-` only) so it
+/// can never inject a shell arg or escape the archive path. Returns the
+/// downloader's JSON status. Long-running for a brand-new stock — runs on
+/// `spawn_blocking`. Read-only w.r.t. trading: it only fetches market data.
+async fn add_stock_handler(State(state): State<AppState>, Json(req): Json<AddStockRequest>) -> Response {
+    let sym = req.symbol.trim().to_uppercase();
+    if sym.is_empty() || sym.len() > 24 || !sym.chars().all(|c| c.is_ascii_alphanumeric() || c == '&' || c == '-') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid symbol — use the NSE trading code, e.g. 63MOONS"})),
+        )
+            .into_response();
+    }
+    let root = state.root.clone();
+    let script = root.parent().map(|p| p.join("download_stock.py")).unwrap_or_else(|| root.join("download_stock.py"));
+
+    let resp = tokio::task::spawn_blocking(move || {
+        if !script.exists() {
+            return Err(format!("downloader not found at {}", script.display()));
+        }
+        let out = std::process::Command::new("python3")
+            .arg(&script)
+            .arg(&sym)
+            .arg("--root")
+            .arg(&root)
+            .output();
+        match out {
+            Ok(o) => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                let last = stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+                match serde_json::from_str::<serde_json::Value>(last) {
+                    Ok(v) => Ok(v),
+                    Err(_) => {
+                        let err_tail: String = String::from_utf8_lossy(&o.stderr).lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
+                        Err(format!("downloader produced no result. {err_tail}"))
+                    }
+                }
+            }
+            Err(e) => Err(format!("could not run the downloader (is python3 installed?): {e}")),
+        }
+    })
+    .await;
+
+    match resp {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("add_stock task panicked: {e}")).into_response(),
     }
 }
 

@@ -2,18 +2,126 @@
 
 ## ▶ RESUME (paste this into a new session)
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
-> `SESSION_HANDOVER.md`, and continue on `main`.**
+> `SESSION_HANDOVER.md` (esp. the ▶▶ NEXT-SESSION PLAN below), and continue on `main`.**
+>
+> **Git state:** the previous session's UI + add-stock work is **committed LOCALLY on `main` but NOT pushed** —
+> `origin/main` is still at `5a29b6e` (Portfolio v2). Run `git log --oneline -3`; **push when ready** with
+> `git push origin main`. That local tip commit adds: consistent 5-link nav on every page; a sortable Live-Signals
+> Top-10 (click any header) with a **Score** column + a "📘 How to read Win%" explainer/calculator + per-column
+> tooltips & a column guide; a new `/add_stock` page + `/api/add_stock` + `download_stock.py` (Yahoo max-daily + Kite
+> minute→resampled into the archive); **Clear-portfolio + localStorage persistence** on `/portfolio`. 155 tests pass,
+> JS parses, real-data verified.
 
 Then run the resume command:
 ```bash
 . "$HOME/.cargo/env"
 cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
-git checkout main && git pull origin main                   # all work is on main
+git log --oneline -3                                        # ← last session's work is committed LOCALLY (push when ready)
 pkill -f "ram_istp serve"; pkill -f "ram_istp live"         # stop any leftover instance (single-instance!)
-cargo build && cargo test                                   # 153 tests should pass
+cargo build && cargo test                                   # 155 tests should pass
 ./target/debug/ram_istp serve 30min                         # dashboards at http://127.0.0.1:8787
-#   open http://127.0.0.1:8787/portfolio  → upload xlsx/CSV, or "Load my portfolio", or the ₹-horizon planner
+#   /            → Live Signals: sortable Top-10 (click headers) + "📘 How to read Win%" explainer
+#   /add_stock   → type an NSE code → downloads ~20y daily + 1/3/5/10/15/30/60m + 1day parquet (Kite needs a fresh token)
+#   /portfolio   → upload xlsx/CSV or paste, "Load my portfolio", Clear, + the ₹-horizon planner
+# THEN: execute the ▶▶ NEXT-SESSION PLAN (backtest freshness panel → auto-onboard the ~125 new stocks → details/tradability).
 ```
+
+## ▶▶ NEXT-SESSION PLAN (specced 2026-06-28): backtest review + stock onboarding/enrichment
+*Plan only — nothing here is built yet. Multi-agent reviewed (28 agents) against the actual code; every item below
+passed an honesty-safety pressure-test. Execute in priority order. **Guardrails for ALL items:** never loosen the
+eligibility gate, never let any new signal feed Confidence (= t-stat + behavioural penalties + DSR gate only), keep
+everything display-only / no-orders, and keep the **63MOONS anchor byte-identical** (`63MOONS·VWAP·SELL·15m·+0.494R·
+PF 2.01·n=51·conf=72`) — anything that moves numbers goes behind a flag + a SEPARATE cache file.*
+
+### The factual picture today (corrected & verified)
+- **Backtest universe behind the live Top-10 = the cached `cache/edge_map_30min.json`: 14,066 records over 541 distinct
+  symbols, of which 170 carry an eligible edge (444 edges).** Top-10 Buy/Sell = best 10 of those 170 per side, by score.
+- `discover_symbols` (reads `minute/`) now returns **1,558** symbols — so **~1,017 symbols on disk are NOT in the edge
+  map** (incl. the owner's ~125 just-added stocks). The edge map only rebuilds when its file is *absent*; `add_stock`
+  downloads candles but never re-backtests → new stocks are invisible to Top-10 until a manual `backtest 30min`.
+- **Two backtest passes that disagree by construction:** (a) the cheap *edge-map* pass = 13 strategies × 2 dir × ONE
+  fixed config (SL 1.5·ATR, RR 2.0), gate = `eligible()` (n≥30, PF≥1.2, exp>0) — **no OOS/DSR/WF at this tier**; (b) the
+  *deep per-stock* pass (/intraday) = 4 strategies × 6 intervals × 5 R:R = up to 240 configs and is the ONLY place
+  DSR/WF/purged-OOS/regime/slippage run. They also use **three different cost constants** (0.0013 / 0.0016 / 0.0012).
+  So a name's Top-10 numbers ≠ what you see when you open it.
+- **`passes_gate` (OOS exp>0, OOS n≥6) is documented as non-negotiable but is NOT enforced anywhere** — no such fn in
+  `src/`. OOS is only a soft Confidence penalty in the deep pass; the Top-10 ranks on the un-deflated `eligible()` gate.
+- **DSR effective-trials is mis-specified:** it counts every config's Sharpe (big_N≈240), not the documented ~12
+  (interval × direction). Fixing it raises some Confidence scores → **needs an anchor re-baseline**.
+- **Coverage hole:** only `30min` (live) + `15min` maps are populated; `60min`/`1day` are empty, `5min` has 0 eligible.
+  The whole product rests on the 30min map.
+- **Details on disk but unused by Rust:** `corporate_actions_all.parquet` (21k rows) — 0 Rust refs; `indianapi/` (1,932
+  per-symbol fundamental JSONs: ROE/ROCE/PE/growth/analyst targets/shareholding) — unconsumed; sector missing for
+  473/1558 names (30%); sector/thematic indices + INDIAVIX in `index_daily_all` — unused (RS is only vs NIFTY50).
+
+### TASK 1 — Backtest method: more consistency + new validation strategies
+- **[P0] Edge-map freshness + scope panel** (`cache/edge_map_{tf}.meta.json` at save; `GET /api/edge_map_status`;
+  dashboard banner): surface `universe=1558 / backtested=541 / eligible=170 / NEW-since-build / files-changed / per-tf`.
+  Pure honesty-layer; zero anchor risk. *Do this first — it makes every other gap visible.*
+- **[P1] Robustness columns on the edge map (display-only):** extend `EdgeRecord` with `oos_expectancy`, `oos_n`,
+  `wf_consistency`, and a per-symbol DSR over its own 26 strat×dir trials (reuse `validation.rs` + `stats.rs`). Annotate
+  Top-10 with these but **do NOT change `eligible()`**. Closes the "Top-10 ranks on the weak gate" gap.
+- **[P1] Rank on shrunk/deflated estimates + show CIs** (use existing `stats::shrunk_expectancy` + `expectancy_ci`):
+  rank/tie-break Top-10 on the James-Stein-shrunk expectancy with a 90% CI, so small-n lucky configs stop topping the
+  list (67 eligible edges have n<50). Display/ranking only — Confidence untouched.
+- **[P1] CPCV + PBO panel (display-only):** new pure `src/cpcv.rs` (reuse embargo logic) → Probability of Backtest
+  Overfitting % across combinatorial purged folds, on the deep-dive card. One-way import, never into `build_confidence`.
+- **[P1] Intrabar resolution (P3) behind `--intrabar`:** wire `AmbiguityPolicy::IntrabarResolved` end-to-end (the
+  `resolve_intrabar` stub + `SimConfig.finer` already exist) using `minute/` to learn which of stop/target printed
+  first on ambiguous bars. **Opt-in, SEPARATE cache `edge_map_{tf}_intrabar.json`** — default pessimistic map (the
+  anchor) stays byte-identical. Add the two UPGRADE_PLAN tests.
+- **[P1] Next-bar-open entry policy** (`EntryFill::NextBarOpen` in `run_fill`): close the same-bar look-ahead (signal on
+  a bar's close can't also fill at that close). **Opt-in + separate cache; never default** (moves R for almost every
+  trade). Only ever makes numbers more honest.
+- **[P1] Harden walk-forward for sparse/short history:** `walkforward_consistency` returns a neutral 1.0 when <2 folds
+  populate → new stocks & sparse strategies get a free consistency pass. Return an "unknown" sentinel + require ≥5
+  trades/fold. *Anchor-affecting (it's a Confidence input) — verify 63MOONS (n=51) is unchanged + re-baseline.*
+- **[P2] Rolling edge-stability (expectancy decay)** as a display-only early-warning + optional tie-break only.
+- **[Flagged, not a clean rec] Reconcile the two passes' cost constants (0.0013/0.0016/0.0012)** and the strategy/R:R
+  contract so Top-10 ≈ drill-down. Careful: any change here moves numbers → anchor re-baseline. Treat as a deliberate,
+  separately-reviewed refactor, not a quick fix.
+- **[Flagged] Fix DSR effective-trials to ~12 (interval × direction)** per the invariant — raises some scores →
+  requires an explicit anchor re-baseline + sign-off before flipping.
+
+### TASK 2 — Include more stocks + more stock details (the newly-downloaded folder data)
+- **[P0] Auto-onboard endpoint** `POST /api/onboard_symbol` (chain from `add_stock`): after `download_stock.py`, run
+  `strategy_engine::backtest_symbol` for JUST that symbol on the live tf(s), then a new `merge_edge_records(new, tf)`
+  that replaces only that symbol's rows and leaves all others byte-identical. Turns "download a stock" into "download →
+  validate → can appear in signals" without a full-universe rebuild. LOW honesty risk (same gate/cost; per-symbol merge
+  ⇒ zero drift for the 1,557 unchanged symbols, anchor safe).
+- **[P0] `add_stock` also onboards DETAILS, not just candles:** extend `download_stock.py` (or a sibling
+  `enrich_stock.py` the handler calls) to upsert the new symbol's row into `symbol_metadata.parquet`
+  (sector/industry/mcap/name/isin from Yahoo `.info` + `recent_listings.csv`), append corp-actions, write its
+  `daily_adj/` slice, optionally pull its indianapi fundamentals — then queue the re-backtest. Re-backtest MUST reuse the
+  exact `backtest_universe` path (anchor byte-identical).
+- **[P0] Tradability/surveillance/liquidity flag layer (display-only):** materialize `tradability.parquet` keyed by
+  symbol (series EQ/BE/T2T, ASM/GSM, median ₹ turnover via `close*volume`, min-price floor); attach an optional
+  `Tradability` to `BuyCandidate`/`CapitalPick`/`RotationRow`/`HoldingAnalysis` and render a non-blocking caption
+  ("T2T — MIS may be rejected; verify"). **A caption, never a filter/gate/order.** Highest-consequence detail gap on a
+  real-money board.
+- **[P1] Materialize fundamentals** → flatten `indianapi/*.json` into one numeric `fundamentals.parquet` (pe, roe,
+  roce, d/e, sales/eps growth, promoter %, analyst targets, as_of); add a firewalled `fundamentals.rs` loader and show
+  as **display-only context** next to each edge/holding (~276 covered names; "no fundamentals" otherwise). Must NEVER
+  enter Confidence, `eligible()`, or the planner's (price-only) score.
+- **[P1] Detail-coverage panel + backfill the 473 missing sectors** (one DuckDB query → "sector known for X/N, mcap X/N,
+  fundamentals X/N, edge map built T over M symbols"). Never fabricate a sector — widen coverage + report the residual.
+- **[P2] Nightly full re-backtest safety net** (off-market ~02:00 IST, temp-file + atomic rename) under the incremental
+  path, so symbols that cross the 100-bar/eligibility threshold get reconciled and all symbols share an as-of date.
+- **[P2] Split-continuity check + corp-action context tag:** validate that intraday series with a post-2015 split show
+  no uncorrected jump (the empirical pre/post≈1.0 property), flag/caption any that fail; surface dividends/splits as a
+  small "recent corporate action" context tag. Display/validation only.
+
+### Suggested execution order
+1. **P0 freshness panel** (see the gap) → **P0 auto-onboard endpoint + merge** (get the +125 into Top-10) → **P0
+   add_stock detail onboarding** → **P0 tradability flags**. This makes "add a stock" actually complete end-to-end.
+2. Then **P1 robustness columns + shrunk ranking + fundamentals + coverage panel** (consistency + richer detail).
+3. Then the **opt-in realism flags** (intrabar, next-bar-open) and **P2** items.
+4. Only after explicit sign-off + anchor re-baseline: the two flagged number-moving items (cost reconciliation, DSR trials).
+
+*Dropped on review (premise didn't hold in this codebase): "promote the deep-dive gauntlet into edge-map eligibility"
+(would loosen the separation + risk the anchor), "best-TF-per-symbol consolidation", "hot-reload edge map in serve via
+scheduler", "liquidity admission gate that prunes the universe" (prune = a gate; keep liquidity as a display flag, not a
+filter). Full review JSON in this session's workflow output.*
 
 ## Latest session — Portfolio v2 (import + name resolver + capital horizon planner)
 Built on the /portfolio + /desk dashboards; all display-only, honesty-first; **153 tests pass**. Verified end-to-end

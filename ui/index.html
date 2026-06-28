@@ -57,7 +57,13 @@
       </div>
       <span id="modeBadge" class="px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-slate-700 text-slate-300">—</span>
 
-      <a href="/intraday" class="px-2 py-0.5 rounded text-[11px] font-semibold text-amber-300 border border-amber-500/40 hover:bg-amber-500/10">⚡ Intraday Suggestion →</a>
+      <nav class="flex items-center gap-1 text-[12px]">
+        <a href="/" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Live signals</a>
+        <a href="/intraday" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Intraday</a>
+        <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
+        <a href="/portfolio" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Portfolio</a>
+        <a href="/add_stock" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">+ Add stock</a>
+      </nav>
 
       <div class="flex-1"></div>
 
@@ -138,6 +144,53 @@
 
     <!-- ===================== ALERTS ===================== -->
     <section id="alertsWrap" class="space-y-1.5 hidden"></section>
+
+    <!-- ===================== EDGE EXPLAINER ===================== -->
+    <section class="rounded-lg border border-sky-900/40 bg-[#0d1320]">
+      <button id="edgeToggle" class="w-full flex items-center justify-between px-3 py-2 text-left">
+        <span class="text-xs font-bold uppercase tracking-wider text-sky-300">📘 How to read Win% &amp; the edge — is a setup worth taking?</span>
+        <span id="edgeChevron" class="text-slate-500 text-sm">▸</span>
+      </button>
+      <div id="edgeBody" class="hidden px-3 pb-3 space-y-3 text-[12px] text-slate-300 leading-relaxed">
+        <p><b class="text-slate-100">Win%</b> = out of the last <b>n</b> times this exact setup fired in our backtest, the share that reached the <span class="text-emerald-400">target</span> before the <span class="text-rose-400">stop</span>. It is a <b>historical average</b>, not a promise — any single trade can still lose.</p>
+        <p>Win% on its own doesn't tell you if a setup is good — it depends on your <b>reward : risk (R:R)</b>. A bigger R:R means you can win <i>less</i> often and still come out ahead. The number to beat is the <b class="text-slate-100">break-even Win%</b>:</p>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 num">
+          <div class="rounded bg-[#0a0f1a] border border-slate-800 p-2"><div class="text-[10px] text-slate-500">R:R 1 : 1</div><div class="text-slate-200">break-even <b class="text-amber-300">50%</b></div></div>
+          <div class="rounded bg-[#0a0f1a] border border-slate-800 p-2"><div class="text-[10px] text-slate-500">R:R 1 : 1.5</div><div class="text-slate-200">break-even <b class="text-amber-300">40%</b></div></div>
+          <div class="rounded bg-[#0a0f1a] border border-slate-800 p-2"><div class="text-[10px] text-slate-500">R:R 1 : 2</div><div class="text-slate-200">break-even <b class="text-amber-300">33%</b></div></div>
+          <div class="rounded bg-[#0a0f1a] border border-slate-800 p-2"><div class="text-[10px] text-slate-500">R:R 1 : 3</div><div class="text-slate-200">break-even <b class="text-amber-300">25%</b></div></div>
+        </div>
+        <p class="text-emerald-300/90">So yes — a <b>60% win at 1:2</b> is a strong edge: you only need 33% to break even, so 60% is well clear. Each trade is worth about <b>+0.8R</b> on average (risk 1 unit, net +0.8 over many trades).</p>
+
+        <div class="rounded-lg bg-[#0a0f1a] border border-slate-800 p-3">
+          <div class="text-[11px] font-semibold text-slate-300 mb-2">Check any setup — your edge calculator</div>
+          <div class="flex flex-wrap items-end gap-4">
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-1">Reward : Risk</label>
+              <select id="calcRR" class="rounded-md bg-[#0d1320] border border-slate-700 text-slate-200 text-[13px] px-2 py-1.5">
+                <option value="1">1 : 1</option>
+                <option value="1.5">1 : 1.5</option>
+                <option value="2" selected>1 : 2</option>
+                <option value="2.5">1 : 2.5</option>
+                <option value="3">1 : 3</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-1">Win% (read it from the table)</label>
+              <input id="calcWin" type="number" value="60" min="0" max="100" step="1" class="w-24 rounded-md bg-[#0d1320] border border-slate-700 text-slate-200 text-[13px] num px-2 py-1.5">
+            </div>
+          </div>
+          <div id="calcOut" class="mt-3 text-[12px]"></div>
+        </div>
+
+        <div>
+          <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">What each column means <span class="text-slate-600 normal-case font-normal">(hover any header too)</span></div>
+          <div id="colGuide" class="grid sm:grid-cols-2 gap-x-5 gap-y-1.5"></div>
+        </div>
+
+        <p class="text-[11px] text-amber-200/70"><b>Read the caveats:</b> Win% is the <b>backtested</b> average over <b>n</b> trades — a bigger <b>n</b> is more trustworthy. Real costs (brokerage + slippage) shave the edge, which is why the table's <b>exp(R)</b> and <b>Exp P&amp;L</b> are already shown <b>net of estimated cost</b>. This is evidence to help you decide and size with the risk slider — it is never a "sure shot", a recommendation, or an order. The board ranks by a live <b>Score</b>; the per-stock backtest <b>Confidence</b> number is on the <a href="/intraday" class="text-sky-400 hover:underline">Intraday</a> page.</p>
+      </div>
+    </section>
 
     <!-- ===================== TABLES ===================== -->
     <section class="grid grid-cols-1 2xl:grid-cols-2 gap-3">
@@ -326,6 +379,7 @@
       els.riskVal.textContent = state.riskPctInt + "%";
       if (els.riskRange.value !== String(state.riskPctInt)) els.riskRange.value = state.riskPctInt;
       els.riskAmt.textContent = rupee(state.budget * state.riskPctInt / 100);
+      if (typeof runCalc === "function") runCalc(); // keep the edge calculator's ₹ figure in sync
     }
 
     // ----------------------------------------------------------------
@@ -435,11 +489,13 @@
       // Alerts
       applyAlerts(arr(pkt.alerts));
 
-      // Tables
-      renderTable(els.buyHead, els.buyBody, arr(pkt.top_buy), "buy");
-      renderTable(els.sellHead, els.sellBody, arr(pkt.top_sell), "sell");
-      els.buyCount.textContent = arr(pkt.top_buy).length + " names";
-      els.sellCount.textContent = arr(pkt.top_sell).length + " names";
+      // Tables (keep the latest rows so re-sorting on a header click works)
+      lastBuy = arr(pkt.top_buy);
+      lastSell = arr(pkt.top_sell);
+      renderTable(els.buyHead, els.buyBody, lastBuy, "buy");
+      renderTable(els.sellHead, els.sellBody, lastSell, "sell");
+      els.buyCount.textContent = lastBuy.length + " names";
+      els.sellCount.textContent = lastSell.length + " names";
 
       // Diagnostics
       applyDiagnostics(pkt.diagnostics);
@@ -501,30 +557,70 @@
     // Tables
     // ----------------------------------------------------------------
     var COLS = [
-      { k: "symbol", label: "Symbol", align: "left" },
-      { k: "strategy", label: "Strategy", align: "left" },
-      { k: "entry", label: "Entry", align: "right" },
-      { k: "sl", label: "SL", align: "right" },
-      { k: "target", label: "Target", align: "right" },
-      { k: "shares", label: "Qty", align: "right" },
-      { k: "projpl", label: "Proj P/L", align: "right" },
-      { k: "exp_pnl", label: "Exp P&L", align: "right" },
-      { k: "expectancy_r", label: "exp(R)", align: "right" },
-      { k: "win_pct", label: "Win%", align: "right" },
-      { k: "profit_factor", label: "PF", align: "right" },
-      { k: "n", label: "n", align: "right" },
-      { k: "obi", label: "OBI", align: "right" },
-      { k: "rvol", label: "RVOL", align: "right" },
-      { k: "note", label: "Note", align: "left" },
+      { k: "symbol", label: "Symbol", align: "left", help: "The stock (NSE code)." },
+      { k: "strategy", label: "Strategy", align: "left", help: "Which backtested rule fired — the pattern that triggered this setup." },
+      { k: "entry", label: "Entry", align: "right", help: "Suggested entry price — where the signal triggers." },
+      { k: "sl", label: "SL", align: "right", help: "Stop-loss — exit here if it goes wrong. The gap from Entry is your risk = 1R." },
+      { k: "target", label: "Target", align: "right", help: "Profit target — exit here if it works. The gap from Entry is your reward." },
+      { k: "shares", label: "Qty", align: "right", help: "Shares, auto-sized so a stop-out loses only your chosen risk amount (budget × risk%)." },
+      { k: "projpl", label: "Proj P/L", align: "right", help: "If it works / if it fails, in ₹ (net of estimated cost). Green = profit at Target, red = loss at SL." },
+      { k: "exp_pnl", label: "Exp P&L", align: "right", help: "Average ₹ outcome over many trades like this = win%×profit − loss%×loss, net of cost. Green = historically profitable." },
+      { k: "expectancy_r", label: "exp(R)", align: "right", help: "Expectancy in risk-units (R). +0.5R = you net half your risk per trade on average. The core ‘is there an edge?’ number." },
+      { k: "win_pct", label: "Win%", align: "right", help: "Out of the last n times this fired in the backtest, the share that hit Target before SL. Historical, not a promise." },
+      { k: "profit_factor", label: "PF", align: "right", help: "Profit Factor: ₹ won ÷ ₹ lost in the backtest. Above 1 = profitable; 2.0 = won twice what it lost." },
+      { k: "n", label: "n", align: "right", help: "How many backtested trades these stats come from. Bigger = more trustworthy; a small n (say <30) — treat with caution." },
+      { k: "score", label: "Score", align: "right", help: "The live ranking score the board sorts by (edge stats + live confirmation). Higher ranks higher — a ranking, not a probability." },
+      { k: "obi", label: "OBI", align: "right", help: "Order-book imbalance, −1…+1. Positive = more buyers than sellers right now (supports a Buy)." },
+      { k: "rvol", label: "RVOL", align: "right", help: "Relative volume vs normal for this time of day. Above 1 = busier than usual — more conviction/liquidity behind the move." },
+      { k: "note", label: "Note", align: "left", help: "Honest caveats for this row (e.g. low sample, wide spread, near circuit). Always read it." },
     ];
+
+    // Columns the user can sort by (click the header). Default = Score, desc.
+    var SORTABLE = { symbol: 1, entry: 1, sl: 1, target: 1, shares: 1, exp_pnl: 1,
+      expectancy_r: 1, win_pct: 1, profit_factor: 1, n: 1, score: 1, obi: 1, rvol: 1 };
+    var sortKey = "score", sortDir = -1; // -1 = high→low (the natural Top-10 order)
+    var lastBuy = [], lastSell = [];
+
+    function sortRows(rows) {
+      var copy = rows.slice();
+      copy.sort(function (a, b) {
+        if (sortKey === "symbol") {
+          return sortDir * str(a.symbol, "").localeCompare(str(b.symbol, ""));
+        }
+        return sortDir * (num(a[sortKey], -Infinity) - num(b[sortKey], -Infinity));
+      });
+      return copy;
+    }
 
     function headHtml() {
       var h = "<tr>";
       for (var i = 0; i < COLS.length; i++) {
         var c = COLS[i];
-        h += '<th style="text-align:' + c.align + '">' + esc(c.label) + "</th>";
+        var sortable = !!SORTABLE[c.k];
+        var isActive = sortable && sortKey === c.k;
+        var arrow = isActive ? (sortDir < 0 ? " ↓" : " ↑") : (sortable ? " ⇅" : "");
+        var style = "text-align:" + c.align + ";";
+        if (sortable) style += "cursor:pointer;";
+        if (isActive) style += "color:#38bdf8;";
+        var arrowCls = isActive ? "" : ' style="opacity:.25"';
+        var tip = esc(str(c.help, "")) + (sortable ? " · Click to sort." : "");
+        h += '<th data-k="' + esc(c.k) + '" style="' + style + '" title="' + tip + '">' +
+             esc(c.label) + '<span' + arrowCls + '>' + arrow + "</span></th>";
       }
       return h + "</tr>";
+    }
+
+    // Click a header to sort BOTH tables by that column (toggle direction).
+    function onHeadClick(e) {
+      var th = e.target;
+      while (th && th.tagName !== "TH") th = th.parentNode;
+      if (!th) return;
+      var k = th.getAttribute("data-k");
+      if (!k || !SORTABLE[k]) return;
+      if (sortKey === k) sortDir = -sortDir;
+      else { sortKey = k; sortDir = (k === "symbol") ? 1 : -1; }
+      renderTable(els.buyHead, els.buyBody, lastBuy, "buy");
+      renderTable(els.sellHead, els.sellBody, lastSell, "sell");
     }
 
     function emptyRow() {
@@ -572,6 +668,8 @@
       cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.profit_factor, 2) + "</td>";
       // n
       cells += '<td style="text-align:right" class="num text-slate-500">' + intFmt(r.n) + "</td>";
+      // Score (live ranking)
+      cells += '<td style="text-align:right" class="num text-sky-300 font-medium">' + fixed(r.score, 1) + "</td>";
       // OBI
       cells += '<td style="text-align:right" class="num ' + signedRClass(r.obi) + '">' + fixed(r.obi, 2) + "</td>";
       // RVOL
@@ -584,10 +682,11 @@
     }
 
     function renderTable(headEl, bodyEl, rows, kind) {
-      if (!headEl.innerHTML) headEl.innerHTML = headHtml();
-      if (!rows.length) { bodyEl.innerHTML = emptyRow(); return; }
+      headEl.innerHTML = headHtml(); // refresh each time so the sort arrow is current
+      var sorted = sortRows(arr(rows));
+      if (!sorted.length) { bodyEl.innerHTML = emptyRow(); return; }
       var html = "";
-      for (var i = 0; i < rows.length; i++) html += rowHtml(rows[i], kind);
+      for (var i = 0; i < sorted.length; i++) html += rowHtml(sorted[i], kind);
       bodyEl.innerHTML = html;
     }
 
@@ -631,6 +730,59 @@
     });
 
     // ----------------------------------------------------------------
+    // Sorting wiring + edge explainer/calculator
+    // ----------------------------------------------------------------
+    els.buyHead.addEventListener("click", onHeadClick);
+    els.sellHead.addEventListener("click", onHeadClick);
+
+    var edgeToggle = $("edgeToggle"), edgeBody = $("edgeBody"), edgeChevron = $("edgeChevron");
+    if (edgeToggle) {
+      edgeToggle.addEventListener("click", function () {
+        var nowHidden = edgeBody.classList.toggle("hidden");
+        if (edgeChevron) edgeChevron.textContent = nowHidden ? "▸" : "▾";
+      });
+    }
+
+    // Edge calculator: R:R + Win% → break-even, expectancy, ₹ over 100 trades.
+    function runCalc() {
+      var out = $("calcOut");
+      if (!out) return;
+      var R = num(($("calcRR") || {}).value, 2);
+      var W = Math.max(0, Math.min(100, num(($("calcWin") || {}).value, 60))) / 100;
+      var be = 1 / (1 + R);
+      var expR = W * (1 + R) - 1; // expectancy in R units
+      var edge = expR > 0;
+      var riskRs = state.budget * state.riskPctInt / 100;
+      var over100 = expR * riskRs * 100;
+      var rrLabel = (R % 1 === 0) ? R.toFixed(0) : R.toFixed(1);
+      out.innerHTML =
+        'Break-even Win% for <b>1 : ' + rrLabel + '</b> is <b class="text-amber-300">' + (be * 100).toFixed(0) + '%</b>. ' +
+        'At <b>' + (W * 100).toFixed(0) + '%</b> win, expectancy = <b class="' + (edge ? "text-emerald-400" : "text-rose-400") + '">' +
+        (expR >= 0 ? "+" : "") + expR.toFixed(2) + 'R</b> per trade — ' +
+        (edge ? '<span class="text-emerald-400 font-semibold">positive edge ✓</span>'
+              : '<span class="text-rose-400 font-semibold">below break-even ✗</span>') + '.' +
+        '<div class="text-[11px] text-slate-500 mt-1 num">Risking ' + rupee(riskRs) + '/trade, that\'s about <b class="' +
+        (edge ? "text-emerald-300" : "text-rose-300") + '">' + signedRupee(over100) +
+        '</b> over 100 such trades — historically, before luck, assuming the backtested Win% holds.</div>';
+    }
+    var _cRR = $("calcRR"), _cWin = $("calcWin");
+    if (_cRR) _cRR.addEventListener("change", runCalc);
+    if (_cWin) _cWin.addEventListener("input", runCalc);
+
+    // Build the "what each column means" guide from COLS (single source of truth).
+    (function () {
+      var cg = $("colGuide");
+      if (!cg) return;
+      var html = "";
+      for (var i = 0; i < COLS.length; i++) {
+        var c = COLS[i];
+        html += '<div><span class="font-semibold text-slate-200">' + esc(c.label) + '</span>' +
+                '<span class="text-slate-400"> — ' + esc(str(c.help, "")) + '</span></div>';
+      }
+      cg.innerHTML = html;
+    })();
+
+    // ----------------------------------------------------------------
     // Boot
     // ----------------------------------------------------------------
     els.buyHead.innerHTML = headHtml();
@@ -638,6 +790,7 @@
     els.buyBody.innerHTML = emptyRow();
     els.sellBody.innerHTML = emptyRow();
     renderControls();
+    runCalc();
     connect();
   })();
   </script>

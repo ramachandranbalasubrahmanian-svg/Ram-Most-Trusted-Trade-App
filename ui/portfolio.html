@@ -36,6 +36,7 @@
         <a href="/intraday" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Intraday</a>
         <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
         <a href="/portfolio" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Portfolio</a>
+        <a href="/add_stock" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">+ Add stock</a>
       </nav>
     </div>
   </header>
@@ -64,6 +65,7 @@
           <button id="mineBtn" class="rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[13px] font-semibold px-4 py-2.5">⭐ Load my portfolio</button>
           <button id="sampleBtn" class="rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 text-[12px] font-semibold px-4 py-2">Try a sample</button>
           <button id="pasteToggle" class="rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 text-[12px] px-4 py-2">Paste rows instead</button>
+          <button id="clearBtn" class="rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 text-[12px] px-4 py-2">Clear portfolio</button>
         </div>
       </div>
 
@@ -73,6 +75,7 @@
         <button id="pasteBtn" class="mt-2 rounded-md bg-sky-700 hover:bg-sky-600 text-white text-[12px] font-semibold px-4 py-1.5">Analyze pasted rows</button>
       </div>
 
+      <div id="restoreNote" class="hidden text-[12px] text-slate-500 mt-3"></div>
       <div id="status" class="text-[12px] text-slate-400 mt-3"></div>
       <div id="warnings" class="text-[12px] text-amber-400/90 mt-1"></div>
     </section>
@@ -208,12 +211,18 @@
       return '<span class="text-slate-400">▬ Sideways</span>';
     }
 
-    function render(resp){
+    function render(resp, _restored){
       resp = resp && typeof resp==="object" ? resp : {};
       var a = resp.analysis || {}, rot = resp.rotation || {};
       var warns = Array.isArray(resp.warnings) ? resp.warnings : [];
       $("warnings").innerHTML = warns.length ? ("⚠ " + warns.map(esc).join(" · ")) : "";
       if(!a.holdings || !a.holdings.length){ $("status").textContent = "No holdings found — try an Excel/CSV export."; return; }
+      if(_restored){
+        $("restoreNote").innerHTML = "Showing your last loaded portfolio (as of " + esc(str(a.built_ist,"earlier")) + "). Upload a new statement any time to refresh.";
+        $("restoreNote").classList.remove("hidden");
+      } else {
+        $("restoreNote").innerHTML = ""; $("restoreNote").classList.add("hidden");
+      }
       $("status").textContent = "Marks " + intFmt(a.marks_live) + "/" + intFmt(a.marks_total) + " live (EOD close) · built " + str(a.built_ist,"");
       $("results").classList.remove("hidden");
 
@@ -321,7 +330,8 @@
       });
       $("decadeNote").textContent = str(rot.decade_note,"");
       $("disclaimer").textContent = str(rot.disclaimer, str(a.disclaimer,""));
-      window.scrollTo({ top: $("results").offsetTop - 70, behavior: "smooth" });
+      if(!_restored){ window.scrollTo({ top: $("results").offsetTop - 70, behavior: "smooth" }); }
+      try { localStorage.setItem("ram_portfolio_v1", JSON.stringify(resp)); } catch(e){}
     }
 
     function busy(msg){ $("status").innerHTML = '<span class="inline-block spin">⏳</span> '+esc(msg); }
@@ -408,6 +418,25 @@
     }
     renderHorizonBtns();
     $("planRun").addEventListener("click", runPlan);
+
+    // ---- Clear / start over (holdings only — leaves the capital planner alone) ----
+    $("clearBtn").addEventListener("click", function(){
+      try { localStorage.removeItem("ram_portfolio_v1"); } catch(e){}
+      $("results").classList.add("hidden");
+      $("status").textContent = "";
+      $("warnings").innerHTML = "";
+      $("restoreNote").innerHTML = ""; $("restoreNote").classList.add("hidden");
+      if($("pasteArea")) $("pasteArea").value = "";
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+
+    // ---- Restore last loaded portfolio from storage ----
+    try {
+      var _saved = localStorage.getItem("ram_portfolio_v1");
+      if(_saved){ render(JSON.parse(_saved), true); }
+    } catch(e){
+      try { localStorage.removeItem("ram_portfolio_v1"); } catch(e2){}
+    }
   </script>
 </body>
 </html>
