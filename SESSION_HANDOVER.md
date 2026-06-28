@@ -10,7 +10,7 @@ Then run the resume command:
 cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
 git checkout feat/latency-warmcache-and-robust-backtester   # this session's work (pushed)
 pkill -f "ram_istp serve"; pkill -f "ram_istp live"         # stop any leftover instance (single-instance!)
-cargo build && cargo test                                   # 118 tests should pass
+cargo build && cargo test                                   # 129 tests should pass
 ./target/debug/ram_istp serve 30min                         # dashboards at http://127.0.0.1:8787
 ```
 
@@ -24,7 +24,7 @@ user their own risk picture. **Honesty-first, real money: it surfaces evidence; 
 - **GitHub:** https://github.com/ramachandranbalasubrahmanian-svg/Ram-Most-Trusted-Trade-App
 - **Local folder:** `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`
 - **Base branch:** `main` · **Active branch (pushed):** `feat/latency-warmcache-and-robust-backtester`
-- **State:** ~6,500+ LOC Rust + 3 HTML pages · **118 unit tests passing** · builds clean
+- **State:** ~7,000+ LOC Rust + 4 HTML pages · **129 unit tests passing** · builds clean · **all work merged to `main`** (tip `15206ad`)
 
 ## How to resume in a new session
 Open this folder. Then:
@@ -33,7 +33,7 @@ Open this folder. Then:
 cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
 git checkout feat/latency-warmcache-and-robust-backtester   # this session's work (pushed)
 pkill -f "ram_istp serve"; pkill -f "ram_istp live"         # STOP any leftover instance first (see note ↓)
-cargo build && cargo test                                   # 118 tests should pass
+cargo build && cargo test                                   # 129 tests should pass
 ./target/debug/ram_istp serve 30min                         # dashboards at http://127.0.0.1:8787
 ```
 
@@ -69,8 +69,11 @@ Tracing now works: prefix with `RUST_LOG=info` to see connect/WS/refresh logs.
   bootstrap + slippage stress band + **★ high-conviction shortlist badge**), 10-Buy/10-Sell scanner
   (★ shortlist marker), Capital-Fit ATR Finder.
 - `/desk`      — **Trading Desk**: signal-freeze + circuit breaker, staging console, swing ledger,
-  journal portfolio analytics, manual journal, and **NEW: "Your Holdings — Risk Picture"** (paste
-  CSV / Load sample → concentration, sector/broker heat, clusters, per-name flags, advisory Kelly).
+  journal portfolio analytics, manual journal, "Your Holdings — Risk Picture", and a **Rotation &
+  Growth** block (trend/relative-strength keep/trim/rotate + edge-backed buy screen + rebalance).
+- `/portfolio` — **NEW: Portfolio Review** (dedicated, layman-friendly): **upload PDF/Excel/CSV** or
+  one-click **Load my portfolio** → summary, concentration, per-stock keep/trim/rotate verdicts,
+  edge-backed uptrend buy ideas, a suggested reshuffle (cash/tax/before-after), growth scenarios.
 
 ## Architecture (src/)
 | File | Role |
@@ -83,7 +86,9 @@ Tracing now works: prefix with `RUST_LOG=info` to see connect/WS/refresh logs.
 | `validation.rs` | purged+embargoed OOS, walk-forward, parameter robustness |
 | `regime.rs` | NIFTY up/down regime map + consistency |
 | `suggestion_engine.rs` | per-stock deep-dive (parallelized across intervals) + scanner (DSR-gated) + Capital-Fit + regime |
-| `holdings_analytics.rs` | **NEW** real external-portfolio risk picture: HHI/heat/clusters/flags/edge-xref/Kelly (display-only, firewalled) |
+| `holdings_analytics.rs` | real external-portfolio risk picture: HHI/heat/clusters/flags/edge-xref/Kelly + `my_portfolio()` preset (display-only, firewalled) |
+| `portfolio_rotation.rs` | **NEW** rotation & growth: trend + relative-strength keep/trim/rotate, edge-backed uptrend buy screen, illustrative rebalance (LTCG + before/after), growth scenarios (display-only, firewalled) |
+| `portfolio_import.rs` | **NEW** upload ingest: CSV/Excel (`calamine`) reliable + PDF (`pdf-extract`) best-effort → `HoldingInput` rows |
 | `kite_instruments.rs` | **NEW** public Kite instruments dump → NSE symbol↔token map, cached by IST date |
 | `costs.rs` | itemized Indian intraday charges + `backtest_roundtrip_pct_scaled` (slippage band) |
 | `risk_manager.rs` | sizing + projected P&L + risk meter + 15:15 square-off ALERT |
@@ -94,12 +99,28 @@ Tracing now works: prefix with `RUST_LOG=info` to see connect/WS/refresh logs.
 | `journal_sync.rs` | DuckDB manual-validation journal + slippage/PnL + 15:45 CSV export |
 | `portfolio_analytics.rs` | journal-based (CLOSED-trade) analytics — distinct from `holdings_analytics` |
 | `news_engine.rs` | Marketaux/EODHD sentiment (OFF by default) + `NewsBudget`/`should_fetch` (<100/day, Top-10 trigger) |
-| `server.rs` | Axum + `/ws/live_signals` + all `/api/*` (incl. `POST /api/holdings`) + `read_through` warm-cache |
+| `server.rs` | Axum + `/ws/live_signals` + all `/api/*` (incl. `POST /api/holdings`, `GET /portfolio`, `POST /api/portfolio/upload` multipart) + `read_through` warm-cache |
 | `main.rs` | tokio lifecycle: `init_tracing` → premarket → ingestion/analytics/risk threads → warm caches → server |
-| `types.rs` | all data contracts (incl. Holding*/PortfolioAnalysis, shortlist fields) |
-| `ui/{index,intraday,desk}.html` | the three Tailwind dashboards (served at request time — no rebuild for UI edits) |
+| `types.rs` | all data contracts (incl. Holding*/PortfolioAnalysis, RotationAnalysis/BuyCandidate/RebalancePlan, shortlist fields) |
+| `ui/{index,intraday,desk,portfolio}.html` | the four Tailwind dashboards (served at request time — no rebuild for UI edits) |
 
-## What landed THIS session (all on the pushed branch)
+## Latest work — Portfolio analytics (on `main`: commits `fc7d0d2` + `15206ad`)
+1. **Rotation & Growth** (`portfolio_rotation.rs`; on `/desk` + `/api/holdings`): per-holding
+   trend + relative-strength vs NIFTY → **Leader / Hold / Trim / Rotate-out** (Tata Motors demerger
+   tickers held out as `Hold*`); an **edge-backed uptrend buy screen** (needs an eligible LONG edge
+   AND beats NIFTY 6m+12m); an **illustrative rebalance** (rotate-out → redeploy, LTCG est,
+   before/after risk profile); portfolio **growth scenario** ranges. Display-only, firewalled (imports
+   only `types`/`config`/`storage_kernel`/`EdgeIndex`), no orders. +8 tests.
+2. **Dedicated Portfolio page** (`/portfolio`, `ui/portfolio.html`, `portfolio_import.rs`):
+   layman-friendly review — **upload PDF/Excel/CSV** (`POST /api/portfolio/upload` multipart) or
+   one-click **Load my portfolio** (`my_portfolio()` = owner's real 13-stock book). Excel/CSV reliable
+   (`calamine`); PDF best-effort (`pdf-extract`, warns to verify). +3 tests. Verified end-to-end.
+   - **Known gaps / pick up next:** (a) "independent bets" here is **weight-based** (≈7.4), not the
+     **correlation-based** ≈3.1 the old Python review showed — add a real return-correlation ENB +
+     clusters; (b) **no manual/last-price** column, so off-archive names (TMLCV/TMPV) fall back to cost
+     → total value reads low; (c) optional **"download as PDF"** export of the Portfolio page.
+
+## What landed in the prior (latency/backtester) session — all on `main`
 1. **Latency** — `cache.rs` warm caches + startup precompute + market-hours scheduled refresh: scanner/
    regime/swing/finder/staging **30–60s → ~1–4ms** (proven live). Deep-dive parallelized ~4s→~2.2s (byte-identical).
 2. **Robust backtester** — `run_fill`/`SimConfig` (legacy byte-identical), same-bar **ambiguity flag**,
@@ -121,6 +142,9 @@ Tracing now works: prefix with `RUST_LOG=info` to see connect/WS/refresh logs.
 4. If a *fresh* token still returns HTTP 400, it's a handshake detail to debug (header/endpoint), not the token.
 
 ## Next-up roadmap (specced in PRODUCT_ROADMAP.md, not yet built)
+- **Portfolio follow-ups** (from the latest session): correlation-based ENB + clusters (match the ≈3.1
+  figure); a manual/last-price column so demerger/off-archive names value correctly; "download as PDF"
+  export of the `/portfolio` page; optionally fold MF holdings into the page.
 - **C1 why-this/why-not** inline (surface the dropped `build_confidence` penalties + Conviction deltas).
 - **C2 regime-conditional display** (`analyze_symbol` already splits up/down NIFTY R-arrays then discards them).
 - **C3 correlation-aware exposure** on live Top-10 (info Alert; never prunes/sizes).
@@ -138,9 +162,12 @@ Tracing now works: prefix with `RUST_LOG=info` to see connect/WS/refresh logs.
 6. **Regression anchor** (deep-dive must stay byte-identical): `63MOONS · VWAP · SELL · 15m · +0.494R · PF 2.01 · n=51 · conf=72`.
 
 ## Git
+**All work is on `main`** (and mirrored on the feature branch), pushed to GitHub. Latest tip: `15206ad`.
 ```bash
-git status                       # working tree clean on the feature branch
-git log --oneline -8             # this session's commits
-git push origin feat/latency-warmcache-and-robust-backtester   # already pushed; open a PR on GitHub
+git status                       # clean (apart from untracked COMPETITIVE_ANALYSIS_2026.md, optional)
+git log --oneline -8 origin/main # main == feature-branch tip == 15206ad
+# how this session pushed to main (clean fast-forward — main was strictly behind):
+git push origin HEAD:main
+git push origin HEAD              # keep the feature branch in sync too
 ```
 A dashboard instance may be running on :8787 (port + journal are single-instance — stop it before `serve`/`live` again).
