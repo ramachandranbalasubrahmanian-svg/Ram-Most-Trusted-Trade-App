@@ -7,11 +7,10 @@ edition = "2024"
 anyhow = "1.0.103"
 axum = { version = "0.8.9", features = ["ws", "multipart"] }
 byteorder = "1.5.0"
-# Portfolio file upload: Excel (.xlsx/.xls) parsing + best-effort PDF text extraction.
-# Both pure-Rust; CSV reuses the existing `csv` crate. Used only by the upload path
-# (display-only ingest of the user's own holdings — never an order).
+# Portfolio file upload: Excel (.xlsx/.xls) parsing (pure-Rust). CSV/paste reuse the
+# existing `csv` crate. Used only by the upload path (display-only ingest of the
+# user's own holdings — never an order).
 calamine = "0.26"
-pdf-extract = "0.7"
 chrono = { version = "0.4.45", features = ["serde"] }
 chrono-tz = "0.10.4"
 crossbeam-channel = "0.5.15"

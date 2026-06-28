@@ -46,8 +46,8 @@
     <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
       <h1 class="text-lg font-bold text-slate-100">See what your portfolio is really doing</h1>
       <p class="text-[13px] text-slate-400 mt-1 max-w-3xl">
-        Upload your holdings (an <b class="text-slate-200">Excel</b> or <b class="text-slate-200">CSV</b> export works best; a broker
-        <b class="text-slate-200">PDF</b> is read best-effort), or load your saved book. You'll get a plain-English read:
+        Upload your holdings statement (an <b class="text-slate-200">Excel</b> or <b class="text-slate-200">CSV</b> export
+        from Groww / Zerodha / INDmoney), or paste the rows, or load your saved book. You'll get a plain-English read:
         <span class="text-emerald-400">what's winning</span>, <span class="text-amber-400">what to trim</span>,
         <span class="text-red-400">what to rotate out</span>, where fresh money could go, and a suggested reshuffle.
         <b class="text-slate-300">Evidence only — you decide. Nothing here places a trade.</b>
@@ -56,9 +56,9 @@
       <div class="grid md:grid-cols-3 gap-3 mt-4">
         <label id="drop" class="drop md:col-span-2 cursor-pointer rounded-lg border-2 border-dashed border-slate-700 bg-[#0a0f1a] hover:border-sky-700 px-4 py-6 flex flex-col items-center justify-center text-center">
           <div class="text-3xl mb-1">📄</div>
-          <div class="text-[13px] text-slate-200 font-semibold">Drop your file here, or click to choose</div>
-          <div class="text-[11px] text-slate-500 mt-1">.xlsx · .csv · .pdf — from Zerodha, Groww, INDmoney (or any broker)</div>
-          <input id="fileInput" type="file" accept=".xlsx,.xls,.xlsm,.csv,.pdf,.ods" class="hidden" />
+          <div class="text-[13px] text-slate-200 font-semibold">Drop your statement here, or click to choose</div>
+          <div class="text-[11px] text-slate-500 mt-1">.xlsx · .csv — company names are matched to NSE symbols automatically</div>
+          <input id="fileInput" type="file" accept=".xlsx,.xls,.xlsm,.csv,.ods" class="hidden" />
         </label>
         <div class="flex flex-col gap-2">
           <button id="mineBtn" class="rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[13px] font-semibold px-4 py-2.5">⭐ Load my portfolio</button>
@@ -68,13 +68,42 @@
       </div>
 
       <div id="pasteBox" class="hidden mt-3">
-        <textarea id="pasteArea" rows="4" placeholder="Paste as CSV: symbol,qty,avg_cost,broker,sector   (broker export headers are auto-detected). One stock per line."
+        <textarea id="pasteArea" rows="4" placeholder="Paste the rows straight from your statement (include the header row — Stock Name / Quantity / Average buy price / Closing price …). Tab- or comma-separated both work; one stock per line."
           class="w-full rounded-md bg-[#0a0f1a] border border-slate-800 text-slate-200 text-[12px] num p-3 focus:outline-none focus:border-sky-700"></textarea>
         <button id="pasteBtn" class="mt-2 rounded-md bg-sky-700 hover:bg-sky-600 text-white text-[12px] font-semibold px-4 py-1.5">Analyze pasted rows</button>
       </div>
 
       <div id="status" class="text-[12px] text-slate-400 mt-3"></div>
       <div id="warnings" class="text-[12px] text-amber-400/90 mt-1"></div>
+    </section>
+
+    <!-- CAPITAL PLANNER (independent of your holdings) -->
+    <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5 mt-6">
+      <h2 class="text-[15px] font-bold text-slate-100">Got cash to invest? Plan it by time horizon</h2>
+      <p class="text-[12px] text-slate-500 mb-3 max-w-3xl">Pick how long you'd hold and how much you have. We screen the whole NSE universe on
+        <b class="text-slate-300">past</b> data — trend, relative strength, long-run growth, drawdown, consistency and size — and
+        shift the weighting for your horizon (shorter = momentum; longer = steady compounders).
+        <b class="text-slate-300">Historical evidence, not a forecast or a recommendation — you decide.</b></p>
+      <div class="flex flex-wrap items-end gap-4 mb-4">
+        <div>
+          <label class="block text-[11px] text-slate-500 mb-1">Hold for</label>
+          <div id="horizonBtns" class="flex gap-1"></div>
+        </div>
+        <div>
+          <label class="block text-[11px] text-slate-500 mb-1">Amount to invest (₹)</label>
+          <input id="planCapital" type="number" value="200000" step="10000" min="10000"
+            class="w-36 rounded-md bg-[#0a0f1a] border border-slate-800 text-slate-200 text-[13px] num px-3 py-1.5 focus:outline-none focus:border-sky-700">
+        </div>
+        <button id="planRun" class="rounded-lg bg-sky-700 hover:bg-sky-600 text-white text-[12px] font-semibold px-4 py-2">Show me what fits</button>
+      </div>
+      <div id="planStatus" class="text-[12px] text-slate-400"></div>
+      <div id="capitalTiles" class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3"></div>
+      <div class="overflow-x-auto"><table id="capitalTable" class="hidden w-full text-[12px]">
+        <thead><tr><th>Stock</th><th>Allocate</th><th>Shares</th><th>Past CAGR</th><th>Worst drop</th><th>vs NIFTY</th><th>Consistency</th><th>Notes</th></tr></thead>
+        <tbody id="capitalBody"></tbody>
+      </table></div>
+      <div id="capitalMethod" class="text-[11px] text-slate-500 mt-3"></div>
+      <div id="capitalDisclaimer" class="text-[11px] text-amber-400/80 mt-1"></div>
     </section>
 
     <!-- RESULTS -->
@@ -200,10 +229,31 @@
       tile(cp, "Biggest single stock", fixed(a.top1_weight_pct,0)+"%", "of your money", num(a.top1_weight_pct,0)>=25?"text-amber-400":"text-slate-100");
       tile(cp, "Top 5 stocks", fixed(a.top5_weight_pct,0)+"%", "combined");
       tile(cp, "Spread (HHI)", esc(str(a.hhi_label,"—")), num(a.hhi,0)>=2500?"concentrated":"", num(a.hhi,0)>=2500?"text-amber-400":"text-slate-100");
-      tile(cp, "Real independent bets", "≈ "+fixed(a.effective_names,1), "of "+intFmt(a.names_total)+" stocks");
+      var hasCorr = (a.corr_effective_bets != null);
+      var realBets = hasCorr ? a.corr_effective_bets : a.effective_names;
+      var betsSub = hasCorr
+        ? ("by correlation · ≈"+fixed(a.effective_names,1)+" by size · "+intFmt(a.corr_names_used)+"/"+intFmt(a.names_total)+" names")
+        : ("by position size only · couldn't measure correlation");
+      // Amber only when correlation WAS measured and is genuinely low; the
+      // size-only fallback is neutral (unmeasured), never painted as a warning.
+      tile(cp, "Real independent bets", "≈ "+fixed(realBets,1), betsSub, (hasCorr && num(realBets,1)<=3.5)?"text-amber-400":"text-slate-100");
       var clusters = Array.isArray(a.clusters)?a.clusters:[];
-      $("concNote").innerHTML = "You hold <b>"+intFmt(a.names_total)+" stocks</b>, but they behave like only <b>≈"+fixed(a.effective_names,1)+" independent bets</b> — the rest overlap (same theme moves together)." +
-        (clusters.length ? (" <span class='text-amber-400'>Moves together:</span> " + clusters.map(function(c){ return esc(c.label)+" ("+fixed(c.combined_weight_pct,0)+"%)"; }).join(" · ")) : "");
+      var note;
+      if (hasCorr) {
+        note = "You hold <b>"+intFmt(a.names_total)+" stocks</b>, but they behave like only <b>≈"+fixed(realBets,1)+" independent bets</b> — the rest overlap (same theme moves together).";
+        note += " <span class='text-slate-400'>By position size alone it would look like ≈"+fixed(a.effective_names,1)+" — that ignores how correlated they are.</span>";
+        note += " <span class='text-slate-500'>Based on "+esc(a.corr_basis)+"; average pairwise correlation ≈"+fixed(a.corr_avg_pairwise,2)+".</span>";
+        if (Array.isArray(a.corr_names_dropped) && a.corr_names_dropped.length)
+          note += " <span class='text-slate-500'>No daily history (excluded): "+a.corr_names_dropped.map(esc).join(", ")+".</span>";
+      } else {
+        // Correlation could not be computed — be explicit that ≈realBets is
+        // SIZE-only and may overstate diversification (no overlap claim).
+        note = "You hold <b>"+intFmt(a.names_total)+" stocks</b>. The <b>≈"+fixed(realBets,1)+"</b> here counts only position <b>size</b> — we couldn't measure how correlated the names are (not enough shared price history), so it may overstate how diversified you really are.";
+        if (Array.isArray(a.corr_names_dropped) && a.corr_names_dropped.length)
+          note += " <span class='text-slate-500'>No daily history for: "+a.corr_names_dropped.map(esc).join(", ")+".</span>";
+      }
+      note += (clusters.length ? (" <span class='text-amber-400'>Moves together:</span> " + clusters.map(function(c){ return esc(c.label)+" ("+fixed(c.combined_weight_pct,0)+"%)"; }).join(" · ")) : "");
+      $("concNote").innerHTML = note;
 
       // stocks table (merge analysis P&L with rotation verdict)
       var rmap = {}; (rot.holdings||[]).forEach(function(r){ rmap[r.symbol]=r; });
@@ -246,7 +296,7 @@
         tile(pt, "Profit booked", rupee(plan.realized_gain), "", gainCls(plan.realized_gain));
         tile(pt, "Est. tax (LTCG)", rupee(plan.ltcg_tax_est), "12.5% over ₹1.25L — verify lots");
         tile(pt, "To reinvest", rupee(plan.to_redeploy));
-        var sells = (plan.sells||[]).map(function(s){ return '<div class="py-0.5">🔻 Sell <b class="text-slate-200">'+esc(s.symbol)+'</b> '+fixed(s.frac*100,0)+'% → '+rupee(s.cash)+' <span class="text-slate-500">(profit '+rupee(s.realized_gain)+')</span></div>'; }).join("");
+        var sells = (plan.sells||[]).map(function(s){ return '<div class="py-0.5">🔻 Sell <b class="text-slate-200">'+esc(s.symbol)+'</b> '+fixed(s.frac*100,0)+'% <span class="text-slate-500">(~'+intFmt(s.shares)+' shares)</span> → '+rupee(s.cash)+' <span class="text-slate-500">(profit '+rupee(s.realized_gain)+')</span></div>'; }).join("");
         var buys = (plan.buys||[]).map(function(b){ return '<div class="py-0.5">🟢 Buy <b class="text-slate-200">'+esc(b.symbol)+'</b> ~'+rupee(b.amount)+' <span class="text-slate-500">(~'+intFmt(b.shares)+' shares)</span></div>'; }).join("");
         $("planBody").innerHTML =
           '<div><div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Sell the fading names</div>'+(sells||'<span class="text-slate-600">—</span>')+'</div>' +
@@ -295,13 +345,69 @@
     $("pasteBtn").addEventListener("click", function(){
       var raw = ($("pasteArea").value||"").trim();
       if(!raw){ return; }
-      postJson(raw.indexOf(",")>=0 ? { csv: raw } : { text: raw });
+      // Tab- or comma-delimited → the header-detecting CSV parser; bare
+      // whitespace rows → the best-effort text parser.
+      postJson(raw.indexOf(",")>=0 || raw.indexOf("\t")>=0 ? { csv: raw } : { text: raw });
     });
     $("fileInput").addEventListener("change", function(e){ if(e.target.files && e.target.files[0]) uploadFile(e.target.files[0]); });
     var drop = $("drop");
     ["dragenter","dragover"].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add("drag"); }); });
     ["dragleave","drop"].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove("drag"); }); });
     drop.addEventListener("drop", function(e){ if(e.dataTransfer.files && e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]); });
+
+    // ---- Capital horizon planner (independent of holdings) ----
+    var HORIZONS = [1,2,3,5,10], selHz = 5;
+    function renderHorizonBtns(){
+      $("horizonBtns").innerHTML = HORIZONS.map(function(y){
+        var on = (y===selHz);
+        return '<button data-y="'+y+'" class="hzb rounded-md px-3 py-1.5 text-[12px] font-semibold '+(on?"bg-sky-700 text-white":"bg-slate-800 text-slate-300 hover:bg-slate-700")+'">'+y+'y</button>';
+      }).join("");
+      Array.prototype.forEach.call(document.querySelectorAll(".hzb"), function(b){
+        b.addEventListener("click", function(){ selHz = parseInt(b.getAttribute("data-y"),10); renderHorizonBtns(); runPlan(); });
+      });
+    }
+    function runPlan(){
+      var cap = Math.max(10000, num(parseFloat($("planCapital").value), 200000));
+      $("planStatus").textContent = "Scanning the universe… (the first run today can take ~10s)";
+      $("capitalTable").classList.add("hidden");
+      $("capitalTiles").innerHTML = ""; $("capitalBody").innerHTML = "";
+      fetch("/api/capital_plan?years="+selHz+"&capital="+Math.round(cap))
+        .then(function(r){ return r.json(); }).then(renderPlan)
+        .catch(function(e){ $("planStatus").textContent = "Error: "+e; });
+    }
+    function renderPlan(d){
+      $("planStatus").textContent = "";
+      var ct = $("capitalTiles"); ct.innerHTML = "";
+      tile(ct, "Horizon", d.horizon_years+" years", "buy &amp; hold");
+      tile(ct, "To invest", rupee(d.capital));
+      tile(ct, "Deployed", rupee(d.deployed), Math.round(d.deployed/Math.max(d.capital,1)*100)+"% · ₹"+intFmt(d.leftover_cash)+" left over");
+      tile(ct, "Names", intFmt((d.picks||[]).length), "from "+intFmt(d.universe_scanned)+" that passed the filters");
+      $("capitalMethod").textContent = d.methodology || "";
+      $("capitalDisclaimer").textContent = d.disclaimer || "";
+      var picks = d.picks || [];
+      if(!picks.length){
+        $("capitalBody").innerHTML = '<tr><td colspan="8" class="text-slate-500 p-3">No names cleared the quality/liquidity filters for this horizon today.</td></tr>';
+        $("capitalTable").classList.remove("hidden"); return;
+      }
+      $("capitalBody").innerHTML = picks.map(function(p){
+        var cagr = fixed(p.cagr_pct,0)+"%"+(p.high_cagr_flag?' <span class="text-amber-400" title="unusually high — unlikely to repeat">⚠</span>':"");
+        var edge = p.edge_backed ? '<span class="badge bg-emerald-900/60 text-emerald-300" title="'+esc(p.edge_note)+'">tested edge ✓</span>' : '';
+        var note = esc(p.note||"");
+        return '<tr>'+
+          '<td class="font-semibold text-slate-200">'+esc(p.symbol)+'<div class="text-[10px] text-slate-500">'+esc(p.sector)+' · ₹'+intFmt(p.mcap_cr)+'cr</div></td>'+
+          '<td class="num text-slate-200">'+rupee(p.alloc_rupees)+'<div class="text-[10px] text-slate-500">'+fixed(p.weight_pct,0)+'% of plan</div></td>'+
+          '<td class="num text-slate-300">'+intFmt(p.shares)+'<div class="text-[10px] text-slate-500">@ ₹'+intFmt(p.last)+'</div></td>'+
+          '<td class="num text-emerald-300">'+cagr+'</td>'+
+          '<td class="num text-red-300">'+fixed(p.max_dd_pct,0)+'%</td>'+
+          '<td class="num '+(d.rs_available===false?"text-slate-500":(num(p.rs_vs_nifty_pct)>=0?"text-emerald-300":"text-red-300"))+'">'+(d.rs_available===false?"—":((num(p.rs_vs_nifty_pct)>=0?"+":"")+fixed(p.rs_vs_nifty_pct,0)+"%"))+'</td>'+
+          '<td class="num text-slate-300">'+fixed(p.consistency_pct,0)+'%</td>'+
+          '<td class="text-[11px] text-slate-400">'+edge+(note?' <span class="text-amber-400/80">'+note+'</span>':'')+'</td>'+
+        '</tr>';
+      }).join("");
+      $("capitalTable").classList.remove("hidden");
+    }
+    renderHorizonBtns();
+    $("planRun").addEventListener("click", runPlan);
   </script>
 </body>
 </html>

@@ -707,6 +707,12 @@ pub struct Holding {
     pub avg_cost: f64,
     pub broker: String,
     pub sector: Option<String>,
+    /// A statement-provided last/closing price (an EOD mark from the broker
+    /// report). When present it is used as the mark, so off-archive names
+    /// (recent demergers/IPOs) still value correctly instead of falling back to
+    /// cost. `None` ⇒ the mark comes from the local archive's last close.
+    #[serde(default)]
+    pub last_price: Option<f64>,
 }
 
 /// Raw inbound holding from a POST body / CSV / pasted text.
@@ -719,6 +725,14 @@ pub struct HoldingInput {
     pub broker: Option<String>,
     #[serde(default)]
     pub sector: Option<String>,
+    /// ISIN from a broker statement, if present — the most reliable key for
+    /// resolving the row to an NSE trading symbol.
+    #[serde(default)]
+    pub isin: Option<String>,
+    /// Closing/last price from a broker statement, if present — carried through
+    /// as the holding's mark.
+    #[serde(default)]
+    pub last_price: Option<f64>,
 }
 
 /// Per-holding analysis row. `flag`/`flag_reason` state a WHY (concentration /
@@ -783,7 +797,33 @@ pub struct PortfolioAnalysis {
     pub top5_weight_pct: f64,
     pub hhi: f64,
     pub hhi_label: String,
+    /// Weight-based effective names (`1/Σwᵢ²`) — diversification by *position size*
+    /// only. It does NOT see that two names move together, so it overstates real
+    /// diversification. Kept as honest context next to `corr_effective_bets`.
     pub effective_names: f64,
+    /// Correlation-based effective number of independent bets over the names that
+    /// have enough daily history: the participation ratio `N²/Σᵢⱼρᵢⱼ²` of the
+    /// daily-return correlation matrix. `None` when fewer than two names have
+    /// `≥ CORR_MIN_SESSIONS` aligned sessions. This is the honest "real bets".
+    #[serde(default)]
+    pub corr_effective_bets: Option<f64>,
+    /// Mean off-diagonal daily-return correlation across the names used (context
+    /// for the effective-bets number; higher ⇒ more overlap ⇒ fewer real bets).
+    #[serde(default)]
+    pub corr_avg_pairwise: Option<f64>,
+    /// How many names entered the correlation estimate (had enough history).
+    #[serde(default)]
+    pub corr_names_used: usize,
+    /// Names excluded from the correlation estimate (no/short daily archive
+    /// history). Surfaced so the figure is never silently partial.
+    #[serde(default)]
+    pub corr_names_dropped: Vec<String>,
+    /// Aligned common sessions the correlation matrix was estimated over.
+    #[serde(default)]
+    pub corr_sessions: usize,
+    /// Honest one-line statement of how the correlation figure was derived.
+    #[serde(default)]
+    pub corr_basis: String,
     pub by_sector: Vec<ExposureRow>,
     pub by_broker: Vec<ExposureRow>,
     pub clusters: Vec<CorrelationCluster>,
@@ -840,6 +880,8 @@ pub struct RebalanceSell {
     pub symbol: String,
     pub action: String,
     pub frac: f64,
+    /// Whole shares to sell to realise `frac` of the position (descriptive).
+    pub shares: i64,
     pub cash: f64,
     pub realized_gain: f64,
     pub reason: String,
@@ -894,6 +936,58 @@ pub struct RotationAnalysis {
     pub disclaimer: String,
     #[serde(default)]
     pub built_ist: String,
+}
+
+// ---------------------------------------------------------------------------
+// Capital horizon planner — "₹X for N years → which names fit"
+// Every figure is HISTORICAL/descriptive, never a forecast. Display-only.
+// ---------------------------------------------------------------------------
+
+/// One screened candidate for the capital plan, with its backtest-grounded
+/// evidence and a suggested (illustrative) ₹ allocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapitalPick {
+    pub symbol: String,
+    pub sector: String,
+    pub last: f64,
+    pub alloc_rupees: f64,
+    pub shares: i64,
+    pub weight_pct: f64,
+    /// Trailing annualised return over the horizon — PAST performance, not a forecast.
+    pub cagr_pct: f64,
+    pub max_dd_pct: f64,
+    pub rs_vs_nifty_pct: f64,
+    pub consistency_pct: f64,
+    pub mcap_cr: f64,
+    pub edge_backed: bool,
+    pub edge_note: String,
+    /// Trailing CAGR is unusually high (likely not repeatable) — flagged honestly.
+    pub high_cagr_flag: bool,
+    pub note: String,
+}
+
+/// A horizon-aware capital deployment screen. NOT advice, NOT a forecast, never
+/// an order — candidates + evidence + an illustrative allocation; the user decides.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapitalPlan {
+    pub horizon_years: u32,
+    pub capital: f64,
+    pub picks: Vec<CapitalPick>,
+    pub deployed: f64,
+    pub leftover_cash: f64,
+    pub universe_scanned: usize,
+    /// False when NIFTY history was unavailable, so relative-strength was omitted
+    /// (the per-pick `rs_vs_nifty_pct` are all 0 and must render as "—", not "+0%").
+    #[serde(default = "default_true")]
+    pub rs_available: bool,
+    pub methodology: String,
+    pub disclaimer: String,
+    #[serde(default)]
+    pub built_ist: String,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// NIFTY regime + market breadth context (display-only; never changes a score).

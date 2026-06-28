@@ -201,6 +201,24 @@ pub const DRAWDOWN_FREEZE_PCT: f64 = 0.02;
 /// ATR multiple for the SEBI-compliance limit buffer: `limit = LTP ± ATR×0.1`.
 pub const STAGING_LIMIT_ATR_MULT: f64 = 0.1;
 
+// ---------------------------------------------------------------------------
+// Portfolio correlation (the "real independent bets" measure on /portfolio, /desk)
+// ---------------------------------------------------------------------------
+
+/// Max common daily sessions used to estimate the holdings return-correlation
+/// matrix (≈2 trading years). The actual window is `min(this, common overlap)`;
+/// a recently-listed name naturally caps it. Reported as `corr_sessions`.
+pub const CORR_LOOKBACK_SESSIONS: usize = 504;
+
+/// Below this many aligned sessions the correlation estimate is too thin to
+/// trust, so the correlation block is omitted (the page falls back to the
+/// honest weight-based figure rather than print a noisy number).
+pub const CORR_MIN_SESSIONS: usize = 60;
+
+/// Daily-return correlation at/above which two names are linked into the same
+/// "moves together" cluster (single-linkage). 0.60 ≈ a clearly shared driver.
+pub const CORR_CLUSTER_THRESHOLD: f64 = 0.60;
+
 /// Live UI-controlled settings. Always clamped to safe bounds on construction.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct UserSettings {

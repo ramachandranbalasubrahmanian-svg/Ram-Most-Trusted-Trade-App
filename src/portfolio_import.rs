@@ -1,10 +1,12 @@
-//! Portfolio file import — turn an uploaded CSV / Excel / PDF into `HoldingInput`
-//! rows for the Portfolio page.
+//! Portfolio file import — turn an uploaded Excel / CSV (or pasted rows) into
+//! `HoldingInput` rows for the Portfolio page.
 //!
 //! Display-only ingest of the user's OWN holdings; never places an order. Best-effort
 //! and conservative: malformed rows are collected into `warnings`, never fabricated.
-//! Excel/CSV are reliable (broker exports); PDF is best-effort text extraction (broker
-//! PDFs vary wildly — the user is told to verify/edit the parsed rows).
+//! Excel/CSV are reliable (broker exports). The parser detects the header row, so a
+//! broker statement with preamble rows above the table (name / client code / summary)
+//! is read correctly. PDF import was removed — broker PDFs vary too wildly to parse
+//! reliably; users export an Excel/CSV or paste the rows instead.
 
 use crate::holdings_analytics::{parse_csv, parse_text};
 use crate::types::HoldingInput;
@@ -22,9 +24,15 @@ pub fn import_bytes(filename: &str, bytes: &[u8]) -> Import {
         return import_excel(bytes);
     }
     if lower.ends_with(".pdf") {
-        return import_pdf(bytes);
+        return Import {
+            holdings: Vec::new(),
+            warnings: vec![
+                "PDF import isn't supported — broker PDFs vary too much to parse reliably. Export an Excel (.xlsx) or CSV from your broker, or paste the rows below.".to_string(),
+            ],
+            source: "unsupported".into(),
+        };
     }
-    // Default: CSV (then best-effort text).
+    // Default: CSV/TSV (header auto-detected); then best-effort whitespace text.
     let (h, w) = parse_csv(bytes);
     if !h.is_empty() {
         return Import { holdings: h, warnings: w, source: "csv".into() };
@@ -32,7 +40,7 @@ pub fn import_bytes(filename: &str, bytes: &[u8]) -> Import {
     let text = String::from_utf8_lossy(bytes);
     let (h2, mut w2) = parse_text(&text);
     if h2.is_empty() {
-        w2.push("Could not read this file as CSV/text. Try an Excel (.xlsx) or CSV export.".into());
+        w2.push("Could not read this file. Upload an Excel (.xlsx) or CSV export, or paste the rows.".into());
     }
     Import { holdings: h2, warnings: w2, source: "csv".into() }
 }
@@ -87,27 +95,9 @@ fn import_excel(bytes: &[u8]) -> Import {
     let (h, w) = parse_csv(csv_text.as_bytes());
     warnings.extend(w);
     if h.is_empty() {
-        warnings.push("no holdings rows recognised — the sheet needs columns for symbol, quantity and average price".into());
+        warnings.push("no holdings rows recognised — the sheet needs columns for stock/symbol, quantity and average price".into());
     }
     Import { holdings: h, warnings, source: "excel".into() }
-}
-
-fn import_pdf(bytes: &[u8]) -> Import {
-    let mut warnings = vec!["PDF parsing is best-effort — broker PDFs vary, so verify the rows below and edit if needed. For the most reliable import, upload an Excel (.xlsx) or CSV export from your broker.".to_string()];
-    match pdf_extract::extract_text_from_mem(bytes) {
-        Ok(text) => {
-            let (h, w) = parse_text(&text);
-            warnings.extend(w);
-            if h.is_empty() {
-                warnings.push("couldn't recognise any holdings rows in the PDF text — please upload an Excel/CSV export instead, or paste the rows.".into());
-            }
-            Import { holdings: h, warnings, source: "pdf".into() }
-        }
-        Err(e) => {
-            warnings.push(format!("could not extract text from the PDF: {e}"));
-            Import { holdings: vec![], warnings, source: "pdf".into() }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -132,10 +122,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_pdf_warns_not_panics() {
+    fn pdf_is_unsupported_with_guidance() {
         let imp = import_bytes("statement.pdf", b"%PDF-1.4 not a real pdf");
-        assert_eq!(imp.source, "pdf");
-        assert!(!imp.warnings.is_empty());
+        assert_eq!(imp.source, "unsupported");
+        assert!(imp.warnings.iter().any(|w| w.to_lowercase().contains("pdf")));
         assert!(imp.holdings.is_empty());
     }
 }

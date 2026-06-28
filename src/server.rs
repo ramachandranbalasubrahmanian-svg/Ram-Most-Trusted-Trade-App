@@ -92,6 +92,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         // --- Portfolio Analytics (dedicated page: upload PDF/Excel/CSV) ---
         .route("/portfolio", get(portfolio_page_handler))
         .route("/api/portfolio/upload", post(portfolio_upload_handler))
+        .route("/api/capital_plan", get(capital_plan_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
@@ -602,22 +603,127 @@ struct HoldingsResponse {
     warnings: Vec<String>,
 }
 
+/// Where a holdings request's rows come from: a resolved preset (the owner's book
+/// / sample, already trading symbols) or raw rows that still need company-name →
+/// symbol resolution.
+enum HoldingSource {
+    Preset(Vec<crate::types::Holding>),
+    Raw(Vec<HoldingInput>),
+}
+
+/// Shared holdings pipeline (used by both `/api/holdings` and the upload path):
+/// resolve names → NSE symbols, merge duplicate symbols, mark (statement close
+/// preferred, archive close otherwise), analyze, attach the correlation read, and
+/// build the rotation/growth layer. Display-only throughout; never an order.
+fn build_holdings_response(
+    root: &std::path::Path,
+    edges: &crate::strategy_engine::EdgeIndex,
+    source: HoldingSource,
+    now: String,
+    mut warnings: Vec<String>,
+) -> HoldingsResponse {
+    let conn = crate::storage_kernel::open_conn().ok();
+
+    // 1) Resolve (raw only) + merge duplicate symbols into one row each.
+    let holdings: Vec<crate::types::Holding> = match source {
+        HoldingSource::Preset(hs) => crate::holdings_analytics::merge_holdings(hs),
+        HoldingSource::Raw(inputs) => {
+            let resolver = conn.as_ref().map(|c| crate::symbol_resolver::SymbolResolver::load(c, root));
+            let resolved: Vec<crate::types::Holding> = inputs
+                .iter()
+                .map(|inp| {
+                    let mut h = crate::holdings_analytics::normalize(inp);
+                    if let Some(res) = &resolver {
+                        let r = res.resolve(&h.symbol, inp.isin.as_deref());
+                        if !r.matched {
+                            warnings.push(format!(
+                                "couldn't map \"{}\" to an NSE symbol — shown as-is; trend/edge analysis may be unavailable for it",
+                                h.symbol
+                            ));
+                        } else if r.how == "fuzzy" {
+                            warnings.push(format!(
+                                "mapped \"{}\" to {} by name similarity — please verify it's the right stock",
+                                h.symbol, r.symbol
+                            ));
+                        }
+                        h.symbol = r.symbol;
+                        if h.sector.is_none() {
+                            h.sector = r.sector;
+                        }
+                    }
+                    h
+                })
+                .collect();
+            crate::holdings_analytics::merge_holdings(resolved)
+        }
+    };
+    if holdings.is_empty() {
+        warnings.push("No holdings were recognised — upload an Excel/CSV export or paste the rows.".to_string());
+    }
+
+    // 2) Marks: a statement close (carried on the holding) is used inside analyze;
+    //    only fetch the archive close for names that didn't bring one.
+    let mut marks: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    if let Some(ref conn) = conn {
+        for h in &holdings {
+            if h.last_price.is_none() {
+                if let Some(px) = crate::holdings_analytics::latest_daily_close(conn, root, &h.symbol) {
+                    marks.insert(h.symbol.clone(), px);
+                }
+            }
+        }
+    }
+
+    let mut analysis = crate::holdings_analytics::analyze(&holdings, &marks, edges, now.clone());
+    // Real "independent bets": upgrade the weight-only figure with a
+    // return-correlation read over the names that have archive history.
+    if let Some(ref conn) = conn {
+        let syms: Vec<String> = analysis.holdings.iter().map(|h| h.symbol.clone()).collect();
+        if let Some(ctx) = crate::holdings_analytics::compute_correlation(
+            conn,
+            root,
+            &syms,
+            crate::config::CORR_LOOKBACK_SESSIONS,
+            crate::config::CORR_MIN_SESSIONS,
+        ) {
+            crate::holdings_analytics::attach_correlation(&mut analysis, &ctx);
+        }
+    }
+    // If correlation couldn't be computed at all (< 2 names with history), still
+    // surface which holdings lack daily history — never a silently-partial read.
+    if analysis.corr_effective_bets.is_none() && analysis.corr_names_dropped.is_empty() {
+        let dropped: Vec<String> = analysis
+            .holdings
+            .iter()
+            .filter(|h| !crate::config::parquet_path(root, &h.symbol, crate::config::Timeframe::Daily).exists())
+            .map(|h| h.symbol.clone())
+            .collect();
+        analysis.corr_names_dropped = dropped;
+    }
+    // Rotation & growth (display-only): per-holding trend/relative-strength read,
+    // edge-backed uptrend buy candidates, an illustrative rebalance + scenarios.
+    let rotation = match conn {
+        Some(ref c) => crate::portfolio_rotation::build(c, root, &analysis.holdings, edges, now),
+        None => crate::portfolio_rotation::empty(now),
+    };
+    HoldingsResponse { analysis, rotation, warnings }
+}
+
 /// `POST /api/holdings` — analyse the user's REAL holdings (manual JSON, CSV,
-/// pasted text, or the sample set) into their risk picture. Display-only: marks
-/// are local EOD closes (flagged not-live), nothing is an order, no advice. The
-/// heavy DuckDB mark reads run on `spawn_blocking`.
+/// pasted rows, or the sample set) into their risk picture. Display-only: marks
+/// are local EOD / statement closes (flagged not-live), nothing is an order, no
+/// advice. The heavy DuckDB reads run on `spawn_blocking`.
 async fn holdings_handler(State(state): State<AppState>, Json(req): Json<HoldingsRequest>) -> Response {
     let root = state.root.clone();
     let edges = state.edge_index.clone();
     let now = now_ist_string();
 
     let resp = tokio::task::spawn_blocking(move || {
-        // Ingest from whichever source(s) the client supplied.
         let mut warnings: Vec<String> = Vec::new();
-        let holdings: Vec<crate::types::Holding> = if req.use_mine {
-            crate::holdings_analytics::my_portfolio()
+        let source = if req.use_mine {
+            HoldingSource::Preset(crate::holdings_analytics::my_portfolio())
         } else if req.use_sample {
-            crate::holdings_analytics::sample_holdings()
+            HoldingSource::Preset(crate::holdings_analytics::sample_holdings())
         } else {
             let mut inputs: Vec<HoldingInput> = Vec::new();
             if let Some(csv) = req.csv.as_deref() {
@@ -631,29 +737,9 @@ async fn holdings_handler(State(state): State<AppState>, Json(req): Json<Holding
                 warnings.extend(w);
             }
             inputs.extend(req.holdings);
-            inputs.iter().map(crate::holdings_analytics::normalize).collect()
+            HoldingSource::Raw(inputs)
         };
-
-        // EOD marks from the local archive (read-only; flagged not-live). Keep the
-        // connection open to also drive the rotation layer (trend / relative strength).
-        let conn = crate::storage_kernel::open_conn().ok();
-        let mut marks: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-        if let Some(ref conn) = conn {
-            for h in &holdings {
-                if let Some(px) = crate::holdings_analytics::latest_daily_close(conn, &root, &h.symbol) {
-                    marks.insert(h.symbol.clone(), px);
-                }
-            }
-        }
-
-        let analysis = crate::holdings_analytics::analyze(&holdings, &marks, &edges, now.clone());
-        // Rotation & growth (display-only): per-holding trend/relative-strength read,
-        // edge-backed uptrend buy candidates, an illustrative rebalance + scenarios.
-        let rotation = match conn {
-            Some(ref c) => crate::portfolio_rotation::build(c, &root, &analysis.holdings, &edges, now),
-            None => crate::portfolio_rotation::empty(now),
-        };
-        HoldingsResponse { analysis, rotation, warnings }
+        build_holdings_response(&root, &edges, source, now, warnings)
     })
     .await;
 
@@ -663,8 +749,8 @@ async fn holdings_handler(State(state): State<AppState>, Json(req): Json<Holding
     }
 }
 
-/// `GET /portfolio` — the dedicated Portfolio Analytics page (upload PDF/Excel/CSV,
-/// or one-click your own book). Read at request time so UI edits show on refresh.
+/// `GET /portfolio` — the dedicated Portfolio Analytics page (upload Excel/CSV or
+/// paste rows, or one-click your own book). Read at request time so UI edits show.
 async fn portfolio_page_handler(State(state): State<AppState>) -> Response {
     let path = state.static_dir.join("portfolio.html");
     match tokio::fs::read_to_string(&path).await {
@@ -673,9 +759,9 @@ async fn portfolio_page_handler(State(state): State<AppState>) -> Response {
     }
 }
 
-/// `POST /api/portfolio/upload` — a multipart file (PDF / Excel / CSV) → parsed
-/// holdings → the full risk picture + rotation/growth. Display-only ingest of the
-/// user's OWN holdings; never places, modifies, or cancels an order.
+/// `POST /api/portfolio/upload` — a multipart file (Excel / CSV) → parsed holdings
+/// → the full risk picture + rotation/growth. Names are resolved company-name →
+/// NSE symbol. Display-only ingest of the user's OWN holdings; never an order.
 async fn portfolio_upload_handler(State(state): State<AppState>, mut multipart: Multipart) -> Response {
     let root = state.root.clone();
     let edges = state.edge_index.clone();
@@ -701,33 +787,43 @@ async fn portfolio_upload_handler(State(state): State<AppState>, mut multipart: 
 
     let resp = tokio::task::spawn_blocking(move || {
         let imp = crate::portfolio_import::import_bytes(&filename, &bytes);
-        let mut warnings = imp.warnings;
-        let holdings: Vec<crate::types::Holding> =
-            imp.holdings.iter().map(crate::holdings_analytics::normalize).collect();
-        if holdings.is_empty() {
-            warnings.push("No holdings were recognised — upload an Excel/CSV export or paste the rows.".to_string());
-        }
-        let conn = crate::storage_kernel::open_conn().ok();
-        let mut marks: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-        if let Some(ref conn) = conn {
-            for h in &holdings {
-                if let Some(px) = crate::holdings_analytics::latest_daily_close(conn, &root, &h.symbol) {
-                    marks.insert(h.symbol.clone(), px);
-                }
-            }
-        }
-        let analysis = crate::holdings_analytics::analyze(&holdings, &marks, &edges, now.clone());
-        let rotation = match conn {
-            Some(ref c) => crate::portfolio_rotation::build(c, &root, &analysis.holdings, &edges, now),
-            None => crate::portfolio_rotation::empty(now),
-        };
-        HoldingsResponse { analysis, rotation, warnings }
+        build_holdings_response(&root, &edges, HoldingSource::Raw(imp.holdings), now, imp.warnings)
     })
     .await;
 
     match resp {
         Ok(r) => Json(r).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("upload task panicked: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct CapitalPlanQuery {
+    #[serde(default)]
+    years: Option<u32>,
+    #[serde(default)]
+    capital: Option<f64>,
+}
+
+/// `GET /api/capital_plan?years=5&capital=200000` — horizon-aware screen of the
+/// broad universe into an illustrative ₹ allocation. Display-only, historical
+/// evidence only, never a forecast or an order. Heavy DuckDB reads on `spawn_blocking`.
+async fn capital_plan_handler(State(state): State<AppState>, Query(q): Query<CapitalPlanQuery>) -> Response {
+    let root = state.root.clone();
+    let edges = state.edge_index.clone();
+    let now = now_ist_string();
+    let years = q.years.unwrap_or(5);
+    let capital = q.capital.unwrap_or(200_000.0).clamp(10_000.0, 10_000_000.0);
+
+    let resp = tokio::task::spawn_blocking(move || match crate::storage_kernel::open_conn().ok() {
+        Some(conn) => crate::capital_planner::build(&conn, &root, &edges, capital, years, now),
+        None => crate::capital_planner::empty(capital, years, now),
+    })
+    .await;
+
+    match resp {
+        Ok(plan) => Json(plan).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("capital plan task panicked: {e}")).into_response(),
     }
 }
 

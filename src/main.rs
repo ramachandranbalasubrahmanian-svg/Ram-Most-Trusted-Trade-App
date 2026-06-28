@@ -12,6 +12,7 @@
 
 mod analytics_kernel;
 mod cache;
+mod capital_planner;
 mod circuit_breaker;
 mod config;
 mod costs;
@@ -32,6 +33,7 @@ mod storage_kernel;
 mod strategy_engine;
 mod suggestion_engine;
 mod swing_analyzer;
+mod symbol_resolver;
 mod types;
 mod validation;
 

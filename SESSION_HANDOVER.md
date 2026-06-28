@@ -2,17 +2,48 @@
 
 ## ▶ RESUME (paste this into a new session)
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
-> `SESSION_HANDOVER.md`, and continue on branch `feat/latency-warmcache-and-robust-backtester`.**
+> `SESSION_HANDOVER.md`, and continue on `main`.**
 
 Then run the resume command:
 ```bash
 . "$HOME/.cargo/env"
 cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
-git checkout feat/latency-warmcache-and-robust-backtester   # this session's work (pushed)
+git checkout main && git pull origin main                   # all work is on main
 pkill -f "ram_istp serve"; pkill -f "ram_istp live"         # stop any leftover instance (single-instance!)
-cargo build && cargo test                                   # 129 tests should pass
+cargo build && cargo test                                   # 153 tests should pass
 ./target/debug/ram_istp serve 30min                         # dashboards at http://127.0.0.1:8787
+#   open http://127.0.0.1:8787/portfolio  → upload xlsx/CSV, or "Load my portfolio", or the ₹-horizon planner
 ```
+
+## Latest session — Portfolio v2 (import + name resolver + capital horizon planner)
+Built on the /portfolio + /desk dashboards; all display-only, honesty-first; **153 tests pass**. Verified end-to-end
+against the owner's real 26-06-2026 Groww statement (12 holdings → ₹25,96,549, matches the statement exactly).
+1. **Import overhaul** (`holdings_analytics::parse_csv`/`parse_holdings_bytes`/`header_map`/`find_col`/`sniff_delimiter`,
+   `portfolio_import`): **PDF removed** (`pdf-extract` dep gone). A header-DETECTING CSV/TSV parser skips a statement's
+   preamble rows and reads company name + ISIN + Quantity + Average buy price + Buy value + Closing price; derives avg
+   cost from Buy value (exact, so totals reconcile); captures Closing price as the mark (off-archive names value
+   correctly). Column matching is **exact-first then contains** (no loose-substring "Holding Period"→qty bugs). Paste
+   box accepts tab- or comma-separated rows.
+2. **Symbol resolver** (NEW `symbol_resolver.rs`): company-name → NSE symbol via `symbol_metadata.parquet` (normalized
+   + abbreviation-expanded exact match, then a fuzzy token match that REFUSES to guess when the best two candidates are
+   within a margin — e.g. "UNION BANK", bare "TATA" → unmatched-and-flagged, never the wrong stock). Fuzzy resolutions
+   are surfaced as a "verify" warning. `HUDCO`, `TMCV` (post-demerger Tata Motors Ltd), etc. resolve cleanly.
+3. **Merge + mark** (`holdings_analytics::merge_holdings`; `server::build_holdings_response` shared by `/api/holdings` +
+   upload): duplicate symbols merged (sum qty, qty-weighted avg) BEFORE analyze — the root fix for the dup-symbol
+   accounting findings. analyze prefers a statement close, else archive close, else cost.
+4. **Capital horizon planner** (NEW `capital_planner.rs`; `GET /api/capital_plan?years=&capital=`; /portfolio UI
+   section): scans the broad universe (`nse_daily_all.parquet` adjusted closes), horizon-weighted score (CAGR / RS-vs-
+   NIFTY / trend / max-DD / full-history consistency / size) with liquidity + market-cap + consistency + ≥2y-history
+   floors so no micro-cap pumps; CAGR winsorized in scoring, high-CAGR flagged ⚠; inverse-vol allocation with a proper
+   **water-filling** 25%/name cap (≤2/sector, top-8) + greedy top-up to ~100% deploy; edge-map names tagged ✓. Cold
+   ~12s, then **date-keyed cache → ~0.2s**. Framed strictly as HISTORICAL evidence (survivorship-bias disclosed),
+   never a forecast/recommendation. Sample 10y: SOLARINDS/ICICIBANK/BAJFINANCE/TITAN/PIDILITE.
+5. Prior correlation-ENB review fixes folded in (dup-symbol merge, /portfolio fallback no longer overclaims "overlap",
+   /desk surfaces dropped names unconditionally, finite-guards). Two adversarial review passes run; **all confirmed
+   findings (3 + 14) fixed and unit-tested.**
+**Known follow-ups:** ISIN is captured but not used for matching (metadata `isin` col is unusable DOUBLE — name match
+covers all real cases); planner survivorship bias is disclosed not corrected; a "download /portfolio as PDF" export is
+still open.
 
 ---
 
@@ -88,7 +119,9 @@ Tracing now works: prefix with `RUST_LOG=info` to see connect/WS/refresh logs.
 | `suggestion_engine.rs` | per-stock deep-dive (parallelized across intervals) + scanner (DSR-gated) + Capital-Fit + regime |
 | `holdings_analytics.rs` | real external-portfolio risk picture: HHI/heat/clusters/flags/edge-xref/Kelly + `my_portfolio()` preset (display-only, firewalled) |
 | `portfolio_rotation.rs` | **NEW** rotation & growth: trend + relative-strength keep/trim/rotate, edge-backed uptrend buy screen, illustrative rebalance (LTCG + before/after), growth scenarios (display-only, firewalled) |
-| `portfolio_import.rs` | **NEW** upload ingest: CSV/Excel (`calamine`) reliable + PDF (`pdf-extract`) best-effort → `HoldingInput` rows |
+| `portfolio_import.rs` | upload ingest: Excel (`calamine`) + CSV/TSV → `HoldingInput` rows. **PDF removed.** Header-detecting parser lives in `holdings_analytics::parse_holdings_bytes` |
+| `symbol_resolver.rs` | **NEW** company-name → NSE symbol via `symbol_metadata.parquet` (exact normalized + margin-guarded fuzzy; refuses ambiguous; firewalled display-only) |
+| `capital_planner.rs` | **NEW** ₹-for-N-years horizon screen over `nse_daily_all.parquet`; horizon-weighted backtest-grounded score + floors + water-filling allocation; date-keyed cache; HISTORICAL evidence only, never a forecast |
 | `kite_instruments.rs` | **NEW** public Kite instruments dump → NSE symbol↔token map, cached by IST date |
 | `costs.rs` | itemized Indian intraday charges + `backtest_roundtrip_pct_scaled` (slippage band) |
 | `risk_manager.rs` | sizing + projected P&L + risk meter + 15:15 square-off ALERT |

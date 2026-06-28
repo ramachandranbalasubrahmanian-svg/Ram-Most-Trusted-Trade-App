@@ -48,7 +48,10 @@ const BUY_CANDIDATES_MAX: usize = 12;
 const REDEPLOY_NAMES: usize = 5;
 
 fn is_demerger_distorted(sym: &str) -> bool {
-    matches!(sym, "TMPV" | "TMLCV" | "TATAMOTORS")
+    // The 2025 Tata Motors demerger split the price history across these tickers
+    // (TMCV = the commercial-vehicle entity, TMPV = passenger vehicles), so their
+    // trend signal is an artifact — never auto-flag them for rotation.
+    matches!(sym, "TMPV" | "TMLCV" | "TMCV" | "TATAMOTORS")
 }
 
 /// Best-effort theme tag from a (user-provided) sector label, for the before/after
@@ -288,6 +291,7 @@ fn screen_buy_candidates(
 
 struct PlanRow {
     symbol: String,
+    qty: f64,
     value: f64,
     cost: f64,
     vs200: Option<f64>,
@@ -340,6 +344,7 @@ fn build_plan(rows: &[PlanRow], candidates: &[BuyCandidate]) -> Option<Rebalance
             symbol: r.symbol.clone(),
             action: r.action.clone(),
             frac,
+            shares: (r.qty * frac).round() as i64,
             cash: r0(r.value * frac),
             realized_gain: r0((r.value - r.cost) * frac),
             reason,
@@ -452,6 +457,7 @@ pub fn build(
         });
         plan_rows.push(PlanRow {
             symbol: h.symbol.clone(),
+            qty: h.qty,
             value: h.market_value,
             cost: h.cost_basis,
             vs200: sig.map(|s| s.vs200),
@@ -519,9 +525,9 @@ mod tests {
     #[test]
     fn plan_math_tax_and_before_after() {
         let rows = vec![
-            PlanRow { symbol: "RVNL".into(), value: 180_000.0, cost: 130_000.0, vs200: Some(-21.0), sector: "PSU".into(), action: "Rotate out".into() },
-            PlanRow { symbol: "MOON".into(), value: 350_000.0, cost: 195_000.0, vs200: Some(-5.0), sector: "Tech".into(), action: "Trim".into() },
-            PlanRow { symbol: "BANK".into(), value: 600_000.0, cost: 460_000.0, vs200: Some(5.0), sector: "Bank".into(), action: "Leader".into() },
+            PlanRow { symbol: "RVNL".into(), qty: 1000.0, value: 180_000.0, cost: 130_000.0, vs200: Some(-21.0), sector: "PSU".into(), action: "Rotate out".into() },
+            PlanRow { symbol: "MOON".into(), qty: 500.0, value: 350_000.0, cost: 195_000.0, vs200: Some(-5.0), sector: "Tech".into(), action: "Trim".into() },
+            PlanRow { symbol: "BANK".into(), qty: 200.0, value: 600_000.0, cost: 460_000.0, vs200: Some(5.0), sector: "Bank".into(), action: "Leader".into() },
         ];
         let cands = vec![BuyCandidate {
             symbol: "X".into(), last: 100.0, vs_dma200: 5.0, rs_6m: 10.0, rs_12m: 20.0, off_high_pct: -3.0,
@@ -543,8 +549,8 @@ mod tests {
     #[test]
     fn no_laggards_means_no_plan() {
         let rows = vec![
-            PlanRow { symbol: "A".into(), value: 100_000.0, cost: 80_000.0, vs200: Some(5.0), sector: "Bank".into(), action: "Leader".into() },
-            PlanRow { symbol: "B".into(), value: 100_000.0, cost: 90_000.0, vs200: Some(2.0), sector: "IT".into(), action: "Hold".into() },
+            PlanRow { symbol: "A".into(), qty: 100.0, value: 100_000.0, cost: 80_000.0, vs200: Some(5.0), sector: "Bank".into(), action: "Leader".into() },
+            PlanRow { symbol: "B".into(), qty: 100.0, value: 100_000.0, cost: 90_000.0, vs200: Some(2.0), sector: "IT".into(), action: "Hold".into() },
         ];
         assert!(build_plan(&rows, &[]).is_none());
     }

@@ -1248,7 +1248,7 @@
         tile("Invested", rupee(num(a.total_cost, 0))) +
         tile("Value", rupee(num(a.total_value, 0))) +
         tile("Unrealized", signedRupee(upnl), pct1(a.total_unrealized_pct) + "%", moneyClass(upnl)) +
-        tile("Concentration", esc(str(a.hhi_label, "—")), "~" + fixed(a.effective_names, 1) + " eff. names", num(a.hhi, 0) >= 2500 ? "text-amber-400" : "text-slate-200") +
+        tile("Concentration", esc(str(a.hhi_label, "—")), (a.corr_effective_bets != null ? "~" + fixed(a.corr_effective_bets, 1) + " real bets · " + fixed(a.effective_names, 1) + " by size" : "~" + fixed(a.effective_names, 1) + " eff. names (size)"), num(a.hhi, 0) >= 2500 ? "text-amber-400" : "text-slate-200") +
         tile("Top-3 weight", fixed(a.top3_weight_pct, 0) + "%") +
         tile("Edge coverage", intFmt(a.names_with_edge) + "/" + intFmt(a.names_total), "names with a backtested edge");
 
@@ -1280,11 +1280,20 @@
       $("hldBroker").innerHTML = exposureBars(a.by_broker);
 
       var clusters = Array.isArray(a.clusters) ? a.clusters : [];
-      $("hldClusters").innerHTML = clusters.length
+      // Excluded (no-history) names are surfaced UNCONDITIONALLY whenever any
+      // exist — never only when a cluster happens to form (honesty: the read is
+      // never silently partial).
+      var droppedNote = (a.corr_names_dropped && a.corr_names_dropped.length)
+        ? ' <span class="text-slate-600">· no price history (excluded): ' + a.corr_names_dropped.map(esc).join(", ") + '</span>'
+        : '';
+      var clusterEmpty = (a.corr_effective_bets != null)
+        ? ('None of the ' + intFmt(a.corr_names_used) + ' names with history move together above the 0.60 correlation cut.')
+        : 'Not enough price history to measure correlation clusters.';
+      $("hldClusters").innerHTML = (clusters.length
         ? '<span class="text-amber-400/90 font-semibold">Correlated clusters:</span> ' + clusters.map(function (c) {
             return esc(c.label) + " (" + fixed(c.combined_weight_pct, 0) + "% · " + c.members.map(esc).join(", ") + " — " + esc(c.basis) + ")";
           }).join(" · ")
-        : '<span class="text-slate-600">No same-sector clusters above the concentration cut.</span>';
+        : '<span class="text-slate-600">' + clusterEmpty + '</span>') + droppedNote;
 
       var warns = Array.isArray(resp.warnings) ? resp.warnings : [];
       $("hldWarnings").innerHTML = warns.length ? "⚠ " + warns.map(esc).join(" · ") : "";
