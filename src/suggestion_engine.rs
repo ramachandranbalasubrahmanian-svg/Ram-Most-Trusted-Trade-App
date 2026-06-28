@@ -12,6 +12,7 @@
 
 use std::cell::RefCell;
 use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::Result;
 use rayon::prelude::*;
@@ -1257,7 +1258,10 @@ pub fn scan_universe(root: &Path, symbols: &[String], _capital: f64, _risk_pct: 
 // ---------------------------------------------------------------------------
 
 /// Best single setup for a symbol (any side), carrying the fields sizing needs.
+/// Capital/risk-INDEPENDENT — this is the cacheable heavy result; sizing happens
+/// later in [`find_capital_fit`].
 struct FitBest {
+    symbol: String,
     strat: SuggestStrategy,
     tf: Timeframe,
     dir: Direction,
@@ -1325,6 +1329,7 @@ fn fit_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> Option<Fi
                     };
                     if better {
                         best = Some(FitBest {
+                            symbol: symbol.to_string(),
                             strat,
                             tf,
                             dir,
@@ -1346,39 +1351,79 @@ fn fit_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> Option<Fi
     best
 }
 
+/// IST calendar date `YYYY-MM-DD` — the version key for the date-stable fit universe.
+fn today_ist_date() -> String {
+    chrono::Utc::now().with_timezone(&config::IST).format("%Y-%m-%d").to_string()
+}
+
+/// Process-wide cache of the capital/risk-INDEPENDENT fit universe (the heavy
+/// per-symbol backtest search). Keyed by `date|symbol-count`, so it rebuilds once
+/// a day or when the universe size changes (a stock was onboarded). Mirrors
+/// `capital_planner`'s date-keyed cache.
+static FIT_UNIVERSE_CACHE: OnceLock<Mutex<Option<(String, Arc<Vec<FitBest>>)>>> = OnceLock::new();
+
+/// Build (or return cached) the per-symbol best edges. This is the expensive part
+/// of the finder — 3 timeframes × strategy library × R:R configs per symbol — and
+/// it does NOT depend on capital or risk, so it is computed once and reused across
+/// every capital/risk the user dials in. The first build (or startup warm) pays
+/// the full universe scan; subsequent slider changes only re-run the cheap sizing
+/// loop in [`find_capital_fit`].
+fn fit_universe(root: &Path, symbols: &[String]) -> Arc<Vec<FitBest>> {
+    let version = format!("{}|{}", today_ist_date(), symbols.len());
+    let cell = FIT_UNIVERSE_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(g) = cell.lock() {
+        if let Some((v, data)) = &*g {
+            if *v == version {
+                return data.clone();
+            }
+        }
+    }
+
+    thread_local! {
+        static FIT_CONN: RefCell<Option<duckdb::Connection>> = const { RefCell::new(None) };
+    }
+    let bests: Vec<FitBest> = symbols
+        .par_iter()
+        .filter_map(|sym| {
+            FIT_CONN.with(|cell| {
+                let mut slot = cell.borrow_mut();
+                if slot.is_none() {
+                    *slot = open_conn().ok();
+                }
+                let conn = slot.as_ref()?;
+                fit_symbol(conn, root, sym)
+            })
+        })
+        .collect();
+
+    let data = Arc::new(bests);
+    if let Ok(mut g) = cell.lock() {
+        *g = Some((version, data.clone()));
+    }
+    data
+}
+
 /// Capital-Fit ATR finder. For the given `capital` + `risk_pct`, size every
 /// symbol's best edge to YOUR account and return ALL that fit (≥ 1 tradeable
 /// share within 5× buying power), ranked by fit-adjusted edge
 /// (Confidence × deployability). Net P&L is after itemized round-trip costs.
+///
+/// The heavy backtest search is cached in [`fit_universe`] (capital/risk-
+/// independent), so changing the capital/risk sliders only re-runs the cheap
+/// sizing loop below — turning a full ~80s rescan into a sub-second resize.
 pub fn find_capital_fit(
     root: &Path,
     symbols: &[String],
     capital: f64,
     risk_pct: f64,
 ) -> FinderResult {
-    thread_local! {
-        static FIT_CONN: RefCell<Option<duckdb::Connection>> = const { RefCell::new(None) };
-    }
-    let bests: Vec<Option<FitBest>> = symbols
-        .par_iter()
-        .map(|sym| {
-            FIT_CONN.with(|cell| {
-                let mut slot = cell.borrow_mut();
-                if slot.is_none() {
-                    *slot = open_conn().ok();
-                }
-                let Some(conn) = slot.as_ref() else { return None };
-                fit_symbol(conn, root, sym)
-            })
-        })
-        .collect();
+    let universe = fit_universe(root, symbols);
 
     let risk_amount = capital * risk_pct;
     let leverage = config::LEVERAGE;
     let mut rows: Vec<FinderRow> = Vec::new();
 
-    for (sym, maybe) in symbols.iter().zip(bests.into_iter()) {
-        let Some(b) = maybe else { continue };
+    for b in universe.iter() {
         let sl_dist = b.sl_mult * b.atr;
         if sl_dist <= 0.0 || b.entry <= 0.0 {
             continue;
@@ -1420,7 +1465,7 @@ pub fn find_capital_fit(
         let fit_score = b.confidence as f64 * deployability;
 
         rows.push(FinderRow {
-            symbol: sym.clone(),
+            symbol: b.symbol.clone(),
             strategy: b.strat.name().to_string(),
             side: b.dir.as_str().to_string(),
             interval: pretty_interval(b.tf).to_string(),
