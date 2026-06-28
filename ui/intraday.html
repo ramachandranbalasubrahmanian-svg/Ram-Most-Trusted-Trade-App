@@ -722,6 +722,63 @@
     // ----------------------------------------------------------------
     // Suggestion rendering
     // ----------------------------------------------------------------
+    // ----------------------------------------------------------------
+    // Tradability / SEBI-surveillance gate (display-only safety layer).
+    // Applied to every intraday recommendation surface on this page: the
+    // deep-dive (a prominent RED stay-away banner), the scanner, and the finder.
+    // Sourced from /api/tradability (T2T/BE series + liquidity + an optional
+    // loaded surveillance list). ASM/GSM is honestly flagged "verify on NSE"
+    // unless a surveillance.csv is loaded — never assumed clean.
+    // ----------------------------------------------------------------
+    var TRAD = {}, tradPromise = null;
+    function loadTradability() {
+      if (tradPromise) return tradPromise;
+      tradPromise = fetch("/api/tradability").then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (res) {
+          if (res && res.by_symbol) {
+            var m = {}; Object.keys(res.by_symbol).forEach(function (k) { m[k.toUpperCase()] = res.by_symbol[k]; });
+            TRAD = m;
+          }
+        }).catch(function () { /* best-effort; banner falls back to "verify on NSE" */ });
+      return tradPromise;
+    }
+    function tradOf(sym) { return TRAD[String(sym).toUpperCase()]; }
+    // Prominent banner for the deep-dive of a SELECTED stock.
+    function tradBannerHtml(sym) {
+      var t = tradOf(sym);
+      if (!t) {
+        return '<div class="rounded-lg border border-slate-700 bg-slate-800/30 px-3 py-2 text-[12px] text-slate-400 mb-2">' +
+          'Tradability not loaded for ' + esc(str(sym, "")) + ' — verify MIS-eligibility &amp; SEBI surveillance on NSE before trading.</div>';
+      }
+      var v = str(t.verdict, "ok");
+      if (v === "blocked") {
+        return '<div class="rounded-lg border-2 border-rose-500 bg-rose-950/40 px-4 py-3 mb-2">' +
+          '<div class="text-rose-300 font-extrabold text-sm tracking-wide">⛔ STAY AWAY — NOT INTRADAY-TRADEABLE</div>' +
+          '<div class="text-rose-200/90 text-[12px] mt-1">' + esc(str(t.reason, "")) + '</div>' +
+          '<div class="text-rose-200/60 text-[10px] mt-1">Even if every edge/stat below looks good, this stock cannot be reliably traded intraday — the numbers are shown for transparency only.</div>' +
+          '</div>';
+      }
+      if (v === "high_risk") {
+        return '<div class="rounded-lg border-2 border-amber-500 bg-amber-950/40 px-4 py-3 mb-2">' +
+          '<div class="text-amber-300 font-bold text-sm">⚠ HIGH INTRADAY RISK</div>' +
+          '<div class="text-amber-200/90 text-[12px] mt-1">' + esc(str(t.reason, "")) + '</div></div>';
+      }
+      if (v === "caution") {
+        return '<div class="rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-2 text-[12px] text-amber-300 mb-2">⚠ ' + esc(str(t.reason, "")) + '</div>';
+      }
+      return '<div class="rounded-lg border border-emerald-900/50 bg-emerald-950/10 px-3 py-2 text-[11px] text-emerald-300/90 mb-2">✓ ' + esc(str(t.reason, "No local intraday blocker.")) + '</div>';
+    }
+    // Compact inline badge for scanner / finder rows.
+    function tradBadge(sym) {
+      var t = tradOf(sym); if (!t) return "";
+      var v = str(t.verdict, "ok");
+      var spec = v === "blocked" ? ["⛔ NO-MIS", "bg-rose-900/60 text-rose-300"]
+        : v === "high_risk" ? ["⚠ RISK", "bg-amber-900/60 text-amber-300"]
+        : v === "caution" ? ["⚠", "bg-amber-900/40 text-amber-300/90"] : null;
+      if (!spec) return "";
+      return ' <span class="ml-1 px-1 rounded text-[9px] font-bold align-middle ' + spec[1] + '" title="' + esc(str(t.reason, "")) + '">' + spec[0] + '</span>';
+    }
+
     function renderSuggestion(s) {
       s = s && typeof s === "object" ? s : {};
       var out = $("suggestionOut");
@@ -732,6 +789,9 @@
       var daysOld = intFmt(s.days_old);
 
       var html = "";
+
+      // SEBI-surveillance / tradability gate — shown FIRST, above everything.
+      html += tradBannerHtml(str(s.symbol, ""));
 
       // header card
       html += '<div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">';
@@ -789,8 +849,10 @@
         "?capital=" + encodeURIComponent(state.capital) +
         "&risk=" + encodeURIComponent(state.riskPct); // server expects a percent (e.g. 2.5)
       $("suggestionOut").innerHTML = loadingBox("Analyzing " + sym + " — backtesting ~240 combos…");
-      getJson(url).then(function (s) {
-        try { renderSuggestion(s); }
+      // Ensure the surveillance/tradability verdict is loaded BEFORE we render,
+      // so the stay-away banner is accurate even on the first analyze.
+      Promise.all([getJson(url), loadTradability()]).then(function (arr) {
+        try { renderSuggestion(arr[0]); }
         catch (e) { $("suggestionOut").innerHTML = errorBox("Received a response but could not render it."); }
       }).catch(function () {
         $("suggestionOut").innerHTML = errorBox("Could not fetch a suggestion for " + sym + ". Check the symbol and that the server is running.");
@@ -830,7 +892,7 @@
         ? '<span class="text-yellow-300" title="High-conviction shortlist (Confidence + win-floor ≥ ' + fixed(r.prob_floor, 0) + '% + reliability gate) — a shortlist, not a sure shot">★ </span>'
         : "";
       var cells = "";
-      cells += '<td style="text-align:left">' + star + '<span class="font-bold ' + symColor + '">' + esc(str(r.symbol, "—")) + "</span></td>";
+      cells += '<td style="text-align:left">' + star + '<span class="font-bold ' + symColor + '">' + esc(str(r.symbol, "—")) + "</span>" + tradBadge(r.symbol) + "</td>";
       cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.strategy, "—")) + "</td>";
       cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.interval, "—")) + "</td>";
       cells += '<td style="text-align:left" class="text-slate-400 num">' + esc(str(r.rr_label, "—")) + "</td>";
@@ -930,7 +992,7 @@
       var side = str(r.side, "").toUpperCase();
       var sideClass = side === "BUY" ? "text-emerald-300" : (side === "SELL" ? "text-rose-300" : "text-slate-300");
       var cells = "";
-      cells += '<td style="text-align:left"><span class="font-bold text-slate-100">' + esc(str(r.symbol, "—")) + "</span></td>";
+      cells += '<td style="text-align:left"><span class="font-bold text-slate-100">' + esc(str(r.symbol, "—")) + "</span>" + tradBadge(r.symbol) + "</td>";
       cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.strategy, "—")) + "</td>";
       cells += '<td style="text-align:left"><span class="font-semibold ' + sideClass + '">' + esc(side || "—") + "</span></td>";
       cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.interval, "—")) + "</td>";
@@ -1075,6 +1137,7 @@
     setInterval(function () { $("sessionNoteText").textContent = sessionNote(); }, 30000);
     loadSymbols();
     loadRegime();
+    loadTradability();
   })();
   </script>
 </body>

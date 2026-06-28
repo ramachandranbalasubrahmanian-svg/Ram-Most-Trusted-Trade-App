@@ -254,6 +254,21 @@
       </div>
     </section>
 
+    <!-- ===================== BEST PICKS (top 2 Buy + 2 Sell from the Top-10) ===================== -->
+    <section id="bestWrap" class="rounded-lg border border-indigo-900/50 bg-[#0d1320]">
+      <div class="px-3 py-2 border-b border-slate-800 flex items-start justify-between flex-wrap gap-2">
+        <div>
+          <span class="text-xs font-bold uppercase tracking-wider text-indigo-300">★ Sharpest setups — top 2 Buy &amp; 2 Sell</span>
+          <div class="text-[10px] text-slate-500 mt-0.5">Picked from the Top-10 by an 8-point checklist. <b>Not advice, not a sure-shot.</b></div>
+        </div>
+        <span id="bestHeadline" class="text-[11px] text-slate-400"></span>
+      </div>
+      <div id="bestBody" class="p-3 overflow-x-auto"></div>
+      <div class="px-3 pb-3 pt-2 border-t border-slate-800 text-[10px] text-slate-500 leading-relaxed">
+        ⚠ Profit/Loss are net-of-cost scenarios, not guarantees. Verify MIS-eligibility (T2T/ASM-GSM reject intraday), spread &amp; circuit bands live; square-off ~15:20 IST. No orders are placed.
+      </div>
+    </section>
+
     <!-- ===================== HONESTY BANNER ===================== -->
     <section class="rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2.5">
       <p class="text-[11px] leading-relaxed text-amber-200/80">
@@ -507,6 +522,7 @@
       renderTable(els.sellHead, els.sellBody, lastSell, "sell");
       els.buyCount.textContent = lastBuy.length + " names";
       els.sellCount.textContent = lastSell.length + " names";
+      renderBestPicks();
 
       // Diagnostics
       applyDiagnostics(pkt.diagnostics);
@@ -812,12 +828,15 @@
       var t = TRAD[String(sym).toUpperCase()];
       if (!t) return "";
       var b = [];
-      if (t.trade_to_trade) b.push('<span class="ml-1 px-1 rounded bg-rose-900/60 text-rose-300 text-[9px] font-bold align-middle">T2T</span>');
+      // A "blocked" verdict (T2T series or a loaded surveillance measure) → loud
+      // RED "no intraday" badge; this is the SEBI/tradability gate.
+      if (t.verdict === "blocked") b.push('<span class="ml-1 px-1 rounded bg-rose-600/80 text-white text-[9px] font-bold align-middle">⛔ NO-MIS</span>');
+      else if (t.trade_to_trade) b.push('<span class="ml-1 px-1 rounded bg-rose-900/60 text-rose-300 text-[9px] font-bold align-middle">T2T</span>');
       if (t.liquidity === "very thin" || t.liquidity === "thin") b.push('<span class="ml-1 px-1 rounded bg-amber-900/50 text-amber-300 text-[9px] font-bold align-middle">THIN</span>');
       if (t.low_priced) b.push('<span class="ml-1 px-1 rounded bg-amber-900/40 text-amber-300/90 text-[9px] font-bold align-middle">₹LOW</span>');
       if (!b.length) return "";
-      // Wrap with a tooltip carrying the full caption.
-      return '<span title="' + esc(str(t.caption, "")) + '">' + b.join("") + '</span>';
+      // Tooltip carries the verdict reason (or the caption).
+      return '<span title="' + esc(str(t.reason, str(t.caption, ""))) + '">' + b.join("") + '</span>';
     }
     function loadTradability() {
       fetch("/api/tradability").then(function (r) { return r.ok ? r.json() : null; }).then(function (res) {
@@ -829,6 +848,7 @@
         // next packet.
         if (typeof lastBuy !== "undefined" && lastBuy) renderTable(els.buyHead, els.buyBody, lastBuy, "buy");
         if (typeof lastSell !== "undefined" && lastSell) renderTable(els.sellHead, els.sellBody, lastSell, "sell");
+        renderBestPicks();
       }).catch(function () { /* best-effort; flags are optional */ });
     }
 
@@ -902,6 +922,87 @@
     })();
 
     // ----------------------------------------------------------------
+    // Best picks: an objective 8-point checklist over the Top-10 Buy/Sell to
+    // surface the sharpest 2 per side. DISPLAY-ONLY ranking over edges already on
+    // the page — it never gates Confidence, never sizes, never places an order.
+    // Every cell shows the real value + a ✅/❌ vs a transparent threshold.
+    // ----------------------------------------------------------------
+    var BEST_CRIT = { expR_min: 0.15, pf_min: 1.4, n_min: 50, rvol_min: 1.2 };
+
+    function breakEvenPct(r) {
+      // Break-even win% = risk / (risk + reward), derived from the prices.
+      var risk = Math.abs(num(r.entry, 0) - num(r.sl, 0));
+      var reward = Math.abs(num(r.target, 0) - num(r.entry, 0));
+      if (!(risk > 0) || !(reward > 0)) return NaN;
+      return 100 * risk / (risk + reward);
+    }
+    function evalCandidate(r, side) {
+      var be = breakEvenPct(r);
+      var t = TRAD[String(r.symbol).toUpperCase()];
+      var blocked = !!(t && t.verdict === "blocked"); // T2T / surveillance → untradeable intraday
+      var clean = !t || (!blocked && t.liquidity !== "thin" && t.liquidity !== "very thin" && !t.low_priced);
+      var warnLbl = blocked ? "⛔ NO-MIS" : (clean ? "Clean" : (t.low_priced ? "₹LOW" : "THIN"));
+      var obi = num(r.obi, 0);
+      var obiOk = side === "buy" ? obi > 0 : obi < 0;
+      var checks = [
+        { label: "Exp P&L positive", pass: num(r.exp_pnl, NaN) > 0, val: (isFinite(num(r.exp_pnl, NaN)) ? signedRupee(r.exp_pnl) : "—") },
+        { label: "exp(R) ≥ +" + BEST_CRIT.expR_min.toFixed(2) + "R", pass: num(r.expectancy_r, NaN) >= BEST_CRIT.expR_min, val: fixed(r.expectancy_r, 2) + "R" },
+        { label: "Win% > break-even", pass: isFinite(be) && num(r.win_pct, NaN) > be, val: fixed(r.win_pct, 1) + "% (be " + (isFinite(be) ? be.toFixed(0) : "—") + "%)" },
+        { label: "PF ≥ " + BEST_CRIT.pf_min.toFixed(1), pass: num(r.profit_factor, NaN) >= BEST_CRIT.pf_min, val: fixed(r.profit_factor, 2) },
+        { label: "n ≥ " + BEST_CRIT.n_min, pass: num(r.n, 0) >= BEST_CRIT.n_min, val: "n=" + intFmt(r.n) + (num(r.n, 0) < BEST_CRIT.n_min ? " (low n)" : "") },
+        { label: "OBI confirms " + (side === "buy" ? "BUY" : "SELL"), pass: obiOk, val: fixed(obi, 2) + (obiOk ? "" : (side === "buy" ? " (sellers!)" : " (buyers!)")) },
+        { label: "RVOL ≥ " + BEST_CRIT.rvol_min.toFixed(1), pass: num(r.rvol, NaN) >= BEST_CRIT.rvol_min, val: fixed(r.rvol, 2) },
+        { label: "Tradeable (not T2T/surveillance)", pass: clean, val: warnLbl }
+      ];
+      var passes = checks.reduce(function (a, c) { return a + (c.pass ? 1 : 0); }, 0);
+      return { row: r, side: side, checks: checks, passes: passes, total: checks.length, blocked: blocked };
+    }
+    function rankSide(rows, side) {
+      // HARD-EXCLUDE blocked (T2T / surveillance) names — never surface an
+      // untradeable stock as a "best pick", however good its stats look.
+      var ev = arr(rows).map(function (r) { return evalCandidate(r, side); }).filter(function (e) { return !e.blocked; });
+      // Sort by checklist passes, then the live Score, then exp(R) — all transparent.
+      ev.sort(function (a, b) {
+        return (b.passes - a.passes) || (num(b.row.score, 0) - num(a.row.score, 0)) || (num(b.row.expectancy_r, 0) - num(a.row.expectancy_r, 0));
+      });
+      return ev;
+    }
+    // Minimal display: stock · qty · profit · loss. The 8-point checklist above
+    // still does the PICKING (rankSide); we just show the essentials.
+    function bestRow(p) {
+      var r = p.row, buy = p.side === "buy";
+      var symCls = buy ? "text-emerald-300" : "text-rose-300";
+      var tag = '<span class="ml-1 text-[9px] font-bold px-1 rounded align-middle ' +
+        (buy ? "bg-emerald-900/50 text-emerald-300" : "bg-rose-900/50 text-rose-300") + '">' + (buy ? "BUY" : "SELL") + '</span>';
+      return '<tr class="border-t border-slate-800/60">' +
+        '<td class="py-1.5 pr-3"><span class="font-bold ' + symCls + '">' + esc(str(r.symbol, "—")) + '</span>' + tag + '</td>' +
+        '<td class="py-1.5 pr-3 text-right text-slate-200 font-medium">' + intFmt(r.shares) + '</td>' +
+        '<td class="py-1.5 pr-3 text-right text-emerald-400">' + (isFinite(num(r.proj_profit, NaN)) ? signedRupee(r.proj_profit) : "—") + '</td>' +
+        '<td class="py-1.5 pr-3 text-right text-rose-400">' + (isFinite(num(r.proj_loss, NaN)) ? signedRupee(r.proj_loss) : "—") + '</td>' +
+        '</tr>';
+    }
+    function renderBestPicks() {
+      var body = $("bestBody"); if (!body) return;
+      var buys = rankSide(typeof lastBuy !== "undefined" ? lastBuy : [], "buy");
+      var sells = rankSide(typeof lastSell !== "undefined" ? lastSell : [], "sell");
+      if (!buys.length && !sells.length) {
+        body.innerHTML = '<div class="text-[12px] text-slate-500">Waiting for signals…</div>';
+        if ($("bestHeadline")) $("bestHeadline").textContent = "";
+        return;
+      }
+      var picks = buys.slice(0, 2).concat(sells.slice(0, 2));
+      var h = '<table class="w-full text-[13px] num"><thead><tr class="text-slate-500 text-[10px] uppercase tracking-wide">' +
+        '<th class="text-left pr-3 py-1">Stock</th>' +
+        '<th class="text-right pr-3 py-1">Qty</th>' +
+        '<th class="text-right pr-3 py-1">Profit</th>' +
+        '<th class="text-right pr-3 py-1">Loss</th></tr></thead><tbody>';
+      picks.forEach(function (p) { h += bestRow(p); });
+      h += '</tbody></table>';
+      body.innerHTML = h;
+      if ($("bestHeadline")) $("bestHeadline").textContent = "";
+    }
+
+    // ----------------------------------------------------------------
     // Boot
     // ----------------------------------------------------------------
     els.buyHead.innerHTML = headHtml();
@@ -912,6 +1013,7 @@
     runCalc();
     loadFreshness();
     loadTradability();
+    renderBestPicks();
     connect();
   })();
   </script>

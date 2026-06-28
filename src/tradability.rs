@@ -52,8 +52,18 @@ pub struct Tradability {
     pub low_priced: bool,
     pub market_cap_inr: Option<f64>,
     pub micro_cap: bool,
-    /// Surveillance status. Always "not loaded" today — never fabricated.
+    /// Surveillance status for this symbol: the measure from a loaded list
+    /// (e.g. "ASM-ST", "GSM"), or "not loaded" when no list is present (never
+    /// fabricated).
     pub asm_gsm: String,
+    /// Surveillance measure from the loaded list, if any (drives `blocked`).
+    pub surveillance: Option<String>,
+    /// Overall intraday verdict: "blocked" | "high_risk" | "caution" | "ok".
+    pub verdict: String,
+    /// One-line reason for the verdict — the stay-away / caution message.
+    pub reason: String,
+    /// FALSE ⇒ do NOT take this intraday (MIS likely rejected — T2T/surveillance).
+    pub intraday_ok: bool,
     /// Caption pieces (warnings only). Empty ⇒ nothing to flag.
     pub flags: Vec<String>,
     /// `flags` joined with " · "; empty when clean.
@@ -69,8 +79,14 @@ pub struct TradabilityCoverage {
     pub with_turnover: usize,
     pub series_known: usize,
     pub trade_to_trade: usize,
+    /// Symbols with verdict == "blocked" (T2T or a loaded surveillance measure).
+    pub blocked: usize,
+    /// Whether an optional surveillance list was found + loaded.
+    pub surveillance_loaded: bool,
+    /// Number of names in the loaded surveillance list (0 if none).
+    pub surveillance_count: usize,
     pub thin_or_worse: usize,
-    /// Honest note on the data we do NOT have.
+    /// Honest note on surveillance coverage.
     pub asm_gsm: String,
 }
 
@@ -100,6 +116,9 @@ fn liquidity_tier(median_turnover_inr: f64, days: usize) -> &'static str {
 }
 
 /// Assemble one symbol's `Tradability` from its raw inputs. Pure — unit-tested.
+/// `surveillance` is the measure (e.g. "GSM") from a loaded surveillance list, or
+/// `None` when no list is present (then ASM/GSM is reported as unverified — never
+/// assumed clean).
 pub fn assess(
     symbol: &str,
     series: &str,
@@ -107,11 +126,51 @@ pub fn assess(
     median_turnover_inr: f64,
     turnover_days: usize,
     market_cap_inr: Option<f64>,
+    surveillance: Option<String>,
 ) -> Tradability {
     let trade_to_trade = T2T_SERIES.contains(&series);
     let liquidity = liquidity_tier(median_turnover_inr, turnover_days).to_string();
     let low_priced = last_close > 0.0 && last_close < LOW_PRICE;
     let micro_cap = market_cap_inr.map(|m| m > 0.0 && m < MICRO_CAP_CR * CR).unwrap_or(false);
+
+    // ---- intraday verdict (the surveillance / tradability gate) ----
+    // Precedence: a broker REJECTION (T2T or a surveillance measure) is a hard
+    // "stay away"; then liquidity you can't exit; then softer cautions.
+    let (verdict, reason, intraday_ok): (&str, String, bool) = if let Some(m) = surveillance.as_deref() {
+        (
+            "blocked",
+            format!("⛔ Under {m} surveillance — intraday/MIS is typically blocked (100% margin / price bands). Stay away even if the edge looks good."),
+            false,
+        )
+    } else if trade_to_trade {
+        (
+            "blocked",
+            format!("⛔ {series} series (trade-to-trade) — MIS/intraday orders are rejected; delivery only. Stay away for intraday."),
+            false,
+        )
+    } else if liquidity == "very thin" {
+        (
+            "high_risk",
+            format!("⚠ Very thin liquidity (~₹{:.1} Cr/day) — you may be unable to exit intraday. High risk.", median_turnover_inr / CR),
+            true,
+        )
+    } else if liquidity == "thin" || low_priced || micro_cap {
+        let mut bits: Vec<&str> = Vec::new();
+        if liquidity == "thin" { bits.push("thin liquidity"); }
+        if low_priced { bits.push("low-priced"); }
+        if micro_cap { bits.push("micro-cap"); }
+        (
+            "caution",
+            format!("⚠ {} — elevated intraday risk; size down and use limit orders.", bits.join(" / ")),
+            true,
+        )
+    } else {
+        (
+            "ok",
+            "No local intraday blocker (EQ series, adequate liquidity). ASM/GSM not loaded — verify on NSE.".to_string(),
+            true,
+        )
+    };
 
     let mut flags: Vec<String> = Vec::new();
     if trade_to_trade {
@@ -136,8 +195,17 @@ pub fn assess(
         }
     }
 
+    // Surface the surveillance measure as a leading flag too (so badges/captions
+    // reflect it), then assemble.
+    if let Some(m) = surveillance.as_deref() {
+        flags.insert(0, format!("under {m} surveillance — intraday likely blocked."));
+    }
     let caption = flags.join(" · ");
     let ok = flags.is_empty();
+    let asm_gsm = match surveillance.as_deref() {
+        Some(m) => m.to_string(),
+        None => "not loaded".to_string(),
+    };
     Tradability {
         symbol: symbol.to_string(),
         series: series.to_string(),
@@ -149,7 +217,11 @@ pub fn assess(
         low_priced,
         market_cap_inr,
         micro_cap,
-        asm_gsm: "not loaded".to_string(),
+        asm_gsm,
+        surveillance,
+        verdict: verdict.to_string(),
+        reason,
+        intraday_ok,
         flags,
         caption,
         ok,
@@ -221,6 +293,59 @@ fn load_market_caps(conn: &Connection, root: &Path) -> HashMap<String, f64> {
     out
 }
 
+/// Load an optional surveillance list so ASM/GSM can be ENFORCED when the user
+/// drops it in. We never fetch or fabricate it — if the file is absent, ASM/GSM
+/// is reported as unverified. Format: a CSV with a `symbol` column and a measure
+/// column (`measure`/`asm`/`gsm`/`category`); header auto-detected. Looked up at
+/// `<data_root>/surveillance.csv` then `cache/surveillance.csv`. Returns
+/// (symbol_uppercase -> measure).
+pub fn load_surveillance(root: &Path, cache_dir: &Path) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let candidates = [root.join("surveillance.csv"), cache_dir.join("surveillance.csv")];
+    let Some(path) = candidates.iter().find(|p| p.exists()) else {
+        return out;
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return out;
+    };
+    let mut lines = text.lines();
+    // Header: find the symbol + measure column indices.
+    let Some(header) = lines.next() else { return out };
+    let cols: Vec<String> = header.split(',').map(|c| c.trim().to_lowercase()).collect();
+    let sym_idx = cols.iter().position(|c| c == "symbol" || c == "tradingsymbol" || c == "symbol_name");
+    let meas_idx = cols
+        .iter()
+        .position(|c| c == "measure" || c == "category" || c == "asm" || c == "gsm" || c == "stage" || c == "type");
+    // If no recognizable header, treat the whole file as `symbol,measure` rows
+    // (and re-include the first line as data).
+    let (sym_idx, meas_idx, include_first) = match (sym_idx, meas_idx) {
+        (Some(s), Some(m)) => (s, m, false),
+        _ => (0usize, 1usize, true),
+    };
+    let mut ingest = |line: &str| {
+        let parts: Vec<&str> = line.split(',').map(|p| p.trim()).collect();
+        if let Some(sym) = parts.get(sym_idx) {
+            if !sym.is_empty() {
+                let measure = parts
+                    .get(meas_idx)
+                    .filter(|m| !m.is_empty())
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "surveillance".to_string());
+                out.insert(sym.to_uppercase(), measure);
+            }
+        }
+    };
+    if include_first {
+        ingest(header);
+    }
+    for line in lines {
+        if !line.trim().is_empty() {
+            ingest(line);
+        }
+    }
+    out
+}
+
 /// Build the tradability index over every symbol in `nse_daily_all.parquet`.
 /// One full scan (cached by the caller); aggregation + the recent-window median
 /// are done in Rust (mirrors `capital_planner`, which found a 5M-row DuckDB
@@ -228,6 +353,8 @@ fn load_market_caps(conn: &Connection, root: &Path) -> HashMap<String, f64> {
 pub fn build_index(conn: &Connection, root: &Path, cache_dir: &Path, built_ist: String) -> TradabilityResult {
     let series_map = load_series_map(cache_dir);
     let caps = load_market_caps(conn, root);
+    let surveillance = load_surveillance(root, cache_dir);
+    let surveillance_loaded = !surveillance.is_empty();
 
     // (symbol -> [(date_int, close, turnover)]) read unordered.
     let mut raw: HashMap<String, Vec<(i32, f64, f64)>> = HashMap::new();
@@ -264,7 +391,11 @@ pub fn build_index(conn: &Connection, root: &Path, cache_dir: &Path, built_ist: 
         let median_turnover = median(&mut turns);
         let series = series_map.get(&sym).cloned().unwrap_or_else(|| "unknown".to_string());
         let cap = caps.get(&sym).copied();
-        by_symbol.insert(sym.clone(), assess(&sym, &series, last_close, median_turnover, turnover_days, cap));
+        let surv = surveillance.get(&sym.to_uppercase()).cloned();
+        by_symbol.insert(
+            sym.clone(),
+            assess(&sym, &series, last_close, median_turnover, turnover_days, cap, surv),
+        );
     }
 
     let total = by_symbol.len();
@@ -275,6 +406,7 @@ pub fn build_index(conn: &Connection, root: &Path, cache_dir: &Path, built_ist: 
         .values()
         .filter(|t| t.liquidity == "thin" || t.liquidity == "very thin")
         .count();
+    let blocked = by_symbol.values().filter(|t| t.verdict == "blocked").count();
 
     TradabilityResult {
         built_ist,
@@ -284,8 +416,15 @@ pub fn build_index(conn: &Connection, root: &Path, cache_dir: &Path, built_ist: 
             with_turnover,
             series_known,
             trade_to_trade,
+            blocked,
+            surveillance_loaded,
+            surveillance_count: surveillance.len(),
             thin_or_worse,
-            asm_gsm: "not loaded — verify ASM/GSM surveillance status on NSE before trading".to_string(),
+            asm_gsm: if surveillance_loaded {
+                format!("surveillance list loaded ({} names)", surveillance.len())
+            } else {
+                "ASM/GSM list NOT loaded — verify surveillance status on NSE; drop a surveillance.csv (symbol,measure) in the data root to enforce it".to_string()
+            },
         },
     }
 }
@@ -319,42 +458,67 @@ mod tests {
     }
 
     #[test]
-    fn clean_liquid_eq_stock_has_no_flags() {
-        let t = assess("RELIANCE", "EQ", 1400.0, 200.0 * CR, 60, Some(17_000_000.0 * CR));
+    fn clean_liquid_eq_stock_is_ok_for_intraday() {
+        let t = assess("RELIANCE", "EQ", 1400.0, 200.0 * CR, 60, Some(17_000_000.0 * CR), None);
         assert!(t.ok, "a deep-liquidity EQ large-cap should be clean");
         assert!(t.caption.is_empty());
         assert!(!t.trade_to_trade);
         assert_eq!(t.liquidity, "deep");
-    }
-
-    #[test]
-    fn trade_to_trade_series_is_flagged_but_never_gated() {
-        let t = assess("SVLL", "BE", 120.0, 0.3 * CR, 60, Some(300.0 * CR));
-        assert!(t.trade_to_trade);
-        assert!(!t.ok);
-        assert!(t.caption.contains("trade-to-trade"));
-        // T2T + very-thin + micro-cap should all surface as separate warnings.
-        assert!(t.flags.len() >= 3, "expected multiple warnings, got {:?}", t.flags);
-        assert!(t.caption.contains("very thin"));
-        assert!(t.caption.contains("micro-cap"));
-        // It remains a CAPTION — there is no boolean that prevents trading.
+        assert_eq!(t.verdict, "ok");
+        assert!(t.intraday_ok);
+        // Honest: we did NOT verify ASM/GSM, so the reason must say so.
+        assert!(t.reason.contains("ASM/GSM not loaded"));
         assert_eq!(t.asm_gsm, "not loaded");
     }
 
     #[test]
-    fn low_priced_penny_stock_flagged() {
-        let t = assess("PENNY", "EQ", 8.5, 3.0 * CR, 60, Some(2000.0 * CR));
+    fn trade_to_trade_series_is_blocked_for_intraday() {
+        let t = assess("SVLL", "BE", 120.0, 0.3 * CR, 60, Some(300.0 * CR), None);
+        assert!(t.trade_to_trade);
+        assert_eq!(t.verdict, "blocked", "T2T must block intraday");
+        assert!(!t.intraday_ok, "T2T → MIS rejected → not intraday-tradeable");
+        assert!(t.reason.contains("trade-to-trade"));
+        assert!(t.reason.contains("Stay away"));
+    }
+
+    #[test]
+    fn loaded_surveillance_blocks_even_a_clean_eq_stock() {
+        // An otherwise-pristine deep-liquidity EQ large-cap, but it's on the
+        // loaded surveillance list → must be blocked with a stay-away message.
+        let t = assess("BIGCAP", "EQ", 1500.0, 300.0 * CR, 60, Some(50_000.0 * CR), Some("GSM".to_string()));
+        assert_eq!(t.verdict, "blocked", "a loaded surveillance measure blocks intraday");
+        assert!(!t.intraday_ok);
+        assert!(t.reason.contains("GSM"));
+        assert!(t.reason.contains("Stay away"));
+        assert_eq!(t.surveillance.as_deref(), Some("GSM"));
+        assert_eq!(t.asm_gsm, "GSM");
+    }
+
+    #[test]
+    fn very_thin_liquidity_is_high_risk() {
+        let t = assess("THINCO", "EQ", 200.0, 0.4 * CR, 60, Some(800.0 * CR), None);
+        assert_eq!(t.verdict, "high_risk");
+        assert!(t.intraday_ok, "high_risk is tradeable-but-risky, not a hard block");
+        assert!(t.reason.contains("exit intraday"));
+    }
+
+    #[test]
+    fn low_priced_penny_stock_is_caution() {
+        let t = assess("PENNY", "EQ", 8.5, 3.0 * CR, 60, Some(2000.0 * CR), None);
         assert!(t.low_priced);
-        assert!(t.caption.contains("low-priced"));
+        assert_eq!(t.verdict, "caution");
+        assert!(t.intraday_ok);
+        assert!(t.reason.contains("low-priced"));
         assert!(!t.micro_cap, "₹2000 Cr is not micro-cap");
     }
 
     #[test]
     fn unknown_series_and_missing_cap_degrade_gracefully() {
-        let t = assess("NEWBIE", "unknown", 500.0, 80.0 * CR, 60, None);
+        let t = assess("NEWBIE", "unknown", 500.0, 80.0 * CR, 60, None, None);
         assert_eq!(t.series, "unknown");
         assert!(t.market_cap_inr.is_none());
         assert!(!t.micro_cap);
-        assert!(t.ok, "deep liquidity + healthy price ⇒ no warnings even if series unknown");
+        assert_eq!(t.verdict, "ok", "deep liquidity + healthy price ⇒ ok even if series unknown");
+        assert!(t.intraday_ok);
     }
 }
