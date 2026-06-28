@@ -1,5 +1,21 @@
 # RAM_ISTP — Session Handover
 
+## ▶ RESUME (paste this into a new session)
+> **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
+> `SESSION_HANDOVER.md`, and continue on branch `feat/latency-warmcache-and-robust-backtester`.**
+
+Then run the resume command:
+```bash
+. "$HOME/.cargo/env"
+cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
+git checkout feat/latency-warmcache-and-robust-backtester   # this session's work (pushed)
+pkill -f "ram_istp serve"; pkill -f "ram_istp live"         # stop any leftover instance (single-instance!)
+cargo build && cargo test                                   # 118 tests should pass
+./target/debug/ram_istp serve 30min                         # dashboards at http://127.0.0.1:8787
+```
+
+---
+
 A local, **signals-only** NSE intraday + swing + portfolio analytics platform in **Rust**,
 querying a local Parquet archive via **DuckDB**, serving three web dashboards. It never places
 broker orders — it stages signals for manual execution, tracks them synthetically, and shows the
