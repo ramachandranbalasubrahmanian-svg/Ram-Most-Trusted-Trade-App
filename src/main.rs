@@ -43,6 +43,7 @@ use storage_kernel::SymbolBaseline;
 use strategy_engine::EdgeRecord;
 
 fn main() -> Result<()> {
+    init_tracing();
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(String::as_str).unwrap_or("");
     match cmd {
@@ -68,6 +69,18 @@ fn main() -> Result<()> {
             std::process::exit(2);
         }
     }
+}
+
+/// Initialise tracing output (honours `RUST_LOG`, defaults to `info`). Without
+/// this, every `tracing::info!/warn!` across the codebase — including the live
+/// Kite WS connect/subscribe status — is silently dropped. Idempotent.
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .try_init();
 }
 
 /// Current IST wall-clock as "YYYY-MM-DD HH:MM:SS".

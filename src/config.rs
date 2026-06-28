@@ -71,9 +71,15 @@ pub const DEFAULT_DATA_ROOT: &str = "1500-Stocks-Parquest";
 
 /// Resolve the parquet archive root (env override → default).
 pub fn data_root() -> PathBuf {
+    // Treat an empty value (e.g. a blank `RAM_ISTP_DATA_ROOT=` line in .env that
+    // dotenv loads as "") as unset, so we fall back to the default rather than an
+    // empty path.
     std::env::var(DATA_ROOT_ENV)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_DATA_ROOT))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_ROOT))
 }
 
 /// The resolutions available in the archive. `Daily` is the Kite-sourced
