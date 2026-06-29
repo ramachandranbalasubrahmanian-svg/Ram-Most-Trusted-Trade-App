@@ -917,6 +917,27 @@
         '<div class="text-[10px] text-slate-600 mt-1.5">Not part of the edge or Confidence — company context to sanity-check a price signal.</div></div>';
     }
 
+    // Pivot ladder (display-only): classic floor-trader S/R levels for today.
+    var PIVOTS = {};
+    function pivotsOf(sym) { return PIVOTS[String(sym).toUpperCase()]; }
+    function pivotsHtml(sym) {
+      var p = pivotsOf(sym);
+      if (!p || !p.available) return "";
+      function lvl(label, val, cls) {
+        return '<div class="rounded-md border border-slate-800 bg-slate-900/40 px-2 py-1 text-center">' +
+          '<div class="text-[9px] uppercase tracking-wide ' + (cls || "text-slate-500") + '">' + esc(label) + '</div>' +
+          '<div class="text-[12px] num text-slate-200">' + fixed(val, 2) + '</div></div>';
+      }
+      return '<div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3 mt-2">' +
+        '<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">Pivot levels · next session (off ' + esc(str(p.as_of, "—")) + ')</div>' +
+        '<div class="grid grid-cols-4 sm:grid-cols-7 gap-1.5">' +
+        lvl("S3", p.s3, "text-rose-400") + lvl("S2", p.s2, "text-rose-400") + lvl("S1", p.s1, "text-rose-300") +
+        lvl("Pivot", p.p, "text-sky-300") +
+        lvl("R1", p.r1, "text-emerald-300") + lvl("R2", p.r2, "text-emerald-400") + lvl("R3", p.r3, "text-emerald-400") +
+        '</div>' +
+        '<div class="text-[10px] text-slate-500 mt-1.5">' + esc(str(p.note, "")) + '</div></div>';
+    }
+
     // Sector rotational momentum (display-only): the stock vs its OWN sector index.
     var SECMOM = {};
     function secMomOf(sym) { return SECMOM[String(sym).toUpperCase()]; }
@@ -1004,6 +1025,8 @@
       html += pboHtml(s);
       // Sector rotational momentum panel (display-only; firewalled from the edge).
       html += sectorMomentumHtml(str(s.symbol, ""));
+      // Pivot ladder panel (display-only; firewalled from the edge).
+      html += pivotsHtml(str(s.symbol, ""));
 
       // blocks
       var blocks = arr(s.blocks);
@@ -1054,6 +1077,7 @@
         getJson(dqUrl).then(function (dq) { if (dq && dq.symbol && !dq.error) { DQ[String(dq.symbol).toUpperCase()] = dq; } }).catch(function () {}),
         getJson(fundUrl).then(function (r) { if (r && r.available && r.fundamentals) { FUND[String(r.fundamentals.symbol).toUpperCase()] = r.fundamentals; } }).catch(function () {}),
         getJson("/api/sector_momentum?symbol=" + encodeURIComponent(sym)).then(function (sm) { if (sm && sm.symbol) { SECMOM[String(sm.symbol).toUpperCase()] = sm; } }).catch(function () {}),
+        getJson("/api/pivots?symbol=" + encodeURIComponent(sym)).then(function (pv) { if (pv && pv.symbol) { PIVOTS[String(pv.symbol).toUpperCase()] = pv; } }).catch(function () {}),
       ]).then(function (arr) {
         try { renderSuggestion(arr[0]); }
         catch (e) { $("suggestionOut").innerHTML = errorBox("Received a response but could not render it."); }

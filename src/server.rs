@@ -108,6 +108,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/data_quality", get(data_quality_handler))
         .route("/api/fundamentals", get(fundamentals_handler))
         .route("/api/sector_momentum", get(sector_momentum_handler))
+        .route("/api/pivots", get(pivots_handler))
         .route("/api/news", get(news_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/calibration", get(calibration_handler))
@@ -1424,6 +1425,32 @@ async fn fundamentals_handler(State(state): State<AppState>, Query(q): Query<Fun
         Ok(Some(f)) => Json(serde_json::json!({"available": true, "fundamentals": f})).into_response(),
         Ok(None) => Json(serde_json::json!({"available": false})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("fundamentals task panicked: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PivotsQuery {
+    symbol: String,
+}
+
+/// `GET /api/pivots?symbol=X` — display-only classic pivot ladder (P/R1·S1/R2·S2/
+/// R3·S3) for the next session from the prior day's OHLC. Context S/R levels;
+/// NEVER feeds Confidence/the gate/ranking. Read-only.
+async fn pivots_handler(State(state): State<AppState>, Query(q): Query<PivotsQuery>) -> Response {
+    let sym = q.symbol.trim().to_uppercase();
+    if !valid_nse_symbol(&sym) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid symbol"}))).into_response();
+    }
+    let root = state.root.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = crate::storage_kernel::open_conn().ok()?;
+        Some(crate::pivots::compute(&conn, &root, &sym))
+    })
+    .await;
+    match result {
+        Ok(Some(p)) => Json(p).into_response(),
+        Ok(None) => (StatusCode::INTERNAL_SERVER_ERROR, "pivots: duckdb open failed").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("pivots task panicked: {e}")).into_response(),
     }
 }
 

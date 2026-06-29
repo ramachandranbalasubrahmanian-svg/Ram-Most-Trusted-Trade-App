@@ -29,6 +29,7 @@ mod kite_instruments;
 mod market_regime;
 mod news_engine;
 mod news_signal;
+mod pivots;
 mod portfolio_analytics;
 mod portfolio_import;
 mod portfolio_rotation;
