@@ -4,14 +4,20 @@
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
 > `SESSION_HANDOVER.md` (esp. ◀ THIS SESSION + the one remaining P1 item below), and continue on `main`.**
 >
-> **Git state (2026-06-29 cont.):** clean working tree, **9 commits AHEAD of origin and NOT pushed** — the owner
-> chose to HOLD the work local for review. Local `main` tip = **`4bd783e`**; `origin/main` still = **`82b8cf2`**.
-> **Decide on `git push origin main` before doing more.** **189 tests pass; build clean; both anchors byte-identical.**
-> **ALL of P0-2b + the split guard + ALL FOUR P1 items + an IndianAPI news-caution layer are DONE this session.**
+> **Git state (2026-06-29 cont.):** clean working tree, **11 commits AHEAD of origin and NOT pushed** — the owner
+> chose to HOLD the work local for review. Local `main` tip = **`f37da90`**; `origin/main` still = **`82b8cf2`**.
+> **Decide on `git push origin main` before doing more.** **195 tests pass; build clean; both anchors byte-identical.**
+> **ALL of P0-2b + the split guard + ALL FOUR P1 items + an IndianAPI news-caution layer + a Live Trade Plan are DONE.**
 >
 > **News layer (`4bd783e`):** `GET /api/news?symbol=&side=` + a per-pick caution row under the ★ Sharpest setups —
 > flags CAUTIOUS BUY/SELL when news/today's move contradicts the signal. **Needs `INDIANAPI_KEY` in `.env` to activate**
 > (a credential — the owner adds it; app reads via dotenvy, never logs). Without the key it shows an honest "unavailable".
+>
+> **Live Trade Plan (`f37da90`):** NEW `src/trade_planner.rs` (firewalled, display-only) + `trade_plan` in the WS packet
+> + a "▣ Live Trade Plan" panel on `/`. Per-signal sizing already used budget·risk·ATR; the risk meter SUMMED all 20
+> ideas (405% nonsense). The plan greedily picks the realistic basket: highest-score across both sides, each at the
+> user's risk%, capped by 5× leverage notional + a 6% portfolio total-risk ceiling + 5 concurrent + 2/sector; counts +
+> explains skips; warns on all-long/all-short bias. Reactive to the budget/risk sliders. Never orders/Confidence.
 > The 14 GB archive + `cache/` edge maps + `fundamentals.parquet` are gitignored (local only). (Only untracked file:
 > `COMPETITIVE_ANALYSIS_2026.md`, pre-existing.)
 >
