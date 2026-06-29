@@ -25,6 +25,7 @@ mod ingestion_engine;
 mod journal_sync;
 mod kite_instruments;
 mod news_engine;
+mod news_signal;
 mod portfolio_analytics;
 mod portfolio_import;
 mod portfolio_rotation;

@@ -107,6 +107,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/enrich_symbol", post(enrich_symbol_handler))
         .route("/api/data_quality", get(data_quality_handler))
         .route("/api/fundamentals", get(fundamentals_handler))
+        .route("/api/news", get(news_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
@@ -1422,6 +1423,31 @@ async fn fundamentals_handler(State(state): State<AppState>, Query(q): Query<Fun
         Ok(None) => Json(serde_json::json!({"available": false})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("fundamentals task panicked: {e}")).into_response(),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct NewsQuery {
+    symbol: String,
+    /// "BUY" | "SELL" — the signal direction this pick was generated for.
+    side: Option<String>,
+}
+
+/// `GET /api/news?symbol=X&side=BUY` — display-only IndianAPI news + momentum
+/// caution for ONE Top-10 pick. Returns recent headlines, a headline-keyword
+/// sentiment (heuristic), today's % move, and a verdict that flags when the
+/// news/tape CONTRADICTS the signal (a CAUTIOUS BUY/SELL). Needs `INDIANAPI_KEY`
+/// in `.env`; absent ⇒ an honest "unavailable" (never fabricated). Cached per day
+/// + budget-capped (a paid endpoint). NEVER feeds Confidence/the gate/ranking.
+async fn news_handler(Query(q): Query<NewsQuery>) -> Response {
+    let sym = q.symbol.trim().to_uppercase();
+    if !valid_nse_symbol(&sym) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid symbol"}))).into_response();
+    }
+    let side = q.side.unwrap_or_else(|| "BUY".to_string()).trim().to_uppercase();
+    let side = if side == "SELL" { "SELL" } else { "BUY" };
+    let today: String = now_ist_string().chars().take(10).collect();
+    let sig = crate::news_signal::build_signal(&sym, side, &today).await;
+    Json(sig).into_response()
 }
 
 /// `GET /api/journal` — all journal rows (newest first).

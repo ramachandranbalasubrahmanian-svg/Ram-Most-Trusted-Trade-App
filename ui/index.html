@@ -998,12 +998,67 @@
       var symCls = buy ? "text-emerald-300" : "text-rose-300";
       var tag = '<span class="ml-1 text-[9px] font-bold px-1 rounded align-middle ' +
         (buy ? "bg-emerald-900/50 text-emerald-300" : "bg-rose-900/50 text-rose-300") + '">' + (buy ? "BUY" : "SELL") + '</span>';
+      var key = newsKey(str(r.symbol, ""), buy ? "BUY" : "SELL");
+      var nid = "news-" + key;
+      // Render from the client cache immediately (no flicker on WS re-render).
+      var cached = NEWS_CACHE[key];
+      var newsInner = cached ? newsCellHtml(cached) : '<span class="opacity-60">checking news…</span>';
       return '<tr class="border-t border-slate-800/60">' +
         '<td class="py-1.5 pr-3"><span class="font-bold ' + symCls + '">' + esc(str(r.symbol, "—")) + '</span>' + tag + '</td>' +
         '<td class="py-1.5 pr-3 text-right text-slate-200 font-medium">' + intFmt(r.shares) + '</td>' +
         '<td class="py-1.5 pr-3 text-right text-emerald-400">' + (isFinite(num(r.proj_profit, NaN)) ? signedRupee(r.proj_profit) : "—") + '</td>' +
         '<td class="py-1.5 pr-3 text-right text-rose-400">' + (isFinite(num(r.proj_loss, NaN)) ? signedRupee(r.proj_loss) : "—") + '</td>' +
-        '</tr>';
+        '</tr>' +
+        '<tr id="' + nid + '"><td colspan="4" class="pb-2 pl-1 pr-3 text-[11px] text-slate-500">' + newsInner + '</td></tr>';
+    }
+
+    // --- IndianAPI news / momentum caution for the 4 sharpest picks -----------
+    // Display-only: flags when the news/tape CONTRADICTS the signal (a cautious
+    // BUY/SELL). Never feeds Confidence/the gate/ranking. Fetched only for these
+    // 2 Buy + 2 Sell picks (a paid, per-call API).
+    var NEWS_CACHE = {}; // newsKey -> last NewsSignal (per session; server caches per day)
+    function newsKey(sym, side) { return String(sym).replace(/[^A-Za-z0-9]/g, "") + "-" + side; }
+    function newsCellHtml(sig) {
+      sig = sig && typeof sig === "object" ? sig : {};
+      var v = str(sig.verdict, "unavailable");
+      if (!sig.available) {
+        return '<span class="text-slate-600">📰 ' + esc(str(sig.reason, "news unavailable")) + '</span>';
+      }
+      var badgeCls = v === "cautious" ? "bg-amber-900/60 text-amber-200 border border-amber-600/60"
+        : v === "aligned" ? "bg-emerald-950/50 text-emerald-300 border border-emerald-800/60"
+        : "bg-slate-800/60 text-slate-400 border border-slate-700/60";
+      var badgeTxt = v === "cautious" ? "⚠ " + (str(sig.side, "") === "SELL" ? "CAUTIOUS SELL" : "CAUTIOUS BUY")
+        : v === "aligned" ? "✓ news supports" : "• news neutral";
+      var pct = isFinite(num(sig.pct_change, NaN)) ? (sig.pct_change >= 0 ? "+" : "") + num(sig.pct_change, 0).toFixed(1) + "% today" : "no move data";
+      var sentCls = sig.sentiment === "positive" ? "text-emerald-400" : sig.sentiment === "negative" ? "text-rose-400" : "text-slate-400";
+      var heads = Array.isArray(sig.headlines) ? sig.headlines : [];
+      var headHtml = heads.length
+        ? '<ul class="mt-0.5 ml-3 list-disc text-slate-500">' + heads.map(function (h) { return '<li>' + esc(h) + '</li>'; }).join("") + '</ul>'
+        : '<span class="text-slate-600"> · no recent headlines</span>';
+      return '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ' + badgeCls + '">' + esc(badgeTxt) + '</span>' +
+        ' <span class="' + sentCls + '">' + esc(str(sig.sentiment, "neutral")) + ' headlines</span>' +
+        ' <span class="text-slate-500">· ' + esc(pct) + '</span>' +
+        '<div class="text-[10px] text-slate-500 mt-0.5">' + esc(str(sig.reason, "")) + '</div>' +
+        headHtml;
+    }
+    function loadPickNews(picks) {
+      picks.forEach(function (p) {
+        var sym = str(p.row.symbol, ""); if (!sym) return;
+        var side = p.side === "sell" ? "SELL" : "BUY";
+        var key = newsKey(sym, side);
+        if (NEWS_CACHE[key]) return; // already fetched this session — bestRow rendered it
+        fetch("/api/news?symbol=" + encodeURIComponent(sym) + "&side=" + side)
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (sig) {
+            if (sig) NEWS_CACHE[key] = sig;
+            var cell = $("news-" + key); var td = cell && cell.querySelector("td"); if (!td) return;
+            td.innerHTML = sig ? newsCellHtml(sig) : '<span class="text-slate-600">📰 news fetch failed</span>';
+          })
+          .catch(function () {
+            var cell = $("news-" + key); var td = cell && cell.querySelector("td");
+            if (td) td.innerHTML = '<span class="text-slate-600">📰 news fetch error</span>';
+          });
+      });
     }
     function renderBestPicks() {
       var body = $("bestBody"); if (!body) return;
@@ -1024,6 +1079,7 @@
       h += '</tbody></table>';
       body.innerHTML = h;
       if ($("bestHeadline")) $("bestHeadline").textContent = "";
+      loadPickNews(picks); // fill the per-pick news caution rows asynchronously
     }
 
     // ----------------------------------------------------------------
