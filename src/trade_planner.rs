@@ -301,6 +301,9 @@ mod tests {
             rvol: 1.0,
             vwap_dev_pct: 0.0,
             rsi: 50.0,
+            block_mult: 0.0,
+            tick_sweep: 0,
+            spread_widening: false,
             note: String::new(),
         }
     }

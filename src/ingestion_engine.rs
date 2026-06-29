@@ -211,6 +211,7 @@ pub fn run_replay(
                 symbol: s.symbol.clone(),
                 instrument_token: s.token,
                 ltp: bar.close,
+                ltq: 0, // replay has no per-trade qty → live-only detectors stay inert
                 volume_day: s.cum_volume,
                 ts_exchange_us,
                 ts_recv_us,
@@ -540,8 +541,10 @@ fn parse_packet(pkt: &[u8]) -> Option<Tick> {
     let mut ts_exchange_us: i64 = 0;
     let mut depth: Option<MarketDepth> = None;
 
-    // Quote/full carry cumulative volume at offset 16..20.
+    // Quote/full carry last-traded-qty at 8..12 and cumulative volume at 16..20.
+    let mut ltq: i64 = 0;
     if len >= 44 {
+        ltq = i64::from(BigEndian::read_i32(&pkt[8..12])).max(0);
         let volume = BigEndian::read_i32(&pkt[16..20]);
         volume_day = volume as i64;
     }
@@ -591,6 +594,7 @@ fn parse_packet(pkt: &[u8]) -> Option<Tick> {
         symbol: String::new(),
         instrument_token: token,
         ltp,
+        ltq,
         volume_day,
         ts_exchange_us,
         ts_recv_us: 0,

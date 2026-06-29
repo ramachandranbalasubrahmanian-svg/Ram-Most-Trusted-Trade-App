@@ -20,6 +20,14 @@ use crate::types::{Candidate, Diagnostics, EligibleEdge, LiveFeatures, MarketDep
 const LATENCY_CAP: usize = 256;
 /// Cap on retained per-tick volume deltas used for the RVOL average.
 const RVOL_HISTORY_CAP: usize = 256;
+/// Depth of the per-tick LTQ / spread history for the microstructure detectors.
+const MICRO_HISTORY_CAP: usize = 64;
+/// A single tick's traded qty ≥ this multiple of the recent average ⇒ block deal.
+const BLOCK_DEAL_MULT: f64 = 5.0;
+/// Current spread ≥ this multiple of the recent median ⇒ "widening".
+const SPREAD_WIDEN_MULT: f64 = 2.5;
+/// Ticks the price must move monotonically (with rising qty) for a sweep.
+const SWEEP_TICKS: usize = 6;
 /// Floor for the intraday ATR proxy, as a fraction of last price, so stops are
 /// never zero even on a flat/illiquid window.
 const ATR_FLOOR_PCT: f64 = 0.002;
@@ -45,6 +53,11 @@ struct LiveState {
     last_price: f64,
     /// True once at least one tick has set `last_price`.
     has_price: bool,
+    /// Recent per-tick last-traded-QTY (live only; empty in replay). Block-deal +
+    /// tick-sweep detectors.
+    ltq_hist: VecDeque<f64>,
+    /// Recent best bid/ask spread% snapshots — for the spread-widening detector.
+    spread_hist: VecDeque<f64>,
     /// Recent ingest latency samples (µs).
     latency: VecDeque<i64>,
 }
@@ -61,6 +74,8 @@ impl LiveState {
             depth: None,
             last_price: 0.0,
             has_price: false,
+            ltq_hist: VecDeque::with_capacity(MICRO_HISTORY_CAP),
+            spread_hist: VecDeque::with_capacity(MICRO_HISTORY_CAP),
             latency: VecDeque::with_capacity(LATENCY_CAP),
         }
     }
@@ -98,9 +113,25 @@ impl LiveState {
         self.last_price = tick.ltp;
         self.has_price = true;
 
+        // --- last-traded-qty history (live only; replay sends ltq=0) --------
+        if tick.ltq > 0 {
+            if self.ltq_hist.len() == MICRO_HISTORY_CAP {
+                self.ltq_hist.pop_front();
+            }
+            self.ltq_hist.push_back(tick.ltq as f64);
+        }
+
         // --- depth ----------------------------------------------------------
         if let Some(d) = tick.depth {
             self.depth = Some(d);
+        }
+        // --- spread history (after depth update) ----------------------------
+        let sp = self.spread_pct();
+        if sp > 0.0 {
+            if self.spread_hist.len() == MICRO_HISTORY_CAP {
+                self.spread_hist.pop_front();
+            }
+            self.spread_hist.push_back(sp);
         }
 
         // --- latency sample -------------------------------------------------
@@ -201,6 +232,9 @@ impl LiveState {
             rvol: self.rvol(),
             spread_pct: self.spread_pct(),
             rsi: self.rsi(),
+            block_mult: self.block_mult(),
+            tick_sweep: self.tick_sweep(),
+            spread_widening: self.spread_widening(),
             last_price: last,
         }
     }
@@ -236,6 +270,68 @@ impl LiveState {
         }
         let rs = avg_gain / avg_loss;
         100.0 - 100.0 / (1.0 + rs)
+    }
+
+    /// Block-deal multiple: the latest tick's traded qty ÷ the recent average
+    /// LTQ. 0 when there's no live per-trade qty (replay / quote mode). ≥ ~5×
+    /// signals an aggressive block clearing the book. Display-only.
+    fn block_mult(&self) -> f64 {
+        let n = self.ltq_hist.len();
+        if n < 5 {
+            return 0.0;
+        }
+        let last = *self.ltq_hist.back().unwrap();
+        // Average of the prior history (exclude the latest tick).
+        let prior: f64 = self.ltq_hist.iter().take(n - 1).sum::<f64>() / (n - 1) as f64;
+        if prior > 0.0 {
+            last / prior
+        } else {
+            0.0
+        }
+    }
+
+    /// Tick-sweep: +1 when the last `SWEEP_TICKS` prices rose monotonically AND the
+    /// latest traded qty is above the recent average (an institutional buy sweep);
+    /// −1 for the mirror sell sweep; 0 otherwise / no live qty. Display-only.
+    fn tick_sweep(&self) -> i8 {
+        let np = self.prices.len();
+        if np <= SWEEP_TICKS || self.ltq_hist.len() < 5 {
+            return 0;
+        }
+        let tail: Vec<f64> = self.prices.iter().rev().take(SWEEP_TICKS + 1).copied().collect();
+        // tail[0] = newest. Rising = newest > older at each step.
+        let mut all_up = true;
+        let mut all_down = true;
+        for w in tail.windows(2) {
+            if !(w[0] > w[1]) {
+                all_up = false;
+            }
+            if !(w[0] < w[1]) {
+                all_down = false;
+            }
+        }
+        let qty_hot = self.block_mult() > 1.0;
+        if all_up && qty_hot {
+            1
+        } else if all_down && qty_hot {
+            -1
+        } else {
+            0
+        }
+    }
+
+    /// Spread widening: true when the current spread% is ≥ `SPREAD_WIDEN_MULT`× the
+    /// recent median (liquidity thinning → violent moves). Needs depth history.
+    fn spread_widening(&self) -> bool {
+        let n = self.spread_hist.len();
+        if n < 8 {
+            return false;
+        }
+        let cur = *self.spread_hist.back().unwrap();
+        let mut prior: Vec<f64> = self.spread_hist.iter().take(n - 1).copied().collect();
+        prior.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = prior[prior.len() / 2];
+        median > 0.0 && cur >= SPREAD_WIDEN_MULT * median
     }
 
     /// Intraday volatility proxy used as the candidate's ATR: population
@@ -429,6 +525,7 @@ mod tests {
             symbol: symbol.to_string(),
             instrument_token: 1,
             ltp,
+            ltq: 0,
             volume_day,
             ts_exchange_us: 0,
             ts_recv_us: 0,
@@ -481,6 +578,41 @@ mod tests {
     }
 
     #[test]
+    fn micro_detectors_block_sweep_and_inert_in_replay() {
+        let mk = |p: f64, q: i64, vol: i64| Tick {
+            symbol: "X".into(),
+            instrument_token: 1,
+            ltp: p,
+            ltq: q,
+            volume_day: vol,
+            ts_exchange_us: 0,
+            ts_recv_us: 0,
+            latency_us: 0,
+            depth: None,
+        };
+        // Live: 8 steady ticks (rising price, qty 100) then one 10× block.
+        let mut st = LiveState::new();
+        let mut vol = 0;
+        for i in 0..8 {
+            vol += 100;
+            st.update(&mk(100.0 + i as f64, 100, vol));
+        }
+        assert!((st.block_mult() - 1.0).abs() < 1e-6, "steady ⇒ ~1×, got {}", st.block_mult());
+        vol += 100;
+        st.update(&mk(108.0, 1000, vol)); // 10× block on a rising print
+        assert!(st.block_mult() >= BLOCK_DEAL_MULT, "block_mult {}", st.block_mult());
+        assert_eq!(st.tick_sweep(), 1, "rising prices + hot qty ⇒ buy sweep");
+
+        // Replay: ltq=0 throughout ⇒ detectors inert (no fabricated microstructure).
+        let mut st2 = LiveState::new();
+        for i in 0..10 {
+            st2.update(&mk(100.0 + i as f64, 0, (i + 1) * 100));
+        }
+        assert_eq!(st2.block_mult(), 0.0);
+        assert_eq!(st2.tick_sweep(), 0);
+    }
+
+    #[test]
     fn live_score_direction_agreement() {
         // Bid-heavy + price above VWAP should reward Long and penalise Short.
         let f = LiveFeatures {
@@ -491,6 +623,9 @@ mod tests {
             rvol: 1.0,
             spread_pct: 0.0,
             rsi: 50.0,
+            block_mult: 0.0,
+            tick_sweep: 0,
+            spread_widening: false,
             last_price: 101.0,
         };
         let long = Engine::live_score(Direction::Long, &f);

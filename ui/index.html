@@ -767,6 +767,13 @@
         var rzone = rsi >= 75 ? ['overbought', 'text-rose-400'] : rsi <= 25 ? ['oversold', 'text-amber-400'] : rsi >= 60 ? ['bullish', 'text-emerald-400'] : rsi <= 40 ? ['bearish', 'text-rose-300'] : ['neutral', 'text-slate-400'];
         liveBits.push('<span class="' + rzone[1] + '">RSI ' + fixed(rsi, 0) + ' (' + rzone[0] + ')</span>');
       }
+      // Live microstructure (live feed only; inert in replay) — shown when active.
+      var bm = num(r.block_mult, 0);
+      if (bm >= 5) liveBits.push('<span class="text-amber-300 font-bold">⚡ BLOCK ' + fixed(bm, 0) + '×</span>');
+      var sweep = num(r.tick_sweep, 0);
+      if (sweep > 0) liveBits.push('<span class="text-emerald-400 font-bold">↑ buy sweep</span>');
+      else if (sweep < 0) liveBits.push('<span class="text-rose-400 font-bold">↓ sell sweep</span>');
+      if (r.spread_widening) liveBits.push('<span class="text-rose-400">⚠ spread widening</span>');
       var liveInline = liveBits.length
         ? '<div class="text-[9px] leading-none mt-0.5 num" title="Live read: order-book imbalance (>0.2 = ~60% one-sided) · price vs session VWAP · Wilder RSI(14). Display-only.">' + liveBits.join(' · ') + '</div>'
         : '';

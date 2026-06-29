@@ -35,6 +35,9 @@ pub struct Tick {
     pub instrument_token: u32,
     /// Last traded price.
     pub ltp: f64,
+    /// Last traded QUANTITY (this tick's trade size). 0 when unavailable (quote
+    /// mode / replay). Used by the live block-deal + tick-sweep detectors.
+    pub ltq: i64,
     /// Cumulative volume for the day, as reported by the feed.
     pub volume_day: i64,
     /// Exchange tick timestamp, epoch microseconds IST. 0 if unavailable.
@@ -106,6 +109,15 @@ pub struct LiveFeatures {
     /// Wilder RSI(14) over the live tick series — momentum read [0,100].
     #[serde(default)]
     pub rsi: f64,
+    /// Block-deal multiple: latest tick qty ÷ recent avg (0 in replay; ≥~5 = block).
+    #[serde(default)]
+    pub block_mult: f64,
+    /// Tick sweep: +1 buy sweep / −1 sell sweep / 0 none (live only).
+    #[serde(default)]
+    pub tick_sweep: i8,
+    /// Best bid/ask spread suddenly widening vs its recent median (live only).
+    #[serde(default)]
+    pub spread_widening: bool,
     pub last_price: f64,
 }
 
@@ -198,6 +210,14 @@ pub struct RankedSignal {
     /// Live Wilder RSI(14) momentum read (display-only).
     #[serde(default)]
     pub rsi: f64,
+    /// Live microstructure (live feed only; 0/false in replay): block-deal multiple,
+    /// tick-sweep direction (+1/−1), and sudden spread widening. Display-only.
+    #[serde(default)]
+    pub block_mult: f64,
+    #[serde(default)]
+    pub tick_sweep: i8,
+    #[serde(default)]
+    pub spread_widening: bool,
     /// Honest caveat / context shown in the row (e.g. low sample, wide spread).
     pub note: String,
 }

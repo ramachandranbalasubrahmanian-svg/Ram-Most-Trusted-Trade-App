@@ -157,6 +157,9 @@ fn to_ranked(c: &Candidate, sizing: &Sizing) -> RankedSignal {
         rvol: c.features.rvol,
         vwap_dev_pct: c.features.vwap_dev_pct,
         rsi: c.features.rsi,
+        block_mult: c.features.block_mult,
+        tick_sweep: c.features.tick_sweep,
+        spread_widening: c.features.spread_widening,
         note: build_note(c),
     }
 }
@@ -405,6 +408,9 @@ mod tests {
             rvol: 0.0,
             vwap_dev_pct: 0.0,
             rsi: 50.0,
+            block_mult: 0.0,
+            tick_sweep: 0,
+            spread_widening: false,
             note: String::new(),
         };
         // 50% -> green.
