@@ -863,6 +863,47 @@
       return banner + recentActionsHtml(dq);
     }
 
+    // Fundamentals context (display-only): P/E, ROE, D/E, growth, promoter %, …
+    // from /api/fundamentals. NEVER part of the edge — a "what company is this".
+    var FUND = {};
+    function fundOf(sym) { return FUND[String(sym).toUpperCase()]; }
+    function fnum(v, suffix, dp) {
+      var n = num(v, NaN);
+      if (!isFinite(n)) return "—";
+      return n.toFixed(dp === undefined ? 2 : dp) + (suffix || "");
+    }
+    function fcap(cr) {
+      var n = num(cr, NaN);
+      if (!isFinite(n) || n <= 0) return "—";
+      return n >= 1e5 ? "₹" + (n / 1e5).toFixed(2) + " L Cr" : "₹" + n.toFixed(0) + " Cr";
+    }
+    function fundamentalsHtml(sym) {
+      var f = fundOf(sym);
+      if (!f) {
+        return '<div class="rounded-lg border border-slate-800 bg-[#0d1320] px-3 py-2 text-[11px] text-slate-600 mt-2">' +
+          'No fundamentals on file for ' + esc(str(sym, "")) + ' (coverage ~270 names). Add via /add_stock with an indianapi key.</div>';
+      }
+      var cells = [
+        ["P/E", fnum(f.pe, "", 1)], ["ROE", fnum(f.roe, "%", 1)],
+        ["D/E", fnum(f.debt_to_equity, "", 2)], ["PEG", fnum(f.peg, "", 2)],
+        ["Rev gr 5y", fnum(f.rev_growth_5y, "%", 1)], ["EPS gr 5y", fnum(f.eps_growth_5y, "%", 1)],
+        ["Net margin", fnum(f.profit_margin, "%", 1)], ["Div yield", fnum(f.dividend_yield, "%", 2)],
+        ["P/B", fnum(f.price_to_book, "", 2)], ["Promoter", fnum(f.promoter_pct, "%", 1)],
+        ["Mkt cap", fcap(f.market_cap_cr)],
+      ];
+      var grid = cells.map(function (c) {
+        return '<div class="rounded-md border border-slate-800 bg-slate-900/40 px-2 py-1">' +
+          '<div class="text-[9px] uppercase tracking-wide text-slate-500">' + esc(c[0]) + '</div>' +
+          '<div class="text-[12px] num text-slate-200">' + esc(c[1]) + '</div></div>';
+      }).join("");
+      return '<div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3 mt-2">' +
+        '<div class="flex items-baseline justify-between mb-1.5">' +
+        '<div class="text-[11px] uppercase tracking-wide text-slate-500">Fundamentals · context only</div>' +
+        '<div class="text-[10px] text-slate-600">' + (str(f.company, "") ? esc(str(f.company, "")) + " · " : "") + 'as of ' + esc(str(f.as_of, "—")) + '</div></div>' +
+        '<div class="grid grid-cols-3 sm:grid-cols-4 gap-1.5">' + grid + '</div>' +
+        '<div class="text-[10px] text-slate-600 mt-1.5">Not part of the edge or Confidence — company context to sanity-check a price signal.</div></div>';
+    }
+
     function renderSuggestion(s) {
       s = s && typeof s === "object" ? s : {};
       var out = $("suggestionOut");
@@ -896,6 +937,9 @@
         html += '<div class="text-[10px] text-slate-600 mt-1 num">' + intFmt(totalCfg) + ' configs evaluated · last 30% held out-of-sample · net of ~0.16% round-trip</div>';
       }
       html += '</div>';
+
+      // Fundamentals context panel (display-only; firewalled from the edge).
+      html += fundamentalsHtml(str(s.symbol, ""));
 
       // blocks
       var blocks = arr(s.blocks);
@@ -936,13 +980,15 @@
         "&risk=" + encodeURIComponent(state.riskPct); // server expects a percent (e.g. 2.5)
       $("suggestionOut").innerHTML = loadingBox("Analyzing " + sym + " — backtesting ~240 combos…");
       var dqUrl = "/api/data_quality?symbol=" + encodeURIComponent(sym);
-      // Ensure the surveillance/tradability + data-quality verdicts are loaded
-      // BEFORE we render, so both banners are accurate on the first analyze.
-      // The DQ fetch is best-effort — a failure just omits its banner.
+      var fundUrl = "/api/fundamentals?symbol=" + encodeURIComponent(sym);
+      // Ensure the surveillance/tradability + data-quality + fundamentals context
+      // are loaded BEFORE we render, so all three are accurate on the first
+      // analyze. Each extra fetch is best-effort — a failure just omits its panel.
       Promise.all([
         getJson(url),
         loadTradability(),
         getJson(dqUrl).then(function (dq) { if (dq && dq.symbol && !dq.error) { DQ[String(dq.symbol).toUpperCase()] = dq; } }).catch(function () {}),
+        getJson(fundUrl).then(function (r) { if (r && r.available && r.fundamentals) { FUND[String(r.fundamentals.symbol).toUpperCase()] = r.fundamentals; } }).catch(function () {}),
       ]).then(function (arr) {
         try { renderSuggestion(arr[0]); }
         catch (e) { $("suggestionOut").innerHTML = errorBox("Received a response but could not render it."); }

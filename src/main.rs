@@ -18,6 +18,7 @@ mod config;
 mod costs;
 mod data_quality;
 mod execution_staging;
+mod fundamentals;
 mod holdings_analytics;
 mod ingestion_engine;
 mod journal_sync;

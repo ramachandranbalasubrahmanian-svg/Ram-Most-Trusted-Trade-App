@@ -305,6 +305,19 @@ def fetch_fundamentals(root, sym):
         tmp = os.path.join(od, f"{sym}.json.tmp")
         json.dump(obj, open(tmp, "w"))
         os.replace(tmp, os.path.join(od, f"{sym}.json"))
+        # Best-effort: also upsert this symbol's row into fundamentals.parquet so
+        # it shows in the deep-dive panel immediately (no full rebuild needed).
+        try:
+            from build_fundamentals import flatten_one, COLS, write_parquet
+            row = flatten_one(sym, obj)
+            if row is not None:
+                fp = os.path.join(root, "fundamentals.parquet")
+                ex = pd.read_parquet(fp) if os.path.exists(fp) else pd.DataFrame(columns=COLS)
+                ex = ex[ex["symbol"].astype(str).str.upper() != sym]
+                df = pd.concat([ex, pd.DataFrame([row])[COLS]], ignore_index=True)
+                write_parquet(df, fp)
+        except Exception as e:
+            log(f"      fundamentals parquet upsert skipped: {type(e).__name__}: {str(e)[:100]}")
         has = bool(isinstance(obj, dict) and obj.get("companyName"))
         return {"status": "ok", "company": (obj.get("companyName") if isinstance(obj, dict) else None),
                 "has_financials": bool(isinstance(obj, dict) and obj.get("financials"))} if has else \

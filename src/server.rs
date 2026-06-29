@@ -106,6 +106,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/onboard_symbol", post(onboard_symbol_handler))
         .route("/api/enrich_symbol", post(enrich_symbol_handler))
         .route("/api/data_quality", get(data_quality_handler))
+        .route("/api/fundamentals", get(fundamentals_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
@@ -1389,6 +1390,36 @@ async fn data_quality_handler(State(state): State<AppState>, Query(q): Query<Dat
         Ok(Ok(r)) => Json(r).into_response(),
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("data_quality task panicked: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct FundamentalsQuery {
+    symbol: String,
+}
+
+/// `GET /api/fundamentals?symbol=X` — display-only fundamentals context (P/E,
+/// ROE, D/E, growth, promoter %, …) from `fundamentals.parquet`. Returns
+/// `{"available": false}` when the symbol is not covered (most of the universe).
+///
+/// Honesty/scope: a context panel, NEVER an input to `eligible()`, Confidence,
+/// ranking, or sizing (firewalled `fundamentals` module). Read-only.
+async fn fundamentals_handler(State(state): State<AppState>, Query(q): Query<FundamentalsQuery>) -> Response {
+    let sym = q.symbol.trim().to_uppercase();
+    if !valid_nse_symbol(&sym) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid symbol"}))).into_response();
+    }
+    let root = state.root.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = crate::storage_kernel::open_conn().ok()?;
+        crate::fundamentals::load_symbol(&conn, &root, &sym).ok().flatten()
+    })
+    .await;
+
+    match result {
+        Ok(Some(f)) => Json(serde_json::json!({"available": true, "fundamentals": f})).into_response(),
+        Ok(None) => Json(serde_json::json!({"available": false})).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("fundamentals task panicked: {e}")).into_response(),
     }
 }
 
