@@ -4,18 +4,17 @@
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
 > `SESSION_HANDOVER.md` (esp. ◀ THIS SESSION + the one remaining P1 item below), and continue on `main`.**
 >
-> **Git state (2026-06-29 cont.):** clean working tree, **13 commits AHEAD of origin and NOT pushed** — the owner
-> chose to HOLD the work local for review. Local `main` tip = **`203c174`**; `origin/main` still = **`82b8cf2`**.
-> **Decide on `git push origin main` before doing more.** **197 tests pass; build clean; both anchors byte-identical.**
-> **DONE: P0-2b + split guard + ALL 4 P1 items + news-caution layer + Live Trade Plan + participation/liquidity flag.**
+> **Git state (2026-06-29 cont.):** owner switched to PUSH — pushing as we go. Local `main` tip = **`5503a0e`** (+ a
+> handover commit). **205 tests pass; build clean; both anchors byte-identical.**
+> **DONE: P0-2b + split guard + ALL 4 P1 items + news-caution layer + Live Trade Plan (budget/risk/ATR sizing +
+> participation/liquidity + market-regime/breadth banner + basket correlation/ENB + MC risk-of-ruin).**
 >
-> **Decision-support menu (offered, owner picked "you decide" → built #1):** a trader-decision analytics menu was
-> proposed. **Participation/liquidity-at-size is BUILT (`203c174`)**. Still on the menu (NOT built, recommended order):
-> (2) MAE/heat (stop validation, on the deep-dive — needs run_fill to record max adverse excursion);
-> (3) regime+breadth banner (NIFTY trend + INDIA VIX + adv/decline — `index_daily_all` on disk, `regime.rs` has the
-> NIFTY map; answers the all-long/short basket bias); (4) basket correlation + risk-of-ruin (ENB + seeded-MC on the
-> Live Trade Plan's actual names — reuse `/portfolio` correlation + the MC engine); (5) calibration scorecard
-> (Confidence vs realized, journal-based — compounds once trades are logged).
+> **Decision-support menu (offered; owner: "you decide" + "1 and 2" → built 3 of 5):** BUILT — participation/liquidity
+> (`203c174`), regime+breadth banner (`ec19c9f`), basket correlation+risk-of-ruin (`5503a0e`). **Still on the menu (NOT
+> built):** (a) **MAE/heat** — stop validation on the deep-dive; needs `run_fill`/`TradeOutcome` to also record max
+> adverse excursion per trade (a fill-engine change → re-run the BAJFINANCE anchor after, but MAE is additive so it
+> should stay green); (b) **calibration scorecard** — Confidence-vs-realized reliability curve from the journal
+> (`journal_sync`); compounds once real trades are logged, so highest LONG-term value.
 >
 > **News layer (`4bd783e`):** `GET /api/news?symbol=&side=` + a per-pick caution row under the ★ Sharpest setups —
 > flags CAUTIOUS BUY/SELL when news/today's move contradicts the signal. **Needs `INDIANAPI_KEY` in `.env` to activate**
