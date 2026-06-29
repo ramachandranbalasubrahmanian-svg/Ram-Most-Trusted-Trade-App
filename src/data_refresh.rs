@@ -9,6 +9,7 @@
 //! `ram_istp live` process is running — so a heavy ~20-min download can never
 //! collide with live trading. At most one refresh runs at a time.
 
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -158,9 +159,9 @@ pub fn start_refresh(root: &Path, state: &SharedRefresh) -> Result<String, Strin
     if let Some(reason) = block_reason() {
         return Err(reason);
     }
-    let script = root.join("daily_update.sh");
+    let script = root.join("scheduled_refresh.py");
     if !script.exists() {
-        return Err(format!("pipeline script not found at {}", script.display()));
+        return Err(format!("pipeline wrapper not found at {}", script.display()));
     }
 
     let now = now_ist();
@@ -183,15 +184,26 @@ pub fn start_refresh(root: &Path, state: &SharedRefresh) -> Result<String, Strin
     let log_out = std::fs::File::create(&log_path).map_err(|e| format!("could not open log: {e}"))?;
     let log_err = log_out.try_clone().map_err(|e| format!("log clone failed: {e}"))?;
 
-    let mut cmd = Command::new("bash");
-    // Run with cwd = the archive root, so the script's own `cd "$(dirname "$0")"`
-    // and BASE_DIR resolve correctly; pass the BASENAME (not the root-relative
-    // path, already validated above) to avoid double-pathing under current_dir(root).
-    cmd.arg("daily_update.sh")
+    // Run the FULL refresh through the wrapper: download -> rebuild all 7 edge maps ->
+    // restart the dashboard, forced past the "already done today" marker. Launched with
+    // the Framework python (deps + Full Disk Access); the wrapper sets the child PATH for
+    // daily_update.sh itself.
+    const FW_BIN: &str = "/Library/Frameworks/Python.framework/Versions/3.14/bin";
+    const FW_PY: &str = "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3";
+    let mut cmd = Command::new(if Path::new(FW_PY).exists() { FW_PY } else { "python3" });
+    cmd.arg("scheduled_refresh.py")
+        .arg("--force")
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_out))
-        .stderr(Stdio::from(log_err));
+        .stderr(Stdio::from(log_err))
+        // Own process group, so the wrapper's final `launchctl kickstart -k` (which
+        // restarts THIS dashboard) can't take the still-running pipeline down with it.
+        .process_group(0);
+    let path = std::env::var("PATH")
+        .map(|p| format!("{FW_BIN}:{p}"))
+        .unwrap_or_else(|_| format!("{FW_BIN}:/usr/bin:/bin"));
+    cmd.env("PATH", path);
     // Forward market-data creds if the server has them (never logged). The pipeline
     // also reads <root>/.kite_token.json for the cached daily Kite token.
     for k in ["KITE_API_KEY", "KITE_API_SECRET", "KITE_ACCESS_TOKEN", "INDIANAPI_KEY"] {

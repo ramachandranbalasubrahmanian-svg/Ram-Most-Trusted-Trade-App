@@ -46,10 +46,10 @@
     <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
       <h1 class="text-lg font-bold text-slate-100">Download today's pending data for all ~1500 stocks</h1>
       <p class="text-[13px] text-slate-400 mt-1 max-w-3xl">
-        One click runs the incremental pipeline (<span class="num">daily_update.sh</span>): for every stock in the universe it
-        appends the new days <b class="text-slate-200">from the last downloaded date to the latest trading day</b> and re-derives
-        <b class="text-slate-200">1 / 3 / 5 / 10 / 15 / 30 / 60-min + 1-day</b> candles into the archive this app reads.
-        It is incremental &amp; resumable, and <b class="text-slate-300">never changes a signal, the edge map, or places an order</b>.
+        One click runs the <b class="text-slate-200">full refresh</b>: it <b class="text-slate-200">downloads the pending candles</b>
+        (only the gap, appended — 1 / 3 / 5 / 10 / 15 / 30 / 60-min + 1-day), then <b class="text-slate-200">rebuilds all 7 edge maps</b>
+        and <b class="text-slate-200">restarts the board</b> — so the Live board, Confidence, and the deep-dive all reflect today.
+        Incremental &amp; resumable; <b class="text-slate-300">never places an order</b>.
       </p>
 
       <!-- BLOCKED / READY banner -->
@@ -66,10 +66,11 @@
       </div>
 
       <p class="text-[11px] text-slate-600 mt-3 max-w-3xl">
-        Takes roughly <b>15–25 min</b> for a full day across the universe. The free daily (Yahoo) data runs unattended;
-        the <b>1-minute</b> step needs <b>today's Zerodha Kite login</b> — mint it in the morning
-        (<span class="num">python3 03_download_1min_zerodha.py --login</span>), else the 1-min step is skipped and the rest still runs.
-        Enabled <b class="text-slate-300">only when the live intraday session is not running</b>.
+        Roughly <b>15–25 min</b>: download the gap → rebuild 7 edge maps (~1 min) → restart. The free daily (Yahoo) data
+        runs unattended; the <b>1-minute</b> step needs <b>today's Kite token</b> — get it on the
+        <a href="/kite" class="text-sky-400 hover:underline">Kite</a> page first, else the 1-min step is skipped and the rest still runs.
+        At the very end the board <b>restarts</b> (a ~10-second blip), then shows the fresh data. Enabled
+        <b class="text-slate-300">only when the live intraday session is not running</b>.
       </p>
     </section>
 
