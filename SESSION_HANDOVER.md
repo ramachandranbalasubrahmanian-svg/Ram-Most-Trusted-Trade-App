@@ -4,11 +4,19 @@
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
 > `SESSION_HANDOVER.md` (esp. ◀ THIS SESSION + the one remaining P1 item below), and continue on `main`.**
 >
-> **Git state (2026-06-29 cont.):** owner switched to PUSH — pushing as we go. Local `main` tip = **`a1693f9`** (+ a
-> handover commit). **210 tests pass; build clean; both anchors byte-identical.**
+> **Git state (2026-06-29 cont.):** owner switched to PUSH — pushing as we go. Local `main` tip = **`c854771`** (all
+> pushed; ~25 commits past `82b8cf2`). **215 tests pass; build clean; both anchors byte-identical.**
 > **DONE: P0-2b + split guard + ALL 4 P1 items + news-caution layer + Live Trade Plan (budget/risk/ATR sizing +
 > participation/liquidity + market-regime/breadth banner + basket correlation/ENB + MC risk-of-ruin) + the FULL
-> decision-support menu (5 of 5).**
+> decision-support menu (5/5) + a 12-parameter intraday coverage audit & remediation.**
+>
+> **12-parameter coverage audit (multi-agent, adversarially verified — run wf_81b39013-ad7) + remediation:** of the
+> user's 12 intraday params, 2 fully present (OBI, EMA9/21); built the genuine gaps — **sector rotational momentum**
+> (`a0ae8d9` `sector_momentum.rs`, RS vs the stock's OWN sector index), **pivot ladder R1/S1/R2/S2** (`b406ff5`
+> `pivots.rs`), **OBI-60%/VWAP-state/RSI-zone live tags** (`178c12f`, live Wilder RSI in `analytics_kernel`), **live
+> microstructure** (`fc8ecef`: `Tick.ltq` parsed at ingest offset 8 + block-deal/tick-sweep/spread-widening detectors,
+> LIVE-ONLY/inert in replay), and **opt-in VIX/NIFTY/liquidity VIEW filters** (`c854771`, default OFF, client-side, never
+> gate). All display-only/firewalled; anchors stayed green (the `run_fill` MAE + LTQ adds are purely observational).
 >
 > **Decision-support menu — ALL 5 BUILT:** participation/liquidity (`203c174`), regime+breadth banner (`ec19c9f`),
 > basket correlation+risk-of-ruin (`5503a0e`), **MAE/heat stop-validation on the deep-dive** (`30a33ea` —
