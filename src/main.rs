@@ -16,6 +16,7 @@ mod capital_planner;
 mod circuit_breaker;
 mod config;
 mod costs;
+mod data_quality;
 mod execution_staging;
 mod holdings_analytics;
 mod ingestion_engine;

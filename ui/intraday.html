@@ -822,6 +822,47 @@
         : "text-emerald-400";
     }
 
+    // Data-quality guard (display-only): per-symbol verdict from /api/data_quality
+    // on the live timeframe — bad-tick/zero prices, extreme single-day jumps, and
+    // uncorrected corporate-action discontinuities that make backtest metrics
+    // unreliable. A transparency banner, never a gate (the eligibility gate already
+    // rejects these series; this explains WHY on the deep-dive).
+    var DQ = {};
+    function dqOf(sym) { return DQ[String(sym).toUpperCase()]; }
+    function corpActionTag(a) {
+      var v = num(a.value, NaN);
+      if (str(a.kind, "") === "split") { return (isFinite(v) ? v.toFixed(0) : "?") + ":1 split"; }
+      return "₹" + (isFinite(v) ? v.toFixed(2) : "?") + " dividend";
+    }
+    function recentActionsHtml(dq) {
+      var acts = Array.isArray(dq.recent_actions) ? dq.recent_actions : [];
+      if (!acts.length) return "";
+      var bits = acts.map(function (a) { return esc(corpActionTag(a) + " · " + str(a.date, "")); });
+      return '<div class="rounded-md border border-slate-700/70 bg-slate-800/20 px-2.5 py-1 text-[10px] text-slate-400 mb-2">' +
+        'Recent corporate action: ' + bits.join("  ·  ") + '</div>';
+    }
+    function dqBannerHtml(sym) {
+      var dq = dqOf(sym);
+      if (!dq) return "";
+      var v = str(dq.verdict, "ok");
+      var flags = Array.isArray(dq.flags) ? dq.flags : [];
+      var flagsHtml = flags.length
+        ? '<ul class="list-disc list-inside text-[11px] mt-1">' + flags.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join("") + '</ul>'
+        : "";
+      var banner = "";
+      if (v === "unreliable") {
+        banner = '<div class="rounded-lg border-2 border-rose-500 bg-rose-950/40 px-4 py-3 mb-2">' +
+          '<div class="text-rose-300 font-extrabold text-sm tracking-wide">⛔ DATA QUALITY — UNRELIABLE</div>' +
+          '<div class="text-rose-200/90 text-[12px] mt-1">The backtest numbers below are computed from a price series with bad data. Treat every statistic as suspect.</div>' +
+          '<div class="text-rose-200/80">' + flagsHtml + '</div></div>';
+      } else if (v === "caution") {
+        banner = '<div class="rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-2 text-[12px] text-amber-300 mb-2">⚠ ' +
+          esc(str(dq.reason, "Data-quality caution.")) + '</div>';
+      }
+      // The recent-corp-action context tag shows under any verdict (incl. ok).
+      return banner + recentActionsHtml(dq);
+    }
+
     function renderSuggestion(s) {
       s = s && typeof s === "object" ? s : {};
       var out = $("suggestionOut");
@@ -835,6 +876,8 @@
 
       // SEBI-surveillance / tradability gate — shown FIRST, above everything.
       html += tradBannerHtml(str(s.symbol, ""));
+      // Data-quality guard — directly below tradability (also display-only).
+      html += dqBannerHtml(str(s.symbol, ""));
 
       // header card
       html += '<div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">';
@@ -892,9 +935,15 @@
         "?capital=" + encodeURIComponent(state.capital) +
         "&risk=" + encodeURIComponent(state.riskPct); // server expects a percent (e.g. 2.5)
       $("suggestionOut").innerHTML = loadingBox("Analyzing " + sym + " — backtesting ~240 combos…");
-      // Ensure the surveillance/tradability verdict is loaded BEFORE we render,
-      // so the stay-away banner is accurate even on the first analyze.
-      Promise.all([getJson(url), loadTradability()]).then(function (arr) {
+      var dqUrl = "/api/data_quality?symbol=" + encodeURIComponent(sym);
+      // Ensure the surveillance/tradability + data-quality verdicts are loaded
+      // BEFORE we render, so both banners are accurate on the first analyze.
+      // The DQ fetch is best-effort — a failure just omits its banner.
+      Promise.all([
+        getJson(url),
+        loadTradability(),
+        getJson(dqUrl).then(function (dq) { if (dq && dq.symbol && !dq.error) { DQ[String(dq.symbol).toUpperCase()] = dq; } }).catch(function () {}),
+      ]).then(function (arr) {
         try { renderSuggestion(arr[0]); }
         catch (e) { $("suggestionOut").innerHTML = errorBox("Received a response but could not render it."); }
       }).catch(function () {

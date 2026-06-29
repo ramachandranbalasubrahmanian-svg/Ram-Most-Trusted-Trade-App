@@ -105,6 +105,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/add_stock", post(add_stock_handler))
         .route("/api/onboard_symbol", post(onboard_symbol_handler))
         .route("/api/enrich_symbol", post(enrich_symbol_handler))
+        .route("/api/data_quality", get(data_quality_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
@@ -1349,6 +1350,45 @@ async fn enrich_symbol_handler(State(state): State<AppState>, Json(req): Json<En
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("enrich_symbol task panicked: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct DataQualityQuery {
+    symbol: String,
+}
+
+/// `GET /api/data_quality?symbol=X` — display-only data-quality verdict for one
+/// symbol on the live timeframe: invalid/bad-tick prices, extreme single-day
+/// discontinuities, and uncorrected corporate-action jumps, plus a recent
+/// corporate-action context tag. On-demand (single symbol — fast; no warm cache).
+///
+/// Honesty/scope: a transparency caption, NEVER a gate. It does not feed
+/// `eligible()`, Confidence, ranking, or sizing — the eligibility gate already
+/// rejects junk series; this only explains *why* on the per-stock deep-dive.
+/// Imports a firewalled module (`config` + `storage_kernel` only). Read-only.
+async fn data_quality_handler(State(state): State<AppState>, Query(q): Query<DataQualityQuery>) -> Response {
+    let sym = q.symbol.trim().to_uppercase();
+    if !valid_nse_symbol(&sym) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid symbol"})),
+        )
+            .into_response();
+    }
+    let root = state.root.clone();
+    let tf = state.edge_tf;
+    let result = tokio::task::spawn_blocking(move || -> std::result::Result<crate::data_quality::DataQualityReport, String> {
+        let conn = crate::storage_kernel::open_conn().map_err(|e| format!("duckdb open failed: {e:#}"))?;
+        crate::data_quality::check_symbol(&conn, &root, &sym, tf)
+            .map_err(|e| format!("could not load {sym} candles on {} ({e:#})", tf.dir()))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(r)) => Json(r).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("data_quality task panicked: {e}")).into_response(),
     }
 }
 
