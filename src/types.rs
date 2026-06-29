@@ -103,6 +103,9 @@ pub struct LiveFeatures {
     pub rvol: f64,
     /// Best bid/ask spread as a percent of mid (0 if no depth).
     pub spread_pct: f64,
+    /// Wilder RSI(14) over the live tick series — momentum read [0,100].
+    #[serde(default)]
+    pub rsi: f64,
     pub last_price: f64,
 }
 
@@ -189,6 +192,12 @@ pub struct RankedSignal {
     pub score: f64,
     pub obi: f64,
     pub rvol: f64,
+    /// (last − VWAP)/VWAP × 100 — above/below-VWAP state (display-only).
+    #[serde(default)]
+    pub vwap_dev_pct: f64,
+    /// Live Wilder RSI(14) momentum read (display-only).
+    #[serde(default)]
+    pub rsi: f64,
     /// Honest caveat / context shown in the row (e.g. low sample, wide spread).
     pub note: String,
 }

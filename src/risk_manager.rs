@@ -155,6 +155,8 @@ fn to_ranked(c: &Candidate, sizing: &Sizing) -> RankedSignal {
         score: c.score,
         obi: c.features.obi,
         rvol: c.features.rvol,
+        vwap_dev_pct: c.features.vwap_dev_pct,
+        rsi: c.features.rsi,
         note: build_note(c),
     }
 }
@@ -401,6 +403,8 @@ mod tests {
             score: 1.0,
             obi: 0.0,
             rvol: 0.0,
+            vwap_dev_pct: 0.0,
+            rsi: 50.0,
             note: String::new(),
         };
         // 50% -> green.

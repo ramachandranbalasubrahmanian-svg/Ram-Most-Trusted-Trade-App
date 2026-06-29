@@ -200,8 +200,42 @@ impl LiveState {
             zscore,
             rvol: self.rvol(),
             spread_pct: self.spread_pct(),
+            rsi: self.rsi(),
             last_price: last,
         }
+    }
+
+    /// Wilder RSI(14) over the live tick price series — a live momentum read.
+    /// Returns 50 (neutral) until there are enough ticks. Display-only.
+    fn rsi(&self) -> f64 {
+        const PERIOD: usize = 14;
+        let n = self.prices.len();
+        if n < PERIOD + 1 {
+            return 50.0;
+        }
+        let p: Vec<f64> = self.prices.iter().copied().collect();
+        let (mut avg_gain, mut avg_loss) = (0.0, 0.0);
+        for i in 1..=PERIOD {
+            let d = p[i] - p[i - 1];
+            if d >= 0.0 {
+                avg_gain += d;
+            } else {
+                avg_loss -= d;
+            }
+        }
+        avg_gain /= PERIOD as f64;
+        avg_loss /= PERIOD as f64;
+        for i in (PERIOD + 1)..n {
+            let d = p[i] - p[i - 1];
+            let (g, l) = if d >= 0.0 { (d, 0.0) } else { (0.0, -d) };
+            avg_gain = (avg_gain * (PERIOD as f64 - 1.0) + g) / PERIOD as f64;
+            avg_loss = (avg_loss * (PERIOD as f64 - 1.0) + l) / PERIOD as f64;
+        }
+        if avg_loss <= 0.0 {
+            return if avg_gain > 0.0 { 100.0 } else { 50.0 };
+        }
+        let rs = avg_gain / avg_loss;
+        100.0 - 100.0 / (1.0 + rs)
     }
 
     /// Intraday volatility proxy used as the candidate's ATR: population
@@ -456,6 +490,7 @@ mod tests {
             zscore: 0.0,
             rvol: 1.0,
             spread_pct: 0.0,
+            rsi: 50.0,
             last_price: 101.0,
         };
         let long = Engine::live_score(Direction::Long, &f);

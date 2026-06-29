@@ -752,7 +752,25 @@
       var robInline = robText
         ? '<div class="text-[9px] text-slate-600 leading-none mt-0.5" title="purged+embargoed out-of-sample mean R · walk-forward fold consistency · per-symbol deflated Sharpe — display-only, not part of the edge">' + esc(robText) + '</div>'
         : '';
-      cells += '<td style="text-align:left" class="text-slate-500 text-[11px] max-w-[240px]" title="' + esc(fullTip) + '"><div class="truncate">' + esc(note) + '</div>' + robInline + "</td>";
+      // Live technical read (display-only): OBI 60% band · price vs VWAP · RSI zone.
+      // The user's exact thresholds applied to the already-computed live values.
+      var liveBits = [];
+      var obi = num(r.obi, NaN);
+      if (isFinite(obi)) {
+        var obiTag = Math.abs(obi) >= 0.2 ? (obi > 0 ? '<span class="text-emerald-400">OBI ' + fixed(obi, 2) + ' (strong bid)</span>' : '<span class="text-rose-400">OBI ' + fixed(obi, 2) + ' (strong ask)</span>') : 'OBI ' + fixed(obi, 2);
+        liveBits.push(obiTag);
+      }
+      var vd = num(r.vwap_dev_pct, NaN);
+      if (isFinite(vd)) liveBits.push(vd >= 0 ? '<span class="text-emerald-400">+' + fixed(vd, 2) + '% vs VWAP</span>' : '<span class="text-rose-400">' + fixed(vd, 2) + '% vs VWAP</span>');
+      var rsi = num(r.rsi, NaN);
+      if (isFinite(rsi) && rsi > 0) {
+        var rzone = rsi >= 75 ? ['overbought', 'text-rose-400'] : rsi <= 25 ? ['oversold', 'text-amber-400'] : rsi >= 60 ? ['bullish', 'text-emerald-400'] : rsi <= 40 ? ['bearish', 'text-rose-300'] : ['neutral', 'text-slate-400'];
+        liveBits.push('<span class="' + rzone[1] + '">RSI ' + fixed(rsi, 0) + ' (' + rzone[0] + ')</span>');
+      }
+      var liveInline = liveBits.length
+        ? '<div class="text-[9px] leading-none mt-0.5 num" title="Live read: order-book imbalance (>0.2 = ~60% one-sided) · price vs session VWAP · Wilder RSI(14). Display-only.">' + liveBits.join(' · ') + '</div>'
+        : '';
+      cells += '<td style="text-align:left" class="text-slate-500 text-[11px] max-w-[260px]" title="' + esc(fullTip) + '"><div class="truncate">' + esc(note) + '</div>' + liveInline + robInline + "</td>";
 
       return "<tr>" + cells + "</tr>";
     }

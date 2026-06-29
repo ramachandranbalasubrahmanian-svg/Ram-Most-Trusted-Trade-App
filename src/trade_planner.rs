@@ -299,6 +299,8 @@ mod tests {
             score,
             obi: 0.0,
             rvol: 1.0,
+            vwap_dev_pct: 0.0,
+            rsi: 50.0,
             note: String::new(),
         }
     }
