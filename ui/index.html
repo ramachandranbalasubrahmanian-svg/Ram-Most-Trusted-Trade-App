@@ -143,6 +143,18 @@
       </div>
     </section>
 
+    <!-- ===================== MARKET REGIME + BREADTH ===================== -->
+    <section id="regimeWrap" class="hidden rounded-lg border border-slate-800 bg-[#0d1320] px-3 py-2">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span id="regimeBias" class="text-[11px] font-bold px-2 py-0.5 rounded">—</span>
+          <span id="regimeStats" class="text-[11px] text-slate-300 num"></span>
+        </div>
+        <span id="regimeAsOf" class="text-[10px] text-slate-600"></span>
+      </div>
+      <div id="regimeNote" class="text-[10px] text-slate-500 mt-1"></div>
+    </section>
+
     <!-- ===================== EDGE-MAP FRESHNESS ===================== -->
     <section id="freshWrap" class="hidden">
       <div id="freshBanner" class="rounded-lg border px-3 py-2 text-[12px] flex items-center gap-x-3 gap-y-1 flex-wrap">
@@ -523,6 +535,9 @@
         state.riskPctInt = srpInt;
         renderControls();
       }
+
+      // Market regime + breadth banner
+      renderRegime(pkt.market_regime);
 
       // Risk meter
       applyRiskMeter(pkt.risk_meter);
@@ -1076,6 +1091,30 @@
           });
       });
     }
+    // Market-regime + breadth context banner (display-only).
+    function renderRegime(reg) {
+      reg = reg && typeof reg === "object" ? reg : {};
+      var wrap = $("regimeWrap"); if (!wrap) return;
+      if (!reg.available) { wrap.classList.add("hidden"); return; }
+      wrap.classList.remove("hidden");
+      var bias = str(reg.bias, "neutral");
+      var biasCls = bias.indexOf("divergence") >= 0 ? "bg-amber-900/50 text-amber-300"
+        : bias.indexOf("longs") >= 0 ? "bg-emerald-900/50 text-emerald-300"
+        : bias.indexOf("shorts") >= 0 ? "bg-rose-900/50 text-rose-300"
+        : "bg-slate-800/70 text-slate-300";
+      $("regimeBias").className = "text-[11px] font-bold px-2 py-0.5 rounded " + biasCls;
+      $("regimeBias").textContent = "▤ " + bias.toUpperCase();
+      var niftyCls = num(reg.nifty_pct, 0) >= 0 ? "text-emerald-400" : "text-rose-400";
+      var vixCls = reg.vix_label === "high" ? "text-rose-400" : reg.vix_label === "elevated" ? "text-amber-400" : "text-slate-300";
+      var brCls = reg.breadth_label === "broad up" ? "text-emerald-400" : reg.breadth_label === "broad down" ? "text-rose-400" : "text-slate-300";
+      $("regimeStats").innerHTML =
+        'NIFTY <span class="' + niftyCls + '">' + (num(reg.nifty_pct, 0) >= 0 ? "+" : "") + fixed(reg.nifty_pct, 2) + '%</span> (' + esc(str(reg.nifty_trend, "")) + (reg.nifty_above_sma20 ? ", above 20-DMA" : ", below 20-DMA") + ')' +
+        ' · VIX <span class="' + vixCls + '">' + fixed(reg.vix, 1) + ' (' + esc(str(reg.vix_label, "")) + ')</span>' +
+        ' · Breadth <span class="' + brCls + '">' + intFmt(reg.advances) + '↑/' + intFmt(reg.declines) + '↓ (' + esc(str(reg.breadth_label, "")) + ')</span>';
+      $("regimeAsOf").textContent = "as of " + esc(str(reg.as_of, "—")) + " (EOD)";
+      $("regimeNote").textContent = str(reg.note, "");
+    }
+
     // Live Trade Plan: the budget/risk/ATR-aware basket from pkt.trade_plan.
     function planColorCls(c) {
       return c === "red" ? "text-rose-300" : c === "amber" ? "text-amber-300" : "text-emerald-300";

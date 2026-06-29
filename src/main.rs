@@ -24,6 +24,7 @@ mod holdings_analytics;
 mod ingestion_engine;
 mod journal_sync;
 mod kite_instruments;
+mod market_regime;
 mod news_engine;
 mod news_signal;
 mod portfolio_analytics;
@@ -543,15 +544,20 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
         }
     };
 
-    // Load a SYMBOL → sector map AND a SYMBOL → ADV (avg daily volume) map ONCE for
-    // the Live Trade Plan's per-sector cap + participation-rate liquidity flag
-    // (both best-effort; empty maps simply disable their feature).
-    let (sector_map, adv_map) = match storage_kernel::open_conn() {
+    // Load a SYMBOL → sector map, a SYMBOL → ADV map, and the daily market-regime
+    // snapshot ONCE (all best-effort; daily data — recomputed on the next `serve`,
+    // stamped `as_of` so it's never shown as a live intraday figure).
+    let (sector_map, adv_map, market_regime) = match storage_kernel::open_conn() {
         Ok(conn) => (
             symbol_resolver::SymbolResolver::load(&conn, &root).sector_map(),
             storage_kernel::load_adv_map(&conn, &root, config::ADV_WINDOW_DAYS),
+            market_regime::compute(&conn, &root),
         ),
-        Err(_) => (std::collections::HashMap::new(), std::collections::HashMap::new()),
+        Err(_) => (
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            market_regime::MarketRegime::default(),
+        ),
     };
 
     // Analytics + risk thread: fold ticks, emit a ranked packet every second.
@@ -559,6 +565,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
         let (baselines, edge_index, symbols) = (baselines, edge_index, symbols.clone());
         let sector_map = sector_map;
         let adv_map = adv_map;
+        let market_regime = market_regime;
         let (settings, packet, notify, stop) =
             (settings.clone(), packet.clone(), notify.clone(), stop.clone());
         let freeze = freeze.clone();
@@ -628,6 +635,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
                         top_sell,
                         risk_meter,
                         trade_plan,
+                        market_regime: market_regime.clone(),
                         diagnostics,
                         alerts,
                     };

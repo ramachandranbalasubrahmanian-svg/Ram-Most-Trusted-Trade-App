@@ -336,6 +336,9 @@ pub struct SignalPacket {
     /// Budget/risk/ATR-aware actionable basket (display-only).
     #[serde(default)]
     pub trade_plan: TradePlan,
+    /// Daily market-regime + breadth context (display-only; same each second).
+    #[serde(default)]
+    pub market_regime: crate::market_regime::MarketRegime,
     pub diagnostics: Diagnostics,
     pub alerts: Vec<Alert>,
 }
@@ -351,6 +354,7 @@ impl SignalPacket {
             top_sell: Vec::new(),
             risk_meter: RiskMeter::default(),
             trade_plan: TradePlan::default(),
+            market_regime: crate::market_regime::MarketRegime::default(),
             diagnostics: Diagnostics::default(),
             alerts: Vec::new(),
         }
