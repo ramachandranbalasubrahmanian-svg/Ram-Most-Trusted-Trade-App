@@ -62,8 +62,11 @@
         <a href="/" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Live signals</a>
         <a href="/intraday" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Intraday</a>
         <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
+        <a href="/journal" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Journal</a>
         <a href="/portfolio" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Portfolio</a>
         <a href="/add_stock" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">+ Add stock</a>
+        <a href="/kite" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Kite</a>
+        <a href="/data" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Data</a>
       </nav>
 
       <div class="flex-1"></div>
@@ -82,6 +85,10 @@
       <div id="sessionNote" class="rounded-lg border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-[11px] leading-relaxed text-slate-300">
         <span class="font-semibold text-slate-200">Session:</span>
         <span id="sessionNoteText">Loading session context…</span>
+      </div>
+      <div id="freshNote" class="rounded-lg border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-[11px] leading-relaxed text-slate-400">
+        <span class="font-semibold text-slate-300">Data &amp; backtest:</span>
+        <span id="freshNoteText">checking freshness…</span>
       </div>
       <div class="rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2.5">
         <p class="text-[11px] leading-relaxed text-amber-200/85">
@@ -513,6 +520,39 @@
           '<span class="text-slate-600">context only, does not change any score</span>';
       }).catch(function () {
         $("regimeLine").innerHTML = '<span class="text-slate-600">NIFTY regime unavailable (context only).</span>';
+      });
+    }
+
+    // Data + backtest freshness banner: the last intraday-bar date and when the
+    // edge-map (backtest) was last built, with a STALE warning when the intraday
+    // feed is behind the daily feed (the usual "no Kite token today" case) — so a
+    // setup priced off an old session never looks like a live quote.
+    function loadFreshness() {
+      Promise.all([
+        getJson("/api/data/status").catch(function () { return null; }),
+        getJson("/api/edge_map_status").catch(function () { return null; })
+      ]).then(function (res) {
+        var ds = res[0] || {}, em = res[1] || {};
+        var intraday = str(ds.last_minute_date, "—");
+        var daily = str(ds.last_daily_date, "");
+        var tf = str(em.live_tf, ""), built = "—";
+        var per = arr(em.per_tf);
+        for (var i = 0; i < per.length; i++) {
+          if (per[i] && (per[i].is_live_tf || per[i].timeframe === tf)) { built = str(per[i].built_ist, "—"); tf = str(per[i].timeframe, tf); break; }
+        }
+        var stale = intraday !== "—" && daily && intraday < daily;
+        var html = 'intraday bars through <span class="font-semibold num ' + (stale ? "text-amber-300" : "text-slate-200") + '">' + esc(intraday) + '</span>' +
+          ' · backtest built <span class="font-semibold num text-slate-200">' + esc(built) + '</span>' +
+          (tf ? ' <span class="text-slate-600">(' + esc(tf) + ' edge map)</span>' : '');
+        if (stale) {
+          html += '<br><span class="font-semibold text-amber-300">⚠ Intraday data is behind</span> — the daily feed is current to <span class="num">' + esc(daily) +
+            '</span>, but the Kite 1-minute feed last updated <span class="num">' + esc(intraday) + '</span>, so Entry / ATR / SL / Target here are from <b>that</b> session, not live. ' +
+            'To refresh today: do the ~30s morning Kite login, then <a href="/data" class="text-sky-400 hover:underline">Download pending data</a> (it rebuilds the edge maps + restarts the board).';
+        }
+        var txt = $("freshNoteText"); if (txt) txt.innerHTML = html;
+        if (stale) { var box = $("freshNote"); if (box) box.className = "rounded-lg border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-[11px] leading-relaxed text-amber-200/90"; }
+      }).catch(function () {
+        var txt = $("freshNoteText"); if (txt) txt.textContent = "freshness unavailable";
       });
     }
 
@@ -1406,6 +1446,7 @@
     setInterval(function () { $("sessionNoteText").textContent = sessionNote(); }, 30000);
     loadSymbols();
     loadRegime();
+    loadFreshness();
     loadTradability();
     // Configure the Max-ATR slider from today's universe (one cached finder read).
     (function initAtrSlider() {

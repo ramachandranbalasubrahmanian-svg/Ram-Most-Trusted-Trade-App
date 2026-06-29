@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAM ISTP · Trade Journal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { background: #0a0e14; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #cbd5e1; }
+    .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; }
+    ::-webkit-scrollbar-track { background: #0a0e14; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    table { border-collapse: collapse; width: 100%; }
+    thead th { background:#0d1320; color:#64748b; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; padding:8px; text-align:left; white-space:nowrap; border-bottom:1px solid #1e293b; }
+    tbody td { padding:9px 8px; font-size:13px; border-bottom:1px solid #131b29; vertical-align:middle; }
+    tbody tr:hover td { background:#11192680; }
+    .drop { transition: border-color .15s, background .15s; }
+    .drop.drag { border-color:#38bdf8; background:#0b1b2b; }
+    .spin { animation: spin .9s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
+    .inp { background:#0a0f1a; border:1px solid #1e293b; border-radius:6px; color:#e2e8f0; font-size:13px; padding:7px 9px; outline:none; }
+    .inp:focus { border-color:#0369a1; }
+  </style>
+</head>
+<body class="min-h-screen antialiased">
+  <header class="sticky top-0 z-30 border-b border-slate-800 bg-[#0a0e14]/95 backdrop-blur">
+    <div class="mx-auto max-w-[1200px] px-4 py-3 flex items-center gap-3 flex-wrap">
+      <div class="h-8 w-8 rounded-md bg-gradient-to-br from-emerald-500 to-sky-600 flex items-center justify-center text-white font-bold">R</div>
+      <div>
+        <div class="text-sm font-bold text-slate-100 leading-none">Trade Journal</div>
+        <div class="text-[11px] text-slate-500 leading-none mt-1">Record your real trades · record-only — never feeds Confidence, the edge map, or an order</div>
+      </div>
+      <div class="flex-1"></div>
+      <nav class="flex items-center gap-1 text-[12px]">
+        <a href="/" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Live signals</a>
+        <a href="/intraday" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Intraday</a>
+        <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
+        <a href="/journal" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Journal</a>
+        <a href="/portfolio" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Portfolio</a>
+        <a href="/add_stock" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">+ Add stock</a>
+        <a href="/kite" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Kite</a>
+        <a href="/data" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Data</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[1200px] px-4 py-6 space-y-6">
+
+    <!-- INTRO -->
+    <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
+      <h1 class="text-lg font-bold text-slate-100">Log your trades — paste the P&amp;L or upload your broker report</h1>
+      <p class="text-[13px] text-slate-400 mt-1 max-w-3xl">
+        Add your real, closed trades three ways: <b class="text-slate-200">type one in</b>, <b class="text-slate-200">paste rows</b>,
+        or <b class="text-slate-200">upload an Excel/CSV</b> tradebook or realized-P&amp;L statement (Zerodha Console / Groww exports work —
+        columns are auto-detected). Once logged, your trades power the <a href="/desk" class="text-sky-400 hover:underline">Desk</a>’s
+        <b class="text-slate-200">Calibration Scorecard</b> and <b class="text-slate-200">Portfolio Analytics</b>.
+        <b class="text-slate-300">Record-only — nothing here places a trade or changes any signal.</b>
+      </p>
+
+      <!-- THREE INPUTS -->
+      <div class="grid lg:grid-cols-3 gap-3 mt-4">
+
+        <!-- Quick add -->
+        <div class="rounded-lg border border-slate-800 bg-[#0a0f1a] p-3">
+          <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2 font-semibold">① Add one trade</div>
+          <div class="grid grid-cols-2 gap-2">
+            <input id="qSym" class="inp num uppercase col-span-2" placeholder="Symbol (e.g. RELIANCE)" />
+            <select id="qSide" class="inp"><option value="BUY">Buy / Long</option><option value="SELL">Sell / Short</option></select>
+            <input id="qQty" class="inp num" placeholder="Qty" inputmode="numeric" />
+            <input id="qEntry" class="inp num" placeholder="Entry ₹" inputmode="decimal" />
+            <input id="qExit" class="inp num" placeholder="Exit ₹" inputmode="decimal" />
+          </div>
+          <div class="text-[10px] text-slate-600 my-1.5 text-center">— or just enter the result —</div>
+          <input id="qPnl" class="inp num w-full" placeholder="Realized P&amp;L ₹ (e.g. 450 or -120)" inputmode="decimal" />
+          <button id="qAdd" class="mt-2 w-full rounded-md bg-emerald-700 hover:bg-emerald-600 text-white text-[12px] font-semibold px-4 py-2">Add to journal</button>
+        </div>
+
+        <!-- Paste -->
+        <div class="rounded-lg border border-slate-800 bg-[#0a0f1a] p-3 flex flex-col">
+          <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2 font-semibold">② Paste rows</div>
+          <textarea id="pasteArea" rows="5" class="inp num w-full flex-1 resize-none"
+            placeholder="One trade per line. With a header row, or:&#10;RELIANCE, BUY, 10, 1300, 1325&#10;INFY, SELL, 5, 1500, 1480&#10;WIPRO, 450        (symbol, P&L)"></textarea>
+          <button id="pasteBtn" class="mt-2 rounded-md bg-sky-700 hover:bg-sky-600 text-white text-[12px] font-semibold px-4 py-2">Add pasted rows</button>
+        </div>
+
+        <!-- Upload -->
+        <div class="rounded-lg border border-slate-800 bg-[#0a0f1a] p-3 flex flex-col">
+          <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2 font-semibold">③ Upload a report</div>
+          <label id="drop" class="drop cursor-pointer rounded-lg border-2 border-dashed border-slate-700 hover:border-sky-700 px-3 py-5 flex flex-col items-center justify-center text-center flex-1">
+            <div class="text-2xl mb-1">📄</div>
+            <div class="text-[12px] text-slate-200 font-semibold">Drop xlsx / csv, or click</div>
+            <div class="text-[10px] text-slate-500 mt-1">Tradebook or realized-P&amp;L export</div>
+            <input id="fileInput" type="file" accept=".xlsx,.xls,.xlsm,.csv,.ods" class="hidden" />
+          </label>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4 mt-3 flex-wrap">
+        <label class="flex items-center gap-2 text-[12px] text-slate-400 cursor-pointer">
+          <input id="replace" type="checkbox" class="accent-sky-500" />
+          Replace the whole journal (clear first, then add)
+        </label>
+        <div class="flex-1"></div>
+        <button id="clearBtn" class="rounded-md border border-rose-900/60 text-rose-300 hover:bg-rose-950/40 text-[12px] px-3 py-1.5">Clear journal</button>
+      </div>
+
+      <div id="status" class="text-[12px] text-slate-400 mt-3"></div>
+      <div id="warnings" class="text-[12px] text-amber-400/90 mt-1 space-y-0.5"></div>
+    </section>
+
+    <!-- METRICS -->
+    <section id="metricsCard" class="rounded-xl border border-slate-800 bg-[#0d1320] p-5 hidden">
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 class="text-[15px] font-bold text-slate-100">How you're doing</h2>
+        <div class="text-[11px] text-slate-500">Deeper attribution + the calibration scorecard live on the <a href="/desk" class="text-sky-400 hover:underline">Desk</a>.</div>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3" id="metrics"></div>
+      <div id="equityWrap" class="mt-4 hidden">
+        <div class="text-[10px] uppercase tracking-wide text-slate-600 mb-1">Equity curve · cumulative P&amp;L (₹)</div>
+        <svg id="equity" viewBox="0 0 1000 120" preserveAspectRatio="none" class="w-full h-28 rounded bg-[#0a0f1a] border border-slate-800"></svg>
+      </div>
+    </section>
+
+    <!-- TABLE -->
+    <section class="rounded-xl border border-slate-800 bg-[#0d1320] overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+        <span class="text-[13px] font-bold text-slate-100">Your logged trades</span>
+        <span id="count" class="text-[11px] text-slate-500"></span>
+      </div>
+      <div class="overflow-x-auto">
+        <table>
+          <thead><tr>
+            <th>Date</th><th>Symbol</th><th>Side</th><th class="!text-right">Qty</th>
+            <th class="!text-right">Entry</th><th class="!text-right">Exit</th>
+            <th class="!text-right">P&amp;L ₹</th><th>Strategy</th><th></th>
+          </tr></thead>
+          <tbody id="rows"><tr><td colspan="9" class="text-slate-600 text-center py-8 text-[13px]">No trades yet — add one above.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n, d=0) => (n==null||isNaN(n)) ? "—" : Number(n).toLocaleString("en-IN",{minimumFractionDigits:d,maximumFractionDigits:d});
+const esc = (s) => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function setStatus(msg, kind) {
+  const c = kind==="err" ? "text-rose-400" : kind==="ok" ? "text-emerald-400" : "text-slate-400";
+  $("status").className = "text-[12px] mt-3 " + c;
+  $("status").textContent = msg || "";
+}
+function showWarnings(ws) {
+  $("warnings").innerHTML = (ws||[]).map(w => "⚠ " + esc(w)).join("<br>");
+}
+function summaryLine(s) {
+  const bits = [];
+  if (s.cleared) bits.push("cleared " + s.cleared);
+  bits.push("added " + s.imported);
+  if (s.skipped_duplicates) bits.push(s.skipped_duplicates + " duplicate(s) skipped");
+  if (s.skipped_unreadable) bits.push(s.skipped_unreadable + " unreadable skipped");
+  return bits.join(" · ") + " (of " + s.total_rows + " row" + (s.total_rows===1?"":"s") + ")";
+}
+
+async function postJSON(url, body) {
+  const r = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+async function importText(text) {
+  if (!text.trim()) { setStatus("Nothing to add.", "err"); return; }
+  setStatus("Adding…");
+  try {
+    const s = await postJSON("/api/journal/import_text", {text, replace: $("replace").checked});
+    setStatus(summaryLine(s), s.imported ? "ok" : "err");
+    showWarnings(s.warnings);
+    await loadAll();
+  } catch(e) { setStatus("Failed: " + e.message, "err"); }
+}
+
+// ① Quick add → build a CSV line and reuse the text importer.
+$("qAdd").onclick = () => {
+  const sym = $("qSym").value.trim().toUpperCase();
+  if (!sym) { setStatus("Enter a symbol.", "err"); return; }
+  const side = $("qSide").value, pnl = $("qPnl").value.trim();
+  let line;
+  if (pnl) line = [sym, side, pnl].join(",");
+  else {
+    const qty=$("qQty").value.trim(), en=$("qEntry").value.trim(), ex=$("qExit").value.trim();
+    if (!qty || !en || !ex) { setStatus("Enter qty + entry + exit, or just a P&L.", "err"); return; }
+    line = [sym, side, qty, en, ex].join(",");
+  }
+  importText(line).then(() => { ["qSym","qQty","qEntry","qExit","qPnl"].forEach(id=>$(id).value=""); });
+};
+
+// ② Paste
+$("pasteBtn").onclick = () => importText($("pasteArea").value);
+
+// ③ Upload
+const fileInput = $("fileInput"), drop = $("drop");
+fileInput.onchange = () => { if (fileInput.files[0]) uploadFile(fileInput.files[0]); };
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("drag"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("drag"); }));
+drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) uploadFile(f); });
+
+async function uploadFile(file) {
+  setStatus("Reading " + file.name + "…");
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("replace", $("replace").checked ? "true" : "false");
+  try {
+    const r = await fetch("/api/journal/import", {method:"POST", body:fd});
+    if (!r.ok) throw new Error(await r.text());
+    const s = await r.json();
+    setStatus(summaryLine(s), s.imported ? "ok" : "err");
+    showWarnings(s.warnings);
+    await loadAll();
+  } catch(e) { setStatus("Upload failed: " + e.message, "err"); }
+  fileInput.value = "";
+}
+
+// Clear
+$("clearBtn").onclick = async () => {
+  if (!confirm("Delete every logged trade? This can't be undone.")) return;
+  try {
+    const s = await postJSON("/api/journal/clear", {});
+    setStatus("Cleared " + s.cleared + " trade(s).", "ok");
+    showWarnings([]);
+    await loadAll();
+  } catch(e) { setStatus("Clear failed: " + e.message, "err"); }
+};
+
+async function deleteRow(id) {
+  try { await postJSON("/api/journal/delete", {id}); await loadAll(); }
+  catch(e) { setStatus("Delete failed: " + e.message, "err"); }
+}
+
+function metricCard(label, value, cls) {
+  return '<div class="rounded-lg border border-slate-800 bg-[#0a0f1a] p-3">' +
+    '<div class="text-[9px] uppercase tracking-wide text-slate-600">' + esc(label) + '</div>' +
+    '<div class="num text-lg font-bold ' + (cls||"text-slate-100") + '">' + value + '</div></div>';
+}
+
+function renderMetrics(m) {
+  if (!m || !m.trades) { $("metricsCard").classList.add("hidden"); return; }
+  $("metricsCard").classList.remove("hidden");
+  const pnlCls = m.total_pnl >= 0 ? "text-emerald-400" : "text-rose-400";
+  $("metrics").innerHTML =
+    metricCard("Trades", fmt(m.trades)) +
+    metricCard("Win rate", fmt(m.win_rate,1) + "%") +
+    metricCard("Profit factor", fmt(m.profit_factor,2)) +
+    metricCard("Total P&L", "₹" + fmt(m.total_pnl), pnlCls) +
+    metricCard("Max drawdown", "₹" + fmt(m.max_drawdown), "text-rose-300");
+  renderEquity(m.equity_curve || []);
+}
+
+function renderEquity(curve) {
+  const wrap = $("equityWrap"), svg = $("equity");
+  if (!curve.length) { wrap.classList.add("hidden"); return; }
+  wrap.classList.remove("hidden");
+  const vals = curve.map(p => p[1]);
+  const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = (hi-lo)||1;
+  const W=1000, H=120, n=curve.length;
+  const x = i => n<=1 ? 0 : i/(n-1)*W;
+  const y = v => H - ((v-lo)/span)*(H-12) - 6;
+  const pts = curve.map((p,i) => x(i).toFixed(1)+","+y(p[1]).toFixed(1)).join(" ");
+  const zeroY = y(0).toFixed(1);
+  const last = vals[vals.length-1];
+  const stroke = last>=0 ? "#34d399" : "#fb7185";
+  svg.innerHTML =
+    '<line x1="0" y1="'+zeroY+'" x2="'+W+'" y2="'+zeroY+'" stroke="#1e293b" stroke-width="1"/>' +
+    '<polyline points="'+pts+'" fill="none" stroke="'+stroke+'" stroke-width="2" vector-effect="non-scaling-stroke"/>';
+}
+
+function sideBadge(d) {
+  const buy = String(d).toUpperCase()!=="SELL";
+  const cls = buy ? "bg-emerald-950/50 text-emerald-300 border-emerald-900" : "bg-rose-950/50 text-rose-300 border-rose-900";
+  return '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded border '+cls+'">'+(buy?"BUY":"SELL")+'</span>';
+}
+
+function renderRows(entries) {
+  const closed = entries.filter(e => e.pnl != null);
+  $("count").textContent = entries.length ? (entries.length + " trade" + (entries.length===1?"":"s")) : "";
+  if (!entries.length) {
+    $("rows").innerHTML = '<tr><td colspan="9" class="text-slate-600 text-center py-8 text-[13px]">No trades yet — add one above.</td></tr>';
+    return;
+  }
+  $("rows").innerHTML = entries.map(e => {
+    const pnl = e.pnl, pnlCls = pnl==null ? "text-slate-500" : pnl>=0 ? "text-emerald-400" : "text-rose-400";
+    const date = (e.exit_ist || e.generated_ist || "").slice(0,10);
+    return '<tr>' +
+      '<td class="num text-slate-400">'+esc(date)+'</td>' +
+      '<td class="font-semibold text-slate-100">'+esc(e.symbol)+'</td>' +
+      '<td>'+sideBadge(e.direction)+'</td>' +
+      '<td class="num text-right text-slate-300">'+(e.qty?fmt(e.qty):"—")+'</td>' +
+      '<td class="num text-right text-slate-400">'+(e.actual_fill_price?fmt(e.actual_fill_price,2):"—")+'</td>' +
+      '<td class="num text-right text-slate-400">'+(e.exit_price?fmt(e.exit_price,2):"—")+'</td>' +
+      '<td class="num text-right font-semibold '+pnlCls+'">'+(pnl==null?"—":(pnl>=0?"+":"")+fmt(pnl))+'</td>' +
+      '<td class="text-slate-500 text-[12px]">'+esc(e.strategy||"")+'</td>' +
+      '<td class="text-right"><button onclick="deleteRow('+e.id+')" class="text-slate-600 hover:text-rose-400 px-1" title="Remove">✕</button></td>' +
+    '</tr>';
+  }).join("");
+}
+
+async function loadAll() {
+  try {
+    const [jr, pr] = await Promise.all([
+      fetch("/api/journal").then(r=>r.ok?r.json():[]),
+      fetch("/api/portfolio").then(r=>r.ok?r.json():null),
+    ]);
+    renderRows(Array.isArray(jr)?jr:[]);
+    renderMetrics(pr);
+  } catch(e) { setStatus("Could not load the journal: " + e.message, "err"); }
+}
+
+loadAll();
+</script>
+</body>
+</html>

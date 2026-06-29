@@ -20,11 +20,14 @@ mod config;
 mod costs;
 mod cpcv;
 mod data_quality;
+mod data_refresh;
 mod execution_staging;
 mod fundamentals;
 mod holdings_analytics;
 mod ingestion_engine;
+mod journal_import;
 mod journal_sync;
+mod kite_auth;
 mod kite_instruments;
 mod market_regime;
 mod news_engine;
@@ -321,6 +324,10 @@ enum IngestionSource {
 }
 
 fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
+    // Load .env so the dashboard process (and any subprocess it spawns, e.g. the
+    // manual data-refresh pipeline) inherits KITE_*/INDIANAPI_KEY. Idempotent; the
+    // live path loads it too. Creds are never logged.
+    dotenvy::dotenv().ok();
     let root = config::data_root();
     if !root.exists() {
         anyhow::bail!("data root {} not found", root.display());
@@ -412,6 +419,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
         edge_index: edge_index_arc.clone(),
         edge_tf: tf,
         tradability: tradability.clone(),
+        refresh: data_refresh::shared(),
     };
 
     // Startup precompute: warm all heavy caches in parallel so the first page

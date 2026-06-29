@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAM ISTP · Connect Kite</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { background: #0a0e14; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #cbd5e1; }
+    .num { font-variant-numeric: tabular-nums; }
+    .inp { background:#0a0f1a; border:1px solid #1e293b; border-radius:6px; color:#e2e8f0; font-size:13px; padding:9px 11px; outline:none; width:100%; }
+    .inp:focus { border-color:#0369a1; }
+    .spin { animation: spin .9s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
+    code { background:#0a0f1a; border:1px solid #1e293b; border-radius:4px; padding:1px 5px; font-size:12px; color:#93c5fd; }
+  </style>
+</head>
+<body class="min-h-screen antialiased">
+  <header class="sticky top-0 z-30 border-b border-slate-800 bg-[#0a0e14]/95 backdrop-blur">
+    <div class="mx-auto max-w-[1200px] px-4 py-3 flex items-center gap-3 flex-wrap">
+      <div class="h-8 w-8 rounded-md bg-gradient-to-br from-emerald-500 to-sky-600 flex items-center justify-center text-white font-bold">R</div>
+      <div>
+        <div class="text-sm font-bold text-slate-100 leading-none">Connect Kite</div>
+        <div class="text-[11px] text-slate-500 leading-none mt-1">Mint today's Zerodha token for the data download · auth + market data only — never places an order</div>
+      </div>
+      <div class="flex-1"></div>
+      <nav class="flex items-center gap-1 text-[12px]">
+        <a href="/" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Live signals</a>
+        <a href="/intraday" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Intraday</a>
+        <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
+        <a href="/journal" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Journal</a>
+        <a href="/portfolio" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Portfolio</a>
+        <a href="/add_stock" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">+ Add stock</a>
+        <a href="/kite" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Kite</a>
+        <a href="/data" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Data</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[760px] px-4 py-6 space-y-5">
+
+    <!-- STATUS -->
+    <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
+      <div class="flex items-center justify-between">
+        <h1 class="text-lg font-bold text-slate-100">Kite connection</h1>
+        <button id="refreshBtn" class="text-[11px] text-sky-400 hover:underline">↻ refresh</button>
+      </div>
+      <div id="statusBanner" class="mt-3 rounded-lg px-4 py-3 text-[13px] border border-slate-700/60 bg-slate-900/40 text-slate-300">checking…</div>
+      <div id="credNote" class="mt-2 hidden text-[12px] text-amber-300/90"></div>
+    </section>
+
+    <!-- CONNECT -->
+    <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5 space-y-4">
+      <div>
+        <div class="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mb-1">Step 1 — log in to Zerodha</div>
+        <p class="text-[12px] text-slate-400 mb-2">Opens the official Zerodha login in a new tab. After you log in, Zerodha redirects you to a URL that contains <code>request_token=…</code>.</p>
+        <button id="connectBtn" class="rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[13px] font-semibold px-5 py-2.5 inline-flex items-center gap-2">
+          🔗 Connect to Zerodha
+        </button>
+      </div>
+
+      <div class="border-t border-slate-800 pt-4">
+        <div class="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mb-1">Step 2 — paste the request_token</div>
+        <p class="text-[12px] text-slate-400 mb-2">From the redirected URL's address bar, copy the value after <code>request_token=</code> (up to the next <code>&amp;</code>) and paste it here.</p>
+        <div id="secretRow" class="hidden mb-2">
+          <div class="relative">
+            <input id="apiSecret" type="password" class="inp pr-14" placeholder="Kite API secret (one-time)" autocomplete="off" spellcheck="false" />
+            <button id="secretToggle" type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-sky-400 hover:underline">show</button>
+          </div>
+          <div class="text-[10px] text-slate-600 mt-1">Entered once → saved to your local <code>.env</code> on this machine; never shown again or sent anywhere but this local server. Use <b>show</b> to check for typos.</div>
+        </div>
+        <div class="flex gap-2">
+          <input id="reqToken" class="inp num" placeholder="request_token from the redirect URL" autocomplete="off" spellcheck="false" />
+          <button id="submitBtn" class="rounded-lg bg-sky-700 hover:bg-sky-600 disabled:opacity-50 text-white text-[13px] font-semibold px-4 py-2 whitespace-nowrap inline-flex items-center gap-2">
+            <span id="submitSpin" class="hidden h-4 w-4 rounded-full border-2 border-white/40 border-t-white spin"></span>
+            <span>Mint token</span>
+          </button>
+        </div>
+        <div id="result" class="mt-2 text-[12px]"></div>
+      </div>
+    </section>
+
+    <!-- SECURITY NOTE -->
+    <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-4">
+      <p class="text-[11px] text-slate-500 leading-relaxed">
+        <b class="text-slate-400">What this does:</b> mints today's Kite <i>access token</i> (Zerodha tokens expire ~6 AM daily) and saves it
+        locally to <code>.kite_token.json</code> (private, mode 600) so the data download can run. The token and your API secret are
+        <b class="text-slate-400">never shown on this page, returned to the browser, or logged</b> — and this never places, modifies, or cancels an order.
+        Once connected, head to <a href="/data" class="text-sky-400 hover:underline">Data → Download pending data</a> (or let the 4 PM job run).
+      </p>
+    </section>
+
+  </main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+async function loadStatus() {
+  try {
+    const s = await fetch("/api/kite/status").then(r=>r.json());
+    var b = $("statusBanner"), cn = $("credNote");
+    if (s.error) { b.className = banner("err"); b.textContent = "Status error: " + s.error; return; }
+    if (s.valid_today) {
+      b.className = banner("ok");
+      b.innerHTML = "✓ <b>Connected</b> — token valid for today (" + esc(s.today) + "). You're ready: <a href='/data' class='underline'>Download pending data →</a>";
+    } else if (s.connected) {
+      b.className = banner("warn");
+      b.innerHTML = "⏳ Token is from <span class='num'>" + esc(s.date||"?") + "</span>, which is expired for today. Re-connect below.";
+    } else {
+      b.className = banner("warn");
+      b.textContent = "Not connected yet. Do Step 1 then Step 2 below.";
+    }
+    // credential config notes
+    var notes = [];
+    if (!s.api_key_set) notes.push("⚠ KITE_API_KEY is not in your .env — add it.");
+    else if (!s.api_secret_set) notes.push("First time: enter your Kite API secret in Step 2 below ↓ (it's saved once to your local .env — you won't enter it again).");
+    cn.innerHTML = notes.join("<br>");
+    cn.classList.toggle("hidden", notes.length === 0);
+    $("secretRow").classList.toggle("hidden", !!s.api_secret_set);
+    $("connectBtn").disabled = !s.api_key_set;
+    $("submitBtn").disabled = !s.api_key_set;
+  } catch(e) {
+    $("statusBanner").textContent = "Could not reach the server.";
+  }
+}
+function banner(kind){
+  var base = "mt-3 rounded-lg px-4 py-3 text-[13px] border ";
+  if (kind==="ok") return base + "border-emerald-900/50 bg-emerald-950/20 text-emerald-200";
+  if (kind==="warn") return base + "border-amber-900/50 bg-amber-950/20 text-amber-200";
+  if (kind==="err") return base + "border-rose-900/60 bg-rose-950/30 text-rose-200";
+  return base + "border-slate-700/60 bg-slate-900/40 text-slate-300";
+}
+
+$("connectBtn").onclick = async () => {
+  try {
+    const r = await fetch("/api/kite/login_url").then(x=>x.json());
+    if (r.url) { window.open(r.url, "_blank", "noopener"); }
+    else { $("result").innerHTML = "<span class='text-rose-400'>" + esc(r.error||"could not build the login URL") + "</span>"; }
+  } catch(e) { $("result").innerHTML = "<span class='text-rose-400'>could not get the login URL</span>"; }
+};
+
+$("submitBtn").onclick = async () => {
+  var tok = $("reqToken").value.trim();
+  if (!tok) { $("result").innerHTML = "<span class='text-amber-400'>Paste the request_token first.</span>"; return; }
+  var body = { request_token: tok };
+  var secretShown = !$("secretRow").classList.contains("hidden");
+  if (secretShown) {
+    var sec = $("apiSecret").value.trim();
+    if (!sec) { $("result").innerHTML = "<span class='text-amber-400'>Enter your Kite API secret (one-time).</span>"; return; }
+    body.api_secret = sec;
+  }
+  $("submitBtn").disabled = true; $("submitSpin").classList.remove("hidden");
+  $("result").innerHTML = "<span class='text-slate-400'>minting…</span>";
+  try {
+    const r = await fetch("/api/kite/exchange", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    const j = await r.json();
+    if (j.ok) {
+      $("result").innerHTML = "<span class='text-emerald-400'>✓ " + esc(j.message) + "</span> &nbsp; <a href='/data' class='text-sky-400 underline'>Download pending data →</a>";
+      $("reqToken").value = "";
+    } else {
+      $("result").innerHTML = "<span class='text-rose-400'>✗ " + esc(j.message||"failed") + "</span>";
+    }
+  } catch(e) {
+    $("result").innerHTML = "<span class='text-rose-400'>request failed: " + esc(e.message) + "</span>";
+  }
+  $("submitSpin").classList.add("hidden");
+  await loadStatus();
+};
+
+$("refreshBtn").onclick = loadStatus;
+$("secretToggle").onclick = () => {
+  var i = $("apiSecret");
+  if (i.type === "password") { i.type = "text"; $("secretToggle").textContent = "hide"; }
+  else { i.type = "password"; $("secretToggle").textContent = "show"; }
+};
+loadStatus();
+</script>
+</body>
+</html>

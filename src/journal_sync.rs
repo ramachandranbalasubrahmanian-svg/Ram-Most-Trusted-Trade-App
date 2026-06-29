@@ -207,6 +207,20 @@ pub fn all_entries(conn: &Connection) -> Result<Vec<JournalEntry>> {
     Ok(out)
 }
 
+/// Delete one journal row by id; returns true if a row was removed.
+pub fn delete_entry(conn: &Connection, id: i64) -> Result<bool> {
+    let n = conn.execute(&format!("DELETE FROM {JOURNAL_TABLE} WHERE id = ?"), params![id])?;
+    Ok(n > 0)
+}
+
+/// Delete every journal row; returns the number removed. Used by the trade-journal
+/// page's "replace / clear" action. Record-only — touches no broker, no signal.
+pub fn clear_all(conn: &Connection) -> Result<usize> {
+    let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {JOURNAL_TABLE}"), [], |r| r.get(0))?;
+    conn.execute_batch(&format!("DELETE FROM {JOURNAL_TABLE}"))?;
+    Ok(n as usize)
+}
+
 /// Export the journal to a timestamped CSV under `dir`; returns the file path.
 /// The date suffix is the `YYYY-MM-DD` prefix of `now_ist`.
 pub fn export_csv(conn: &Connection, dir: &Path, now_ist: &str) -> Result<PathBuf> {

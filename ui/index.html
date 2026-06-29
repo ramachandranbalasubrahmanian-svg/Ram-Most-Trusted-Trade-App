@@ -61,8 +61,11 @@
         <a href="/" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Live signals</a>
         <a href="/intraday" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Intraday</a>
         <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
+        <a href="/journal" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Journal</a>
         <a href="/portfolio" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Portfolio</a>
         <a href="/add_stock" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">+ Add stock</a>
+        <a href="/kite" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Kite</a>
+        <a href="/data" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Data</a>
       </nav>
 
       <div class="flex-1"></div>
@@ -228,6 +231,7 @@
         <span id="condSummary" class="text-[10px] text-slate-500"></span>
       </div>
       <div class="text-[9px] text-slate-600 mt-1">Opt-in VIEW filters — they only HIDE rows you toggle off; the engine still computes every signal and Confidence is never touched. All default OFF (honesty-first: you decide).</div>
+      <div id="condEmptyNote" class="hidden text-[11px] text-amber-300/90 mt-1.5 border-t border-amber-900/30 pt-1.5"></div>
     </section>
 
     <!-- ===================== TABLES ===================== -->
@@ -824,16 +828,18 @@
       headEl.innerHTML = headHtml(); // refresh each time so the sort arrow is current
       var sorted = sortRows(arr(rows));
       var f = applyViewFilters(sorted, kind);
-      if (f.blocked) { bodyEl.innerHTML = '<tr><td colspan="20" class="text-center text-[11px] text-amber-400/80 py-3">Hidden by your condition filter: ' + esc(f.blocked) + '</td></tr>'; return; }
-      if (!f.rows.length) { bodyEl.innerHTML = emptyRow(); return; }
+      if (f.blocked) { bodyEl.innerHTML = '<tr><td colspan="20" class="text-center text-[11px] text-amber-400/80 py-3">Hidden by your condition filter: ' + esc(f.blocked) + '</td></tr>'; return { shown: 0, blocked: f.blocked }; }
+      if (!f.rows.length) { bodyEl.innerHTML = emptyRow(); return { shown: 0, blocked: "" }; }
       var html = "";
       for (var i = 0; i < f.rows.length; i++) html += rowHtml(f.rows[i], kind);
       bodyEl.innerHTML = html;
+      return { shown: f.rows.length, blocked: "" };
     }
     function reRenderTables() {
-      renderTable(els.buyHead, els.buyBody, lastBuy, "buy");
-      renderTable(els.sellHead, els.sellBody, lastSell, "sell");
+      var b = renderTable(els.buyHead, els.buyBody, lastBuy, "buy");
+      var s = renderTable(els.sellHead, els.sellBody, lastSell, "sell");
       updateCondSummary();
+      updateCondEmptyNote(b, s);
     }
     function updateCondSummary() {
       var on = [];
@@ -842,6 +848,29 @@
       if (viewFilters.liquid) on.push("ADV≥50k");
       var el = $("condSummary"); if (!el) return;
       el.textContent = on.length ? ("filters ON: " + on.join(" · ")) : "no filters — all signals shown";
+    }
+    // Explain, in plain words, WHY a condition filter emptied the whole board — so an
+    // all-hidden board reads as "your filter hid these", not "the app is broken".
+    function updateCondEmptyNote(b, s) {
+      var el = $("condEmptyNote"); if (!el) return;
+      var anyFilter = viewFilters.vix || viewFilters.nifty || viewFilters.liquid;
+      var bothEmpty = b && s && b.shown === 0 && s.shown === 0;
+      var msg = "";
+      if (anyFilter && bothEmpty) {
+        var vix = lastRegime ? num(lastRegime.vix, NaN) : NaN;
+        if (viewFilters.vix && !(vix > 20)) {
+          msg = "No setups shown — “VIX>20 only” shows signals only in a high-volatility market (India VIX above 20), but VIX is "
+              + (isFinite(vix) ? fixed(vix, 1) : "below 20") + " right now. Untick it to see all signals.";
+        } else if (viewFilters.nifty && b.blocked && s.blocked) {
+          msg = "No setups shown — “NIFTY-aligned only” is hiding them because NIFTY isn’t trending in a way that fits new longs or shorts right now. Untick it to see all signals.";
+        } else if (viewFilters.liquid) {
+          msg = "No setups meet “Liquid only (ADV≥50k)” right now. Untick it to see all signals.";
+        } else {
+          msg = "Your condition filters are hiding every setup right now. Untick them to see all signals.";
+        }
+      }
+      el.textContent = msg;
+      el.classList.toggle("hidden", !msg);
     }
 
     // ----------------------------------------------------------------

@@ -74,6 +74,9 @@ pub struct AppState {
     pub edge_tf: crate::config::Timeframe,
     /// Display-only tradability/liquidity/surveillance flags (warm cache).
     pub tradability: Arc<Cached<TradabilityResult>>,
+    /// Manual bulk data-refresh state (the Data page). At most one runs at a time;
+    /// guarded so it never collides with the live intraday session.
+    pub refresh: crate::data_refresh::SharedRefresh,
 }
 
 /// Run the Axum server until the process exits.
@@ -114,6 +117,22 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/calibration", get(calibration_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
+        // --- Trade Journal (dedicated page: paste P&L or upload xlsx/csv) ---
+        .route("/journal", get(journal_page_handler))
+        .route("/api/journal/import", post(journal_import_handler))
+        .route("/api/journal/import_text", post(journal_import_text_handler))
+        .route("/api/journal/clear", post(journal_clear_handler))
+        .route("/api/journal/delete", post(journal_delete_handler))
+        // --- Data Manager (manual bulk refresh of the 1500-stock archive) ---
+        .route("/data", get(data_page_handler))
+        .route("/api/data/status", get(data_status_handler))
+        .route("/api/data/refresh", post(data_refresh_handler))
+        .route("/api/data/refresh/log", get(data_refresh_log_handler))
+        // --- Kite login (token for the data download) ---
+        .route("/kite", get(kite_page_handler))
+        .route("/api/kite/status", get(kite_status_handler))
+        .route("/api/kite/login_url", get(kite_login_url_handler))
+        .route("/api/kite/exchange", post(kite_exchange_handler))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -1623,6 +1642,299 @@ async fn journal_update_handler(State(state): State<AppState>, Json(req): Json<J
     match ok {
         Some(()) => Json(serde_json::json!({"ok": true})).into_response(),
         None => (StatusCode::INTERNAL_SERVER_ERROR, "journal update failed").into_response(),
+    }
+}
+
+// ===========================================================================
+// Trade Journal — paste your P&L or upload an xlsx/csv broker report.
+// RECORD-ONLY: writes the user's realized trades into the journal, which the
+// (already display-only) Calibration Scorecard + Portfolio Analytics read back.
+// Never touches Confidence / scoring / the edge map / an order.
+// ===========================================================================
+
+/// `GET /journal` — the Trade Journal page.
+async fn journal_page_handler(State(state): State<AppState>) -> Response {
+    let path = state.static_dir.join("journal.html");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("could not read journal.html: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Serialize)]
+struct ImportSummary {
+    imported: usize,
+    skipped_duplicates: usize,
+    skipped_unreadable: usize,
+    total_rows: usize,
+    cleared: usize,
+    source: String,
+    warnings: Vec<String>,
+}
+
+/// Insert parsed trades into the journal, deduping against existing rows so a
+/// re-uploaded report doesn't double-count. `replace` wipes the journal first.
+/// Returns (cleared, imported, duplicates, unreadable). Caller holds the mutex.
+fn ingest_trades(
+    conn: &duckdb::Connection,
+    trades: &[crate::journal_import::TradeRow],
+    replace: bool,
+    now: &str,
+) -> (usize, usize, usize, usize) {
+    use std::collections::HashSet;
+    let cleared = if replace { crate::journal_sync::clear_all(conn).unwrap_or(0) } else { 0 };
+    let mut seen: HashSet<String> = HashSet::new();
+    if !replace {
+        if let Ok(existing) = crate::journal_sync::all_entries(conn) {
+            for e in &existing {
+                seen.insert(crate::journal_import::dedup_key(e));
+            }
+        }
+    }
+    let (mut imported, mut dupes, mut bad) = (0usize, 0usize, 0usize);
+    for t in trades {
+        match crate::journal_import::to_journal_entry(t, now) {
+            Ok(entry) => {
+                if !seen.insert(crate::journal_import::dedup_key(&entry)) {
+                    dupes += 1;
+                    continue;
+                }
+                if crate::journal_sync::insert_entry(conn, &entry).is_ok() {
+                    imported += 1;
+                } else {
+                    bad += 1;
+                }
+            }
+            Err(_) => bad += 1,
+        }
+    }
+    (cleared, imported, dupes, bad)
+}
+
+/// `POST /api/journal/import` — a multipart xlsx/csv tradebook or realized-P&L
+/// statement → parsed trades → journal rows. Field `replace=true` clears first.
+async fn journal_import_handler(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+    let journal = state.journal.clone();
+    let now = now_ist_string();
+    let mut filename = String::new();
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut replace = false;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let fieldname = field.name().unwrap_or("").to_string();
+        if fieldname == "replace" {
+            if let Ok(v) = field.text().await {
+                replace = matches!(v.trim(), "true" | "1" | "on");
+            }
+            continue;
+        }
+        if let Some(fname) = field.file_name() {
+            filename = fname.to_string();
+        }
+        if let Ok(b) = field.bytes().await {
+            if !b.is_empty() {
+                bytes = b.to_vec();
+            }
+        }
+    }
+    if bytes.is_empty() {
+        return (StatusCode::BAD_REQUEST, "no file received — choose an xlsx or csv export").into_response();
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        let imp = crate::journal_import::import_trades_bytes(&filename, &bytes);
+        let total = imp.trades.len();
+        let conn = journal.lock().map_err(|_| ()).ok()?;
+        let (cleared, imported, dupes, bad) = ingest_trades(&conn, &imp.trades, replace, &now);
+        Some(ImportSummary {
+            imported, skipped_duplicates: dupes, skipped_unreadable: bad,
+            total_rows: total, cleared, source: imp.source, warnings: imp.warnings,
+        })
+    })
+    .await
+    .ok()
+    .flatten();
+    match result {
+        Some(s) => Json(s).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "journal import failed").into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ImportTextReq {
+    text: String,
+    #[serde(default)]
+    replace: bool,
+}
+
+/// `POST /api/journal/import_text` — pasted rows (or one quick-add line) → journal.
+async fn journal_import_text_handler(State(state): State<AppState>, Json(req): Json<ImportTextReq>) -> Response {
+    let journal = state.journal.clone();
+    let now = now_ist_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let (trades, warnings) = crate::journal_import::parse_trades_csv(req.text.as_bytes());
+        let total = trades.len();
+        let conn = journal.lock().map_err(|_| ()).ok()?;
+        let (cleared, imported, dupes, bad) = ingest_trades(&conn, &trades, req.replace, &now);
+        Some(ImportSummary {
+            imported, skipped_duplicates: dupes, skipped_unreadable: bad,
+            total_rows: total, cleared, source: "paste".into(), warnings,
+        })
+    })
+    .await
+    .ok()
+    .flatten();
+    match result {
+        Some(s) => Json(s).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "journal import failed").into_response(),
+    }
+}
+
+/// `POST /api/journal/clear` — wipe the journal (the user's "start over").
+async fn journal_clear_handler(State(state): State<AppState>) -> Response {
+    let journal = state.journal.clone();
+    let n = tokio::task::spawn_blocking(move || {
+        let conn = journal.lock().map_err(|_| ()).ok()?;
+        crate::journal_sync::clear_all(&conn).ok()
+    })
+    .await
+    .ok()
+    .flatten();
+    match n {
+        Some(cleared) => Json(serde_json::json!({"ok": true, "cleared": cleared})).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "journal clear failed").into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct DeleteReq {
+    id: i64,
+}
+
+/// `POST /api/journal/delete` {id} — remove one journal row.
+async fn journal_delete_handler(State(state): State<AppState>, Json(req): Json<DeleteReq>) -> Response {
+    let journal = state.journal.clone();
+    let ok = tokio::task::spawn_blocking(move || {
+        let conn = journal.lock().map_err(|_| ()).ok()?;
+        crate::journal_sync::delete_entry(&conn, req.id).ok()
+    })
+    .await
+    .ok()
+    .flatten();
+    match ok {
+        Some(removed) => Json(serde_json::json!({"ok": true, "removed": removed})).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "journal delete failed").into_response(),
+    }
+}
+
+// ===========================================================================
+// Data Manager — manually pull all pending candle/fundamental data for the
+// ~1500-stock archive (the folder the Rust app reads), via the existing Python
+// pipeline (`daily_update.sh`). Guarded so it never runs during live intraday.
+// ===========================================================================
+
+/// `GET /data` — the Data Manager page.
+async fn data_page_handler(State(state): State<AppState>) -> Response {
+    let path = state.static_dir.join("data.html");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("could not read data.html: {e}")).into_response(),
+    }
+}
+
+/// `GET /api/data/status` — archive freshness + whether a refresh is blocked/running.
+async fn data_status_handler(State(state): State<AppState>) -> Response {
+    let root = state.root.clone();
+    let refresh = state.refresh.clone();
+    match tokio::task::spawn_blocking(move || crate::data_refresh::status(&root, &refresh)).await {
+        Ok(s) => Json(s).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("data status failed: {e}")).into_response(),
+    }
+}
+
+/// `POST /api/data/refresh` — start the bulk pull (guarded). 409 if blocked/running.
+async fn data_refresh_handler(State(state): State<AppState>) -> Response {
+    let root = state.root.clone();
+    let refresh = state.refresh.clone();
+    match tokio::task::spawn_blocking(move || crate::data_refresh::start_refresh(&root, &refresh)).await {
+        Ok(Ok(log)) => Json(serde_json::json!({"ok": true, "log_file": log})).into_response(),
+        Ok(Err(reason)) => (StatusCode::CONFLICT, Json(serde_json::json!({"ok": false, "reason": reason}))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("refresh start failed: {e}")).into_response(),
+    }
+}
+
+/// `GET /api/data/refresh/log` — tail the current/last refresh log (last ~16 KB).
+async fn data_refresh_log_handler(State(state): State<AppState>) -> Response {
+    let refresh = state.refresh.clone();
+    let tail = tokio::task::spawn_blocking(move || crate::data_refresh::tail_log(&refresh, 16_384))
+        .await
+        .ok()
+        .flatten();
+    match tail {
+        Some((text, running)) => Json(serde_json::json!({"text": text, "running": running})).into_response(),
+        None => Json(serde_json::json!({"text": "", "running": false})).into_response(),
+    }
+}
+
+// ===========================================================================
+// Kite login — a small web bridge to mint the daily Kite access token (for the
+// data download). Auth + market-data only; it NEVER places an order, and never
+// returns or logs the API secret / access token (see kite_auth.rs).
+// ===========================================================================
+
+/// `GET /kite` — the Connect-to-Zerodha page.
+async fn kite_page_handler(State(state): State<AppState>) -> Response {
+    let path = state.static_dir.join("kite.html");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("could not read kite.html: {e}")).into_response(),
+    }
+}
+
+/// `GET /api/kite/status` — connected / valid-today / which creds are configured.
+async fn kite_status_handler(State(state): State<AppState>) -> Response {
+    let root = state.root.clone();
+    match tokio::task::spawn_blocking(move || crate::kite_auth::status(&root)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("kite status failed: {e}")).into_response(),
+    }
+}
+
+/// `GET /api/kite/login_url` — the Kite login URL (public api_key, never the secret).
+async fn kite_login_url_handler(State(state): State<AppState>) -> Response {
+    let root = state.root.clone();
+    match tokio::task::spawn_blocking(move || crate::kite_auth::login_url(&root)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("kite url failed: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct KiteExchangeReq {
+    request_token: String,
+    /// Optional one-time API secret (used + saved to .env when not already set).
+    #[serde(default)]
+    api_secret: Option<String>,
+}
+
+/// `POST /api/kite/exchange` {request_token, api_secret?} — exchange a single-use
+/// request_token for an access token + cache it. Returns only {ok, message}; the
+/// token + secret are written to disk by the helper, never returned/logged here.
+async fn kite_exchange_handler(State(state): State<AppState>, Json(req): Json<KiteExchangeReq>) -> Response {
+    let root = state.root.clone();
+    let token = req.request_token.trim().to_string();
+    if token.is_empty() || token.len() > 200 || token.chars().any(|c| c.is_whitespace()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"ok": false, "message": "Paste just the request_token from the redirect URL."})),
+        )
+            .into_response();
+    }
+    let secret = req
+        .api_secret
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.len() <= 200 && !s.chars().any(|c| c.is_whitespace()));
+    match tokio::task::spawn_blocking(move || crate::kite_auth::exchange(&root, &token, secret.as_deref())).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("kite exchange failed: {e}")).into_response(),
     }
 }
 

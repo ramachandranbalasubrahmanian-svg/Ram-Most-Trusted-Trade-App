@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAM ISTP · Data Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { background: #0a0e14; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #cbd5e1; }
+    .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; }
+    ::-webkit-scrollbar-track { background: #0a0e14; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    .spin { animation: spin .9s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
+    .pulse-dot { animation: pulse 1.6s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    #log { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body class="min-h-screen antialiased">
+  <header class="sticky top-0 z-30 border-b border-slate-800 bg-[#0a0e14]/95 backdrop-blur">
+    <div class="mx-auto max-w-[1200px] px-4 py-3 flex items-center gap-3 flex-wrap">
+      <div class="h-8 w-8 rounded-md bg-gradient-to-br from-emerald-500 to-sky-600 flex items-center justify-center text-white font-bold">R</div>
+      <div>
+        <div class="text-sm font-bold text-slate-100 leading-none">Data Manager</div>
+        <div class="text-[11px] text-slate-500 leading-none mt-1">Pull pending candles for the ~1500-stock archive · infra-only — never changes a signal or places an order</div>
+      </div>
+      <div class="flex-1"></div>
+      <nav class="flex items-center gap-1 text-[12px]">
+        <a href="/" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Live signals</a>
+        <a href="/intraday" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Intraday</a>
+        <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
+        <a href="/journal" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Journal</a>
+        <a href="/portfolio" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Portfolio</a>
+        <a href="/add_stock" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">+ Add stock</a>
+        <a href="/kite" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Kite</a>
+        <a href="/data" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Data</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[1100px] px-4 py-6 space-y-6">
+
+    <!-- INTRO + ACTION -->
+    <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
+      <h1 class="text-lg font-bold text-slate-100">Download today's pending data for all ~1500 stocks</h1>
+      <p class="text-[13px] text-slate-400 mt-1 max-w-3xl">
+        One click runs the incremental pipeline (<span class="num">daily_update.sh</span>): for every stock in the universe it
+        appends the new days <b class="text-slate-200">from the last downloaded date to the latest trading day</b> and re-derives
+        <b class="text-slate-200">1 / 3 / 5 / 10 / 15 / 30 / 60-min + 1-day</b> candles into the archive this app reads.
+        It is incremental &amp; resumable, and <b class="text-slate-300">never changes a signal, the edge map, or places an order</b>.
+      </p>
+
+      <!-- BLOCKED / READY banner -->
+      <div id="banner" class="mt-4 hidden rounded-lg px-4 py-3 text-[13px]"></div>
+
+      <!-- ACTION ROW -->
+      <div class="mt-4 flex items-center gap-3 flex-wrap">
+        <button id="runBtn" disabled
+          class="rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60 text-white text-[14px] font-bold px-5 py-3 inline-flex items-center gap-2">
+          <span id="runSpin" class="hidden h-4 w-4 rounded-full border-2 border-white/40 border-t-white spin"></span>
+          <span id="runLabel">⬇ Download pending data</span>
+        </button>
+        <span id="runHint" class="text-[12px] text-slate-500"></span>
+      </div>
+
+      <p class="text-[11px] text-slate-600 mt-3 max-w-3xl">
+        Takes roughly <b>15–25 min</b> for a full day across the universe. The free daily (Yahoo) data runs unattended;
+        the <b>1-minute</b> step needs <b>today's Zerodha Kite login</b> — mint it in the morning
+        (<span class="num">python3 03_download_1min_zerodha.py --login</span>), else the 1-min step is skipped and the rest still runs.
+        Enabled <b class="text-slate-300">only when the live intraday session is not running</b>.
+      </p>
+    </section>
+
+    <!-- FRESHNESS -->
+    <section class="rounded-xl border border-slate-800 bg-[#0d1320] p-5">
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 class="text-[15px] font-bold text-slate-100">Archive freshness</h2>
+        <button id="refreshStatus" class="text-[11px] text-sky-400 hover:underline">↻ refresh</button>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="freshness"></div>
+      <div id="archiveRoot" class="text-[10px] text-slate-600 mt-3 num break-all"></div>
+    </section>
+
+    <!-- PROGRESS LOG -->
+    <section id="logCard" class="rounded-xl border border-slate-800 bg-[#0d1320] overflow-hidden hidden">
+      <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+        <span class="text-[13px] font-bold text-slate-100 inline-flex items-center gap-2">
+          <span id="logDot" class="h-2 w-2 rounded-full bg-emerald-400 pulse-dot"></span>
+          Pipeline log
+        </span>
+        <span id="logState" class="text-[11px] text-slate-500"></span>
+      </div>
+      <div class="p-3 bg-[#070b11] max-h-[420px] overflow-y-auto"><div id="log" class="text-slate-300"></div></div>
+    </section>
+
+  </main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+let polling = false;
+
+function card(label, value, cls) {
+  return '<div class="rounded-lg border border-slate-800 bg-[#0a0f1a] p-3">' +
+    '<div class="text-[9px] uppercase tracking-wide text-slate-600">' + esc(label) + '</div>' +
+    '<div class="num text-base font-bold ' + (cls||"text-slate-100") + '">' + value + '</div></div>';
+}
+
+function renderFreshness(s) {
+  $("freshness").innerHTML =
+    card("Stocks in archive", s.symbol_count ? s.symbol_count.toLocaleString("en-IN") : "—") +
+    card("1-min last date", s.last_minute_date || "—", s.last_minute_date ? "text-slate-100" : "text-slate-500") +
+    card("Intraday TFs last date", s.last_1day_date || "—") +
+    card("Daily (combined) last", s.last_daily_date || "—");
+  $("archiveRoot").textContent = "archive: " + (s.archive_root || "—");
+}
+
+function setButton(s) {
+  const running = s.refresh && s.refresh.running;
+  const blocked = s.blocked_reason;
+  const btn = $("runBtn"), banner = $("banner");
+  if (running) {
+    btn.disabled = true; $("runSpin").classList.remove("hidden");
+    $("runLabel").textContent = "Downloading…"; $("runHint").textContent = "started " + (s.refresh.started_ist || "");
+    banner.className = "mt-4 rounded-lg px-4 py-3 text-[13px] border border-sky-900/60 bg-sky-950/30 text-sky-200";
+    banner.classList.remove("hidden");
+    banner.innerHTML = "⏳ A data refresh is running. Watch the log below — it's safe to leave this page.";
+  } else if (blocked) {
+    btn.disabled = true; $("runSpin").classList.add("hidden");
+    $("runLabel").textContent = "⬇ Download pending data"; $("runHint").textContent = "";
+    banner.className = "mt-4 rounded-lg px-4 py-3 text-[13px] border border-amber-900/60 bg-amber-950/30 text-amber-200";
+    banner.classList.remove("hidden");
+    banner.innerHTML = "🔒 <b>Disabled while intraday is active.</b> " + esc(blocked);
+  } else {
+    btn.disabled = false; $("runSpin").classList.add("hidden");
+    $("runLabel").textContent = "⬇ Download pending data"; $("runHint").textContent = "ready — outside market hours, no live session";
+    banner.className = "mt-4 rounded-lg px-4 py-3 text-[13px] border border-emerald-900/50 bg-emerald-950/20 text-emerald-200";
+    banner.classList.remove("hidden");
+    let last = s.refresh && s.refresh.finished_ist;
+    banner.innerHTML = "✓ Ready to download." + (last ? " Last run finished " + esc(last) + (s.refresh.exit_code===0?" (ok).":" (exit "+s.refresh.exit_code+").") : "");
+  }
+}
+
+async function loadStatus() {
+  try {
+    const s = await fetch("/api/data/status").then(r=>r.json());
+    renderFreshness(s); setButton(s);
+    if (s.refresh && s.refresh.running && !polling) startPolling();
+  } catch(e) { /* leave last state */ }
+}
+
+async function startRefresh() {
+  $("runBtn").disabled = true;
+  try {
+    const r = await fetch("/api/data/refresh", {method:"POST"});
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      const banner = $("banner");
+      banner.className = "mt-4 rounded-lg px-4 py-3 text-[13px] border border-rose-900/60 bg-rose-950/30 text-rose-200";
+      banner.classList.remove("hidden");
+      banner.innerHTML = "✗ Could not start: " + esc(j.reason || "unknown");
+      await loadStatus();
+      return;
+    }
+    $("logCard").classList.remove("hidden");
+    startPolling();
+    await loadStatus();
+  } catch(e) {
+    $("runHint").textContent = "start failed: " + e.message;
+    await loadStatus();
+  }
+}
+
+function startPolling() {
+  if (polling) return;
+  polling = true;
+  $("logCard").classList.remove("hidden");
+  const tick = async () => {
+    try {
+      const j = await fetch("/api/data/refresh/log").then(r=>r.json());
+      $("log").textContent = j.text || "(no output yet)";
+      const box = $("log").parentElement; box.scrollTop = box.scrollHeight;
+      $("logState").textContent = j.running ? "running…" : "finished";
+      $("logDot").className = "h-2 w-2 rounded-full " + (j.running ? "bg-emerald-400 pulse-dot" : "bg-slate-500");
+      if (j.running) { setTimeout(tick, 3000); }
+      else { polling = false; await loadStatus(); }
+    } catch(e) { polling = false; }
+  };
+  tick();
+}
+
+$("runBtn").onclick = startRefresh;
+$("refreshStatus").onclick = loadStatus;
+loadStatus();
+</script>
+</body>
+</html>
