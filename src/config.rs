@@ -309,6 +309,15 @@ pub const SHORTLIST_MIN_CONFIDENCE: u32 = 70;
 pub const SHORTLIST_MIN_PROB: f64 = 60.0;
 pub const SHORTLIST_DSR_MIN: f64 = 0.50;
 
+// James–Stein shrinkage applied to a candidate's full-sample expectancy ONLY for
+// the live Top-10 RANKING score — never for Confidence, the eligibility gate, or
+// the displayed raw expectancy. With prior 0.0 and a pseudo-count of 40, a small-n
+// "lucky" edge (n≈30) is pulled roughly halfway toward zero while a robust edge
+// (n≳300) keeps ~88% of its raw expectancy, so small-sample flukes stop topping
+// the list (67 eligible edges today carry n<50). Display-only re-ordering.
+pub const SHRINK_PRIOR_R: f64 = 0.0;
+pub const SHRINK_STRENGTH: f64 = 40.0;
+
 /// Shortlist min-Confidence, honouring `RAM_ISTP_SHORTLIST_MIN_CONFIDENCE`.
 pub fn shortlist_min_confidence() -> u32 {
     std::env::var("RAM_ISTP_SHORTLIST_MIN_CONFIDENCE")

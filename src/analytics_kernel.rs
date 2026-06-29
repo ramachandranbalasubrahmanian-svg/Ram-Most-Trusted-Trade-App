@@ -303,12 +303,22 @@ impl Engine {
                     n,
                 } = edge;
                 let live_score = Self::live_score(*direction, &features);
-                let score = expectancy_r * live_score;
+                // Rank on the James–Stein-shrunk expectancy so small-n lucky edges
+                // don't top the list. Raw `expectancy_r` is still carried for
+                // display; this only changes ordering, never Confidence/the gate.
+                let shrunk_expectancy_r = crate::stats::shrunk_expectancy(
+                    *expectancy_r,
+                    *n,
+                    crate::config::SHRINK_PRIOR_R,
+                    crate::config::SHRINK_STRENGTH,
+                );
+                let score = shrunk_expectancy_r * live_score;
                 out.push(Candidate {
                     symbol: symbol.clone(),
                     strategy: strategy.clone(),
                     direction: *direction,
                     expectancy_r: *expectancy_r,
+                    shrunk_expectancy_r,
                     profit_factor: *profit_factor,
                     win_pct: *win_pct,
                     n: *n,
@@ -494,9 +504,19 @@ mod tests {
         assert_eq!(c.symbol, "X");
         assert_eq!(c.strategy, "vwap_cross");
         assert_eq!(c.direction, Direction::Long);
-        // Neutral features (no depth, last==vwap) ⇒ live_score 1.0, score==expectancy.
+        // Raw expectancy is preserved for display…
+        assert!((c.expectancy_r - 0.5).abs() < 1e-9, "raw exp={}", c.expectancy_r);
+        // …but the board ranks on the sample-size-shrunk expectancy: with n=40 and
+        // strength 40, shrunk = (40·0.5 + 40·0)/(40+40) = 0.25.
+        assert!(
+            (c.shrunk_expectancy_r - 0.25).abs() < 1e-9,
+            "shrunk exp={}",
+            c.shrunk_expectancy_r
+        );
+        // Neutral features (no depth, last==vwap) ⇒ live_score 1.0, so the ranking
+        // score == shrunk expectancy.
         assert!((c.live_score - 1.0).abs() < 1e-9, "live_score={}", c.live_score);
-        assert!((c.score - 0.5).abs() < 1e-9, "score={}", c.score);
+        assert!((c.score - 0.25).abs() < 1e-9, "score={}", c.score);
         assert!(c.atr > 0.0);
     }
 }

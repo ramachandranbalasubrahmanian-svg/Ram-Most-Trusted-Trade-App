@@ -995,6 +995,22 @@ mod tests {
     }
 
     #[test]
+    fn shrunk_ranking_demotes_small_n_fluke() {
+        // The documented Top-10 fix, with the SHIPPED constants: a small-n lucky
+        // edge that out-ranks on RAW expectancy must rank BELOW a robust edge
+        // once shrunk toward the prior. (Confidence/the gate are untouched.)
+        let prior = crate::config::SHRINK_PRIOR_R;
+        let k = crate::config::SHRINK_STRENGTH;
+        let lucky = shrunk_expectancy(0.60, 30, prior, k); // high raw, tiny sample
+        let robust = shrunk_expectancy(0.35, 300, prior, k); // lower raw, big sample
+        assert!(0.60 > 0.35, "raw ordering: lucky tops the list");
+        assert!(
+            robust > lucky,
+            "shrunk ordering must flip: robust {robust} should beat lucky {lucky}"
+        );
+    }
+
+    #[test]
     fn deflated_sharpe_in_range() {
         let trials = [0.1, 0.2, 0.15, 0.05, 0.25, 0.18, 0.12, 0.3];
         let d = deflated_sharpe(0.4, 300, &trials);

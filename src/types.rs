@@ -98,6 +98,10 @@ pub struct Candidate {
     pub direction: Direction,
     // backtested edge
     pub expectancy_r: f64,
+    /// James–Stein-shrunk expectancy (toward 0 by sample size) — the value the
+    /// Top-10 RANKS on, so small-n flukes don't top the list. Display/ranking
+    /// only; never Confidence. Approaches `expectancy_r` for large n.
+    pub shrunk_expectancy_r: f64,
     pub profit_factor: f64,
     pub win_pct: f64,
     pub n: usize,
@@ -150,6 +154,8 @@ pub struct RankedSignal {
     pub proj_loss: f64,
     pub exp_pnl: f64,
     pub expectancy_r: f64,
+    /// Shrunk expectancy used for ranking (display-only; see `Candidate`).
+    pub shrunk_expectancy_r: f64,
     pub win_pct: f64,
     pub profit_factor: f64,
     pub n: usize,

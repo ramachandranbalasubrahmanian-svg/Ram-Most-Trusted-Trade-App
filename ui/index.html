@@ -596,7 +596,7 @@
       { k: "win_pct", label: "Win%", align: "right", help: "Out of the last n times this fired in the backtest, the share that hit Target before SL. Historical, not a promise." },
       { k: "profit_factor", label: "PF", align: "right", help: "Profit Factor: ₹ won ÷ ₹ lost in the backtest. Above 1 = profitable; 2.0 = won twice what it lost." },
       { k: "n", label: "n", align: "right", help: "How many backtested trades these stats come from. Bigger = more trustworthy; a small n (say <30) — treat with caution." },
-      { k: "score", label: "Score", align: "right", help: "The live ranking score the board sorts by (edge stats + live confirmation). Higher ranks higher — a ranking, not a probability." },
+      { k: "score", label: "Score", align: "right", help: "The live ranking score the board sorts by = sample-size-shrunk expectancy × live confirmation. Shrinking discounts small-n flukes so they don’t top the list. Higher ranks higher — a ranking, not a probability; Confidence is separate and untouched." },
       { k: "obi", label: "OBI", align: "right", help: "Order-book imbalance, −1…+1. Positive = more buyers than sellers right now (supports a Buy)." },
       { k: "rvol", label: "RVOL", align: "right", help: "Relative volume vs normal for this time of day. Above 1 = busier than usual — more conviction/liquidity behind the move." },
       { k: "note", label: "Note", align: "left", help: "Honest caveats for this row (e.g. low sample, wide spread, near circuit). Always read it." },
@@ -687,8 +687,14 @@
       // Exp P&L (signed color)
       cells += '<td style="text-align:right" class="num font-semibold ' + signedRClass(r.exp_pnl) + '">' +
                (isFinite(num(r.exp_pnl, NaN)) ? signedRupee(r.exp_pnl) : "—") + "</td>";
-      // exp(R)
-      cells += '<td style="text-align:right" class="num ' + signedRClass(r.expectancy_r) + '">' + fixed(r.expectancy_r, 2) + "R</td>";
+      // exp(R) — raw, with the shrunk (sample-size-discounted) value the board
+      // RANKS on shown beneath when it differs materially (small-n discount).
+      var shrunkR = num(r.shrunk_expectancy_r, NaN);
+      var rawR = num(r.expectancy_r, NaN);
+      var shrunkTag = (isFinite(shrunkR) && isFinite(rawR) && Math.abs(rawR - shrunkR) >= 0.03)
+        ? '<div class="text-[9px] text-slate-500 leading-none" title="James–Stein-shrunk expectancy — what the board ranks on, so small-n flukes don’t top the list. Raw is shown above.">ranks ' + fixed(shrunkR, 2) + 'R</div>'
+        : '';
+      cells += '<td style="text-align:right" class="num ' + signedRClass(r.expectancy_r) + '">' + fixed(r.expectancy_r, 2) + "R" + shrunkTag + "</td>";
       // Win%
       cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.win_pct, 1) + "</td>";
       // PF
