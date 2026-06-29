@@ -904,6 +904,28 @@
         '<div class="text-[10px] text-slate-600 mt-1.5">Not part of the edge or Confidence — company context to sanity-check a price signal.</div></div>';
     }
 
+    // CSCV Probability of Backtest Overfitting per timeframe (display-only). High
+    // PBO ⇒ the best in-sample config is likely a fluke; low ⇒ the edge survives
+    // out-of-sample reshuffles. Never part of Confidence/the gate.
+    function pboClass(p) {
+      return p < 20 ? "text-emerald-300" : p < 50 ? "text-amber-300" : "text-rose-300";
+    }
+    function pboHtml(s) {
+      var rows = arr(s.pbo_by_tf);
+      if (!rows.length) return "";
+      var chips = rows.map(function (r) {
+        var p = num(r.pbo_pct, NaN);
+        return '<div class="rounded-md border border-slate-800 bg-slate-900/40 px-2 py-1" title="' +
+          intFmt(r.n_configs) + ' configs · ' + intFmt(r.n_blocks) + ' CSCV blocks">' +
+          '<div class="text-[9px] uppercase tracking-wide text-slate-500">' + esc(str(r.timeframe, "")) + '</div>' +
+          '<div class="text-[12px] num font-semibold ' + pboClass(p) + '">' + (isFinite(p) ? p.toFixed(0) + "%" : "—") + '</div></div>';
+      }).join("");
+      return '<div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3 mt-2">' +
+        '<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">Backtest overfitting · PBO per timeframe</div>' +
+        '<div class="grid grid-cols-3 sm:grid-cols-6 gap-1.5">' + chips + '</div>' +
+        '<div class="text-[10px] text-slate-600 mt-1.5">Probability the best in-sample config is no better than median out-of-sample (CSCV). Lower is better; &gt;50% = likely data-snooping. Display-only — not part of the edge or Confidence.</div></div>';
+    }
+
     function renderSuggestion(s) {
       s = s && typeof s === "object" ? s : {};
       var out = $("suggestionOut");
@@ -940,6 +962,8 @@
 
       // Fundamentals context panel (display-only; firewalled from the edge).
       html += fundamentalsHtml(str(s.symbol, ""));
+      // Backtest-overfitting (PBO) panel (display-only; firewalled from the edge).
+      html += pboHtml(s);
 
       // blocks
       var blocks = arr(s.blocks);

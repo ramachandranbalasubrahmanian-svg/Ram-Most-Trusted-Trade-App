@@ -960,6 +960,37 @@ pub fn analyze_symbol(
         }
     }
 
+    // --- CSCV / PBO (display-only; firewalled — read-only over the configs we
+    //     already evaluated; NEVER feeds Confidence/the gate). Per TIMEFRAME, so
+    //     all configs share one bar grid (entry_idx is not comparable across tfs).
+    let pbo_by_tf: Vec<crate::types::PboRow> = {
+        const PBO_BLOCKS: usize = 8;
+        let mut by_tf: std::collections::HashMap<Timeframe, Vec<Vec<(usize, f64)>>> =
+            std::collections::HashMap::new();
+        for group in by_strategy.iter() {
+            for cs in group {
+                by_tf.entry(cs.tf).or_default().push(cs.trades.clone());
+            }
+        }
+        let mut rows: Vec<crate::types::PboRow> = Vec::new();
+        for tf in SUGGEST_INTERVALS.iter().copied() {
+            let configs = match by_tf.get(&tf) {
+                Some(c) => c,
+                None => continue,
+            };
+            let total_bars = tf_dates.get(&tf).map(|d| d.len()).unwrap_or(0);
+            if let Some(p) = crate::cpcv::pbo_for_configs(configs, total_bars, PBO_BLOCKS) {
+                rows.push(crate::types::PboRow {
+                    timeframe: pretty_interval(tf).to_string(),
+                    pbo_pct: p.pbo * 100.0,
+                    n_configs: p.n_configs,
+                    n_blocks: p.n_blocks,
+                });
+            }
+        }
+        rows
+    };
+
     // --- reliability pre-pass: DSR (multiple-testing), parameter robustness
     //     across the R:R configs, and NIFTY-regime conditioning — computed before
     //     confidence scoring so the DSR gate + new penalties can apply. ---
@@ -1045,6 +1076,7 @@ pub fn analyze_symbol(
         best_overall,
         blocks,
         total_configs,
+        pbo_by_tf,
         disclaimer: DISCLAIMER.to_string(),
     })
 }

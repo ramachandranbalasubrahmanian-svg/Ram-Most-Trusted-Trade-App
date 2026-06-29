@@ -409,6 +409,16 @@ pub struct StrategyBlock {
     pub valid_setups: usize,      // "All N valid {strategy} setups"
 }
 
+/// One timeframe's Probability-of-Backtest-Overfitting (CSCV/PBO) — display-only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PboRow {
+    pub timeframe: String,
+    /// PBO % (0–100): higher ⇒ the best in-sample config is more likely a fluke.
+    pub pbo_pct: f64,
+    pub n_configs: usize,
+    pub n_blocks: usize,
+}
+
 /// The full per-stock suggestion payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockSuggestion {
@@ -421,6 +431,10 @@ pub struct StockSuggestion {
     pub best_overall: Option<String>,
     pub blocks: Vec<StrategyBlock>,
     pub total_configs: usize,
+    /// CSCV Probability of Backtest Overfitting per timeframe (display-only;
+    /// never feeds Confidence/the gate). Empty when too few configs to estimate.
+    #[serde(default)]
+    pub pbo_by_tf: Vec<PboRow>,
     pub disclaimer: String,
 }
 
