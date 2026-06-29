@@ -306,11 +306,40 @@ pub struct PlanTotals {
     pub color: String,
 }
 
+/// Diversification + Monte-Carlo "bad day" risk for the basket (display-only).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BasketRisk {
+    pub available: bool,
+    pub n: usize,
+    /// Names that had return data for the correlation (≤ n).
+    pub names_used: usize,
+    /// Average pairwise return correlation (NaN when unknown).
+    pub avg_corr: f64,
+    /// Effective Number of Bets — how many INDEPENDENT bets the basket really is.
+    pub enb: f64,
+    /// "well diversified" | "moderately correlated" | "concentrated …".
+    pub enb_label: String,
+    /// Monte-Carlo expected one-day basket P&L (₹).
+    pub expected_inr: f64,
+    /// 5th-percentile day (a realistic bad day, ₹ ≤ 0).
+    pub var5_inr: f64,
+    /// 95th-percentile day (a good day, ₹).
+    pub p95_inr: f64,
+    /// Share of simulated days that end in a loss (%).
+    pub p_losing_day: f64,
+    /// P(losing more than half the basket's risk budget) (%).
+    pub prob_big_loss: f64,
+    pub note: String,
+}
+
 /// The Live Trade Plan: a budget/risk/ATR-aware basket selected from the Top-10.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TradePlan {
     pub positions: Vec<PlanPosition>,
     pub totals: PlanTotals,
+    /// Diversification (ENB) + Monte-Carlo loss distribution for the basket.
+    #[serde(default)]
+    pub basket_risk: BasketRisk,
     /// How many ranked ideas were considered.
     pub considered: usize,
     /// Ideas dropped because they didn't fit (leverage / risk cap / count / sector).

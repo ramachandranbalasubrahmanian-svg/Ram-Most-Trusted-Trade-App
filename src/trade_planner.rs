@@ -48,6 +48,7 @@ pub fn build_plan(
     settings: &UserSettings,
     sectors: &HashMap<String, String>,
     adv: &HashMap<String, f64>,
+    returns: &HashMap<String, Vec<f64>>,
 ) -> TradePlan {
     let budget = settings.budget;
     let max_notional = settings.max_notional();
@@ -65,6 +66,8 @@ pub fn build_plan(
     let considered = pool.len();
 
     let mut positions: Vec<PlanPosition> = Vec::new();
+    // (win_prob 0..1, rr) per accepted position — for the basket Monte-Carlo.
+    let mut win_rr: Vec<(f64, f64)> = Vec::new();
     let mut sector_count: HashMap<String, usize> = HashMap::new();
     let mut deployed = 0.0_f64;
     let mut total_risk = 0.0_f64;
@@ -140,14 +143,19 @@ pub fn build_plan(
             liquidity: liquidity.to_string(),
             max_safe_qty,
         });
+        // win% and reward:risk for the basket Monte-Carlo.
+        let rr_ratio = if sl_dist > 0.0 { (r.target - r.entry).abs() / sl_dist } else { 0.0 };
+        win_rr.push(((r.win_pct / 100.0).clamp(0.0, 1.0), rr_ratio));
     }
 
     let totals = compute_totals(&positions, budget, max_notional);
+    let basket_risk = crate::basket_risk::compute(&positions, &win_rr, returns);
     let notes = build_notes(&totals, skip_lev, skip_risk, skip_conc, skip_sector, risk_cap, budget);
 
     TradePlan {
         positions,
         totals,
+        basket_risk,
         considered,
         skipped_leverage: skip_lev,
         skipped_risk_cap: skip_risk,
@@ -306,7 +314,7 @@ mod tests {
             sig("BBB", "BUY", 2.0, 1000.0, 200, 3.3),
             sig("CCC", "BUY", 1.0, 1000.0, 200, 3.3),
         ];
-        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new());
+        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new(), &HashMap::new());
         assert_eq!(plan.positions.len(), 2, "two fit, third over leverage");
         assert_eq!(plan.positions[0].symbol, "AAA", "highest score first");
         assert_eq!(plan.skipped_leverage, 1);
@@ -321,7 +329,7 @@ mod tests {
         let buy: Vec<RankedSignal> = (0..7)
             .map(|i| sig(&format!("S{i}"), "BUY", 10.0 - i as f64, 100.0, 10, 1.0))
             .collect();
-        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new());
+        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new(), &HashMap::new());
         assert_eq!(plan.positions.len(), config::PLAN_MAX_CONCURRENT);
         assert_eq!(plan.skipped_concurrent, 7 - config::PLAN_MAX_CONCURRENT);
     }
@@ -336,7 +344,7 @@ mod tests {
         for i in 0..4 {
             sectors.insert(format!("B{i}"), "Banking".to_string());
         }
-        let plan = build_plan(&buy, &[], &s, &sectors, &HashMap::new());
+        let plan = build_plan(&buy, &[], &s, &sectors, &HashMap::new(), &HashMap::new());
         assert_eq!(plan.positions.len(), config::PLAN_MAX_PER_SECTOR, "≤2 per sector");
         assert_eq!(plan.skipped_sector, 4 - config::PLAN_MAX_PER_SECTOR);
     }
@@ -348,7 +356,7 @@ mod tests {
         let buy: Vec<RankedSignal> = (0..5)
             .map(|i| sig(&format!("R{i}"), "BUY", 10.0 - i as f64, 10.0, 1000, 2.0)) // risk=1000*2=2000, notional=10k
             .collect();
-        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new());
+        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new(), &HashMap::new());
         // risk_cap = max(2000, 6000) = 6000 ⇒ 3 trades (6000), 4th skipped-risk.
         assert_eq!(plan.positions.len(), 3);
         assert_eq!(plan.skipped_risk_cap, 2);
@@ -363,7 +371,7 @@ mod tests {
         let buy = vec![sig("THIN", "BUY", 5.0, 100.0, 1000, 1.0)];
         let mut adv = HashMap::new();
         adv.insert("THIN".to_string(), 5_000.0);
-        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &adv);
+        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &adv, &HashMap::new());
         let p = &plan.positions[0];
         assert!((p.participation_pct - 20.0).abs() < 1e-6);
         assert_eq!(p.liquidity, "illiquid");
@@ -376,7 +384,7 @@ mod tests {
     fn liquidity_unknown_when_no_adv() {
         let s = UserSettings::new(10_000_000.0, 0.01);
         let buy = vec![sig("X", "BUY", 5.0, 100.0, 10, 1.0)];
-        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new());
+        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new(), &HashMap::new());
         assert_eq!(plan.positions[0].liquidity, "unknown");
         assert_eq!(plan.totals.n_illiquid, 0);
     }
@@ -384,7 +392,7 @@ mod tests {
     #[test]
     fn empty_signals_give_empty_plan() {
         let s = UserSettings::new(500_000.0, 0.01);
-        let plan = build_plan(&[], &[], &s, &HashMap::new(), &HashMap::new());
+        let plan = build_plan(&[], &[], &s, &HashMap::new(), &HashMap::new(), &HashMap::new());
         assert_eq!(plan.positions.len(), 0);
         assert!(plan.notes[0].contains("No tradable basket"));
     }
@@ -394,7 +402,7 @@ mod tests {
         let s = UserSettings::new(10_000_000.0, 0.01);
         let buy = vec![sig("L1", "BUY", 5.0, 100.0, 10, 1.0)];
         let sell = vec![sig("S1", "SELL", 9.0, 100.0, 10, 1.0)];
-        let plan = build_plan(&buy, &sell, &s, &HashMap::new(), &HashMap::new());
+        let plan = build_plan(&buy, &sell, &s, &HashMap::new(), &HashMap::new(), &HashMap::new());
         assert_eq!(plan.positions[0].symbol, "S1", "higher-score short ranks first");
         assert_eq!(plan.totals.n_long, 1);
         assert_eq!(plan.totals.n_short, 1);

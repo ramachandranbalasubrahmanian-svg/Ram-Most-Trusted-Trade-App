@@ -11,6 +11,7 @@
 //!                              edge map, and print the top edges.
 
 mod analytics_kernel;
+mod basket_risk;
 mod cache;
 mod capital_planner;
 mod circuit_breaker;
@@ -547,13 +548,15 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
     // Load a SYMBOL → sector map, a SYMBOL → ADV map, and the daily market-regime
     // snapshot ONCE (all best-effort; daily data — recomputed on the next `serve`,
     // stamped `as_of` so it's never shown as a live intraday figure).
-    let (sector_map, adv_map, market_regime) = match storage_kernel::open_conn() {
+    let (sector_map, adv_map, returns_map, market_regime) = match storage_kernel::open_conn() {
         Ok(conn) => (
             symbol_resolver::SymbolResolver::load(&conn, &root).sector_map(),
             storage_kernel::load_adv_map(&conn, &root, config::ADV_WINDOW_DAYS),
+            storage_kernel::load_returns_map(&conn, &root, config::BASKET_CORR_DAYS),
             market_regime::compute(&conn, &root),
         ),
         Err(_) => (
+            std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             market_regime::MarketRegime::default(),
@@ -565,6 +568,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
         let (baselines, edge_index, symbols) = (baselines, edge_index, symbols.clone());
         let sector_map = sector_map;
         let adv_map = adv_map;
+        let returns_map = returns_map;
         let market_regime = market_regime;
         let (settings, packet, notify, stop) =
             (settings.clone(), packet.clone(), notify.clone(), stop.clone());
@@ -598,7 +602,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
                     let (mut top_buy, mut top_sell) = risk_manager::rank(&cands, &set, &limits);
                     let risk_meter = risk_manager::risk_meter(&top_buy, &top_sell, &set);
                     // Budget/risk/ATR-aware actionable basket (display-only).
-                    let mut trade_plan = trade_planner::build_plan(&top_buy, &top_sell, &set, &sector_map, &adv_map);
+                    let mut trade_plan = trade_planner::build_plan(&top_buy, &top_sell, &set, &sector_map, &adv_map, &returns_map);
                     let mut diagnostics = engine.diagnostics();
                     diagnostics.tick_to_signal_us = t0.elapsed().as_micros() as u64;
                     diagnostics.ticks_per_sec = ticks;

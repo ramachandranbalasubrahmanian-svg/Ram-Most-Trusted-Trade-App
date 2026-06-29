@@ -1156,6 +1156,21 @@
         cell("All targets hit", signedRupee(t.best_case), "text-emerald-300") +
         cell("All stops hit", signedRupee(t.worst_case), "text-rose-300") +
         '</div>';
+      // Diversification (ENB) + Monte-Carlo bad-day strip.
+      var br = plan.basket_risk || {};
+      if (br.available) {
+        var enbCls = String(br.enb_label || "").indexOf("concentrated") >= 0 ? "text-rose-300"
+          : String(br.enb_label || "").indexOf("moderate") >= 0 ? "text-amber-300" : "text-emerald-300";
+        totalsEl.innerHTML += '<div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mt-1.5">' +
+          cell("Independent bets (ENB)", '<span class="' + enbCls + '">' + fixed(br.enb, 1) + ' of ' + intFmt(br.n) + '</span>') +
+          cell("Bad day (5th pctile)", signedRupee(br.var5_inr), "text-rose-300") +
+          cell("Losing-day odds", pct1(num(br.p_losing_day, 0))) +
+          cell("Lose >½ risk", pct1(num(br.prob_big_loss, 0)), num(br.prob_big_loss, 0) >= 20 ? "text-rose-300" : "text-slate-300") +
+          '</div>' +
+          '<div class="text-[10px] text-slate-500 mt-1">' + esc(str(br.enb_label, "")) +
+          (isFinite(num(br.avg_corr, NaN)) ? ' · avg correlation ' + fixed(br.avg_corr, 2) + ' (' + intFmt(br.names_used) + '/' + intFmt(br.n) + ' names)' : '') +
+          ' · Monte-Carlo assumes independence — true tail is worse when ENB &lt; positions.</div>';
+      }
       // Positions table.
       var h = '<table class="w-full text-[12px] num"><thead><tr class="text-slate-500 text-[10px] uppercase tracking-wide">' +
         '<th class="text-left pr-2 py-1">Stock</th><th class="text-left pr-2 py-1">Side</th>' +

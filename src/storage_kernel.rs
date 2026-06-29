@@ -106,6 +106,57 @@ pub fn load_adv_map(conn: &Connection, root: &Path, days: usize) -> std::collect
     out
 }
 
+/// SYMBOL → recent daily RETURNS (close-to-close fractional) over the last `days`
+/// sessions, from `nse_daily_all.parquet`. Used by the Live Trade Plan's basket
+/// correlation / ENB. Best-effort: empty map on any failure (correlation then
+/// degrades to a conservative prior; never fabricated).
+pub fn load_returns_map(
+    conn: &Connection,
+    root: &Path,
+    days: usize,
+) -> std::collections::HashMap<String, Vec<f64>> {
+    let mut out: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+    let path = root.join("nse_daily_all.parquet");
+    if !path.exists() {
+        return out;
+    }
+    // Most-recent `days+1` closes per symbol (need +1 to form `days` returns).
+    let sql = format!(
+        "WITH r AS ( \
+            SELECT symbol, CAST(date AS DATE)::VARCHAR AS d, close, \
+                   row_number() OVER (PARTITION BY symbol ORDER BY date DESC) rn \
+            FROM read_parquet({}) ) \
+         SELECT symbol, d, close FROM r WHERE rn <= {} ORDER BY symbol, d",
+        quote_path(&path),
+        days.saturating_add(1).max(2),
+    );
+    let mut closes: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+    if let Ok(mut stmt) = conn.prepare(&sql) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, f64>(2)?))
+        }) {
+            for row in rows.flatten() {
+                let (sym, close) = row;
+                closes.entry(sym.trim().to_uppercase()).or_default().push(close);
+            }
+        }
+    }
+    for (sym, cs) in closes {
+        if cs.len() < 3 {
+            continue;
+        }
+        let rets: Vec<f64> = cs
+            .windows(2)
+            .filter_map(|w| if w[0] > 0.0 { Some(w[1] / w[0] - 1.0) } else { None })
+            .filter(|r| r.is_finite())
+            .collect();
+        if rets.len() >= 3 {
+            out.insert(sym, rets);
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // DuckDB helpers
 // ---------------------------------------------------------------------------

@@ -179,6 +179,8 @@ pub const PLAN_MAX_PER_SECTOR: usize = 2;
 pub const LIQUIDITY_PARTICIPATION_CAP: f64 = 0.01;
 /// ADV lookback (trading days) for the participation-rate liquidity flag.
 pub const ADV_WINDOW_DAYS: usize = 20;
+/// Daily-returns lookback for the basket correlation / ENB.
+pub const BASKET_CORR_DAYS: usize = 60;
 
 // --- Trading Desk: capital pool, risk tiers, circuit breaker ---------------
 
