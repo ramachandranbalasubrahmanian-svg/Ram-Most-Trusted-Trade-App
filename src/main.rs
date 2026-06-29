@@ -13,6 +13,7 @@
 mod analytics_kernel;
 mod basket_risk;
 mod cache;
+mod calibration;
 mod capital_planner;
 mod circuit_breaker;
 mod config;

@@ -109,6 +109,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/fundamentals", get(fundamentals_handler))
         .route("/api/news", get(news_handler))
         .route("/api/journal", get(journal_get_handler))
+        .route("/api/calibration", get(calibration_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
         .with_state(state);
@@ -1463,6 +1464,30 @@ async fn journal_get_handler(State(state): State<AppState>) -> Response {
     match entries {
         Some(e) => Json::<Vec<JournalEntry>>(e).into_response(),
         None => (StatusCode::INTERNAL_SERVER_ERROR, "journal read failed").into_response(),
+    }
+}
+
+/// `GET /api/calibration` — display-only reliability scorecard: does the engine's
+/// backtested win% hold up in YOUR journal? Matches each CLOSED trade's
+/// (symbol, strategy, direction) to the live edge map's `win_pct`, then compares
+/// predicted vs realized (bucketed). Honest about small samples. NEVER feeds
+/// Confidence/the gate/ranking — a backward-looking trust check.
+async fn calibration_handler(State(state): State<AppState>) -> Response {
+    let journal = state.journal.clone();
+    let edges = state.edge_index.clone();
+    let cal = tokio::task::spawn_blocking(move || {
+        let entries = {
+            let conn = journal.lock().map_err(|_| ()).ok()?;
+            crate::journal_sync::all_entries(&conn).ok()?
+        };
+        Some(crate::calibration::build(&entries, &edges))
+    })
+    .await
+    .ok()
+    .flatten();
+    match cal {
+        Some(c) => Json(c).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "calibration read failed").into_response(),
     }
 }
 
