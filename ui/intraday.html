@@ -660,6 +660,19 @@
           : '') +
         '</p>';
 
+      // MAE / heat (stop validation): how deep WINNING trades dipped before working.
+      // p90 near 1.0R ⇒ winners brush the stop ⇒ the 1.5×ATR stop is too tight.
+      var maeN = num(c.mae_winner_n, 0), maeP90 = num(c.mae_winner_p90, NaN);
+      if (maeN >= 5 && isFinite(maeP90)) {
+        var tight = maeP90 >= 0.9, snug = maeP90 >= 0.75;
+        var maeCls = tight ? 'text-rose-400' : (snug ? 'text-amber-400' : 'text-emerald-400');
+        var maeMsg = tight ? 'stop is TIGHT — winners routinely brush it; a wider stop may convert stop-outs'
+          : (snug ? 'stop is snug — some winners come close' : 'stop has comfortable room over winners’ heat');
+        html += '<p class="text-[11px] text-slate-400 num">' +
+          'Winners’ heat (MAE): median ' + fixed(c.mae_winner_median, 2) + 'R, 90th-pctile <span class="' + maeCls + '">' + fixed(maeP90, 2) + 'R</span> ' +
+          'before hitting target (n=' + intFmt(maeN) + ') · <span class="' + maeCls + '">' + maeMsg + '</span></p>';
+      }
+
       // probability line
       html += '<p class="text-[11px] text-slate-400 num">' +
         'Probability ' + fixed(c.prob_score, 0) + '/100 — best estimate this trade ends in profit (historical win rate) · ' +

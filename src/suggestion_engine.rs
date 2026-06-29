@@ -326,6 +326,11 @@ struct ConfigStat {
     ambiguous_frac: f64,
     exp_2x_slip: f64,
     exp_3x_slip: f64,
+    // Max-adverse-excursion (heat) of WINNING trades, in R — how deep winners
+    // dipped before hitting target. Near 1.0 ⇒ the stop barely survives.
+    mae_winner_median: f64,
+    mae_winner_p90: f64,
+    mae_winner_n: usize,
 
     // confidence (computed lazily during selection)
     confidence: Option<u32>,
@@ -374,6 +379,28 @@ fn win_rate_pct(rs: &[f64]) -> f64 {
 }
 
 /// Build a `ConfigStat` from a config's detailed trades.
+/// Max-adverse-excursion (heat) of the WINNING trades, in R → (median, p90, n).
+/// "How deep did the trades that eventually won dip against me first?" A p90 near
+/// 1.0 means winners routinely brush the stop — it is too tight for the edge.
+/// Display-only; computed from the same fills, never feeds Confidence.
+fn mae_winner_stats(outs: &[crate::strategy_engine::TradeOutcome]) -> (f64, f64, usize) {
+    let mut maes: Vec<f64> = outs
+        .iter()
+        .filter(|o| o.r > 0.0 && o.mae_r.is_finite())
+        .map(|o| o.mae_r)
+        .collect();
+    let n = maes.len();
+    if n == 0 {
+        return (0.0, 0.0, 0);
+    }
+    maes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let pct = |p: f64| -> f64 {
+        let rank = (p / 100.0 * (n as f64 - 1.0)).round() as usize;
+        maes[rank.min(n - 1)]
+    };
+    (pct(50.0), pct(90.0), n)
+}
+
 fn build_config_stat(
     strat: SuggestStrategy,
     tf: Timeframe,
@@ -436,6 +463,9 @@ fn build_config_stat(
         ambiguous_frac: 0.0,
         exp_2x_slip: expectancy,
         exp_3x_slip: expectancy,
+        mae_winner_median: 0.0,
+        mae_winner_p90: 0.0,
+        mae_winner_n: 0,
         confidence: None,
         confidence_band: String::new(),
         wilson_low: 0.0,
@@ -652,6 +682,9 @@ trade only minimum size.",
         ambiguous_frac: cs.ambiguous_frac,
         exp_2x_slip: cs.exp_2x_slip,
         exp_3x_slip: cs.exp_3x_slip,
+        mae_winner_median: cs.mae_winner_median,
+        mae_winner_p90: cs.mae_winner_p90,
+        mae_winner_n: cs.mae_winner_n,
 
         prob_score,
         prob_floor,
@@ -911,10 +944,15 @@ pub fn analyze_symbol(
                                 outs.iter().map(|o| (o.entry_idx, o.r)).collect();
                             let ambiguous_frac =
                                 outs.iter().filter(|o| o.ambiguous).count() as f64 / outs.len() as f64;
+                            // Max-adverse-excursion (heat) of WINNING trades, in R.
+                            let (mae_med, mae_p90, mae_n) = mae_winner_stats(&outs);
                             let mut cs = build_config_stat(
                                 strat, tf, dir, sl_mult, rr, &trades, total_bars, last_close, last_atr,
                             );
                             cs.ambiguous_frac = ambiguous_frac;
+                            cs.mae_winner_median = mae_med;
+                            cs.mae_winner_p90 = mae_p90;
+                            cs.mae_winner_n = mae_n;
                             // Every config's sharpe feeds the DSR trial set.
                             out.sharpes.push(cs.sharpe);
                             if cs.n >= PROVISIONAL_MIN {
@@ -1885,6 +1923,9 @@ mod tests {
             ambiguous_frac: 0.0,
             exp_2x_slip: 0.0,
             exp_3x_slip: 0.0,
+            mae_winner_median: 0.0,
+            mae_winner_p90: 0.0,
+            mae_winner_n: 0,
             prob_score: 0.0,
             prob_floor: 0.0,
             confidence: None,

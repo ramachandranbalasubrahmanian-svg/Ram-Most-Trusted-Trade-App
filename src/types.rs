@@ -462,6 +462,14 @@ pub struct SetupCard {
     pub exp_2x_slip: f64,     // net expectancy (R) if slippage is 2× the model
     #[serde(default)]
     pub exp_3x_slip: f64,     // net expectancy (R) if slippage is 3× the model
+    // Max-adverse-excursion (heat) of WINNING trades, in R — how deep winners dip
+    // before working. p90 near 1.0 ⇒ the 1.5×ATR stop is too tight for this edge.
+    #[serde(default)]
+    pub mae_winner_median: f64,
+    #[serde(default)]
+    pub mae_winner_p90: f64,
+    #[serde(default)]
+    pub mae_winner_n: usize,
 
     // probability / confidence / conviction
     pub prob_score: f64,      // win chance 0-100 (historical win rate)

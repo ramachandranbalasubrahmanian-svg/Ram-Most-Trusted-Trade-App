@@ -691,6 +691,11 @@ pub struct TradeOutcome {
     pub ambiguous: bool,
     /// True when finer-resolution data actually decided the order (not assumed).
     pub intrabar_resolved: bool,
+    /// Max Adverse Excursion in R: the deepest the trade went AGAINST the position
+    /// (entry→worst-held-bar) divided by the 1R risk. ~1.0 for stopped trades; for
+    /// WINNERS it shows how much heat they took before working (≈1.0 ⇒ the stop is
+    /// too tight). Observational only — never changes `r` or the exit.
+    pub mae_r: f64,
 }
 
 /// Resolve a same-bar SL/target ambiguity using finer-resolution bars of `day`.
@@ -757,9 +762,20 @@ pub fn run_fill(
         let mut exit_idx = idx;
         let mut ambiguous = false;
         let mut intrabar_resolved = false;
+        // Max adverse excursion (price units), updated read-only as the trade runs.
+        let mut worst_adverse = 0.0_f64;
         let mut j = idx + 1;
         while j < n && bars[j].day == day {
             let b = &bars[j];
+            // Record how far this bar went AGAINST the position BEFORE deciding the
+            // exit, so the exit bar's heat is included. Never affects `r`/exit.
+            let adverse = match dir {
+                Direction::Long => entry - b.low,
+                Direction::Short => b.high - entry,
+            };
+            if adverse > worst_adverse {
+                worst_adverse = adverse;
+            }
             let (hit_sl, hit_tgt) = match dir {
                 Direction::Long => (b.low <= sl, b.high >= tgt),
                 Direction::Short => (b.high >= sl, b.low <= tgt),
@@ -810,6 +826,7 @@ pub fn run_fill(
             r: gross - cost_r,
             ambiguous,
             intrabar_resolved,
+            mae_r: (worst_adverse / risk).max(0.0),
         });
         free_from = eidx + 1;
     }
@@ -1344,6 +1361,31 @@ mod tests {
         ];
         let rs2 = simulate(&bars2, &atr, &[0], Direction::Long, 1.5, 2.0, 0.0);
         assert!((rs2[0] + 1.0).abs() < 1e-9, "got {}", rs2[0]);
+    }
+
+    #[test]
+    fn run_fill_records_mae_without_changing_r() {
+        // Winner: enter long 100, risk=1.5·2=3, target +2R=106. bar1 high 107 hits
+        // target but its low 99 ⇒ adverse 1 ⇒ MAE = 1/3 ≈ 0.333R. r is still +2R.
+        let bars = vec![
+            bar(0, 100.0, 100.0, 100.0, 100.0),
+            bar(0, 100.0, 107.0, 99.0, 106.0),
+            bar(0, 106.0, 106.0, 106.0, 106.0),
+        ];
+        let atr = vec![2.0, 2.0, 2.0];
+        let outs = run_fill(&bars, &atr, &[0], Direction::Long, &SimConfig::legacy(1.5, 2.0, 0.0));
+        assert_eq!(outs.len(), 1);
+        assert!((outs[0].r - 2.0).abs() < 1e-9, "r unchanged, got {}", outs[0].r);
+        assert!((outs[0].mae_r - (1.0 / 3.0)).abs() < 1e-9, "MAE got {}", outs[0].mae_r);
+        // Stop: bar1 low 96 ⇒ adverse 4 ⇒ MAE = 4/3 (gapped through the −1R stop).
+        let bars2 = vec![
+            bar(0, 100.0, 100.0, 100.0, 100.0),
+            bar(0, 100.0, 101.0, 96.0, 96.0),
+            bar(0, 96.0, 96.0, 96.0, 96.0),
+        ];
+        let outs2 = run_fill(&bars2, &atr, &[0], Direction::Long, &SimConfig::legacy(1.5, 2.0, 0.0));
+        assert!((outs2[0].r + 1.0).abs() < 1e-9);
+        assert!((outs2[0].mae_r - (4.0 / 3.0)).abs() < 1e-9, "MAE got {}", outs2[0].mae_r);
     }
 
     #[test]
