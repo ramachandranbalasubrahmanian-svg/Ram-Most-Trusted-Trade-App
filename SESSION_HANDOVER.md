@@ -4,20 +4,24 @@
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
 > `SESSION_HANDOVER.md` (esp. ◀ THIS SESSION + the one remaining P1 item below), and continue on `main`.**
 >
-> **Git state (2026-06-29 cont.):** clean working tree, **5 commits AHEAD of origin and NOT pushed** — the owner
-> chose to HOLD the work local for review. Local `main` tip = **`76ec8f9`**; `origin/main` still = **`82b8cf2`**.
-> **Decide on `git push origin main` before doing more.** **181 tests pass; build clean; both anchors byte-identical.**
+> **Git state (2026-06-29 cont.):** clean working tree, **7 commits AHEAD of origin and NOT pushed** — the owner
+> chose to HOLD the work local for review. Local `main` tip = **`cc2bfa5`**; `origin/main` still = **`82b8cf2`**.
+> **Decide on `git push origin main` before doing more.** **182 tests pass; build clean; both anchors byte-identical.**
+> **ALL of P0-2b + the split guard + ALL FOUR P1 items are DONE this session.**
 > The 14 GB archive + `cache/` edge maps + `fundamentals.parquet` are gitignored (local only). (Only untracked file:
 > `COMPETITIVE_ANALYSIS_2026.md`, pre-existing.)
 >
-> The 5 local commits (oldest→newest): `d4b74f8` P0-2b details onboarding · `fc6f454` data-quality guard ·
-> `5af6c01` fundamentals panel · `815b6dd` shrunk-expectancy ranking · `76ec8f9` CPCV/PBO panel. See ◀ THIS SESSION.
+> The 7 local commits (oldest→newest): `d4b74f8` P0-2b details onboarding · `fc6f454` data-quality guard ·
+> `5af6c01` fundamentals panel · `815b6dd` shrunk-expectancy ranking · `76ec8f9` CPCV/PBO panel · `018dac4` docs ·
+> `cc2bfa5` edge-map robustness columns. See ◀ THIS SESSION.
+> **⚠ Edge-map rebuild state:** `cc2bfa5` rebuilt **only `edge_map_30min`** (the live tf) to populate robustness.
+> **`5min/15min/60min` still carry default (empty) robustness until you run `ram_istp backtest <tf>`** for each.
 > **Resume shell:**
 > ```bash
 > . "$HOME/.cargo/env"; cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
-> git log --oneline -6                                  # tip 76ec8f9; origin behind at 82b8cf2 (NOT pushed)
+> git log --oneline -8                                  # tip cc2bfa5; origin behind at 82b8cf2 (NOT pushed)
 > pkill -f "ram_istp serve"; pkill -f "ram_istp live"   # single-instance: stop leftovers first
-> cargo build && cargo test                             # 181 tests pass
+> cargo build && cargo test                             # 182 tests pass
 > ./target/debug/ram_istp serve 30min                   # dashboards → :8787 (finder/scanner warm ~2 min, in bg)
 > ```
 
@@ -40,9 +44,10 @@ cargo build && cargo test                                   # 167 tests should p
 #       then P1 (robustness columns, shrunk ranking, CPCV/PBO, fundamentals, coverage panel).
 ```
 
-## ◀ THIS SESSION (2026-06-29 cont.) — P0-2b + split guard + 3 of 4 P1 items (5 commits, LOCAL ONLY, not pushed)
+## ◀ THIS SESSION (2026-06-29 cont.) — P0-2b + split guard + ALL 4 P1 items (7 commits, LOCAL ONLY, not pushed)
 All display-only / signals-only / firewalled; eligibility gate, Confidence, cost model, and **both anchors untouched**
-(`anchor_bajfinance_edge_map_stable` + `anchor_63moons_deep_dive_stable` byte-identical). **181 tests** (was 167).
+(`anchor_bajfinance_edge_map_stable` + `anchor_63moons_deep_dive_stable` byte-identical). **182 tests** (was 167).
+**6th feature commit `cc2bfa5` = edge-map robustness columns (the 4th P1 item) — see the ✅ DONE block below.**
 Every feature was verified end-to-end (live endpoint + rendered-output checks), not just unit-tested.
 1. **P0-2b add_stock DETAILS onboarding** (`d4b74f8`) — NEW `enrich_stock.py` (sibling of `download_stock.py`): upserts
    `symbol_metadata` (sector/industry/mcap/name/isin from Yahoo `.info`, recent_listings fallback), upserts corp-actions
@@ -76,25 +81,24 @@ Every feature was verified end-to-end (live endpoint + rendered-output checks), 
    per-tf PBO panel on the deep-dive. **Anchor-safe (tap only reads the already-built config set).** Verified live on
    RELIANCE (2.4s): 40 configs × 8 blocks/tf, PBO 0–4.3%.
 
-### ⏭ ONE remaining P1 item (NOT started) — robustness columns on the edge-map / Top-10 tier
-The deep pass already runs OOS/WF/DSR; the **edge-map / live Top-10 tier does NOT** (it ranks on `eligible()` only).
-This is the heaviest remaining item — **it changes the edge-map cache format and needs a full `backtest` rebuild to
-populate, plus multi-struct plumbing** — deliberately left for a fresh, careful session. Concrete plan (all gathered
-this session):
-- Extend `EdgeRecord` (src/strategy_engine.rs — currently {symbol, strategy, direction, timeframe, metrics, eligible})
-  with `oos_expectancy: Option<f64>`, `oos_n: usize`, `wf_consistency: f64` (+ optional per-symbol DSR over its 26
-  strat×dir trials). Compute them in `backtest_symbol`'s config eval from the same trades, EXACTLY like
-  `suggestion_engine::build_config_stat` does (`validation::purged_embargoed_split` with `OOS_FRACTION`/`EMBARGO_FRACTION`
-  + `validation::walkforward_consistency` with `WF_FOLDS`). Add `#[serde(default)]` so OLD caches still load.
-- **Do NOT change `eligible()`** (display-only annotation). Thread the new fields through `EligibleEdge` (build_index)
-  → `Candidate` (analytics_kernel::snapshot_candidates) → `RankedSignal` (risk_manager::to_ranked) → `index.html`
-  Top-10 columns — same path the `shrunk_expectancy_r` plumbing just used (4 structs + 2 test ctors).
-- **Anchor check:** `anchor_bajfinance_edge_map_stable` runs `backtest_symbol` and asserts `metrics.{n,expectancy,
-  profit_factor}` — adding OOS/WF fields does NOT touch those, but RE-RUN it after the change. A full edge-map rebuild
-  is required for the new columns to show in the live Top-10 (in-memory universe fixed at startup; same caveat as onboarding).
-- Pair with the spec's "show CIs" only if the edge map starts storing per-trade R-series (it doesn't today; the live
-  Top-10 carries summary stats only, so `expectancy_ci` — which needs the R-series — can't run there without a format
-  change). The deep-dive already shows CIs (it has the series).
+### ✅ DONE — robustness columns on the edge-map / Top-10 tier (`cc2bfa5`)
+The 4th P1 item is now DONE. `EdgeRecord` + `EligibleEdge`/`Candidate`/`RankedSignal` gained a `Robustness`
+sub-struct ({oos_expectancy, oos_n, wf_consistency, dsr}, all `#[serde(default)]`). `backtest_symbol` computes it from
+the SAME trades as `metrics` (switched to `simulate_detailed`, which is byte-identical to `simulate` — both via
+`run_fill`/`SimConfig::legacy` — so metrics + the anchor are untouched) via `validation::purged_embargoed_split`
+(0.30/0.02) + `walkforward_consistency` (5 folds) + a per-symbol DSR over its ~26 strat×dir trial Sharpes. Threaded
+through `build_index`→`snapshot_candidates`→`to_ranked`; `build_note` flags OOS≤0 / WF<50%; `index.html` shows a per-row
+OOS·WF·DSR annotation. `eligible()` UNCHANGED. Anchor green + a new populated-and-in-range test. Verified live: OMNI
+(n=54) flags "OOS −0.06R (fails out-of-sample)". **Caveat:** robustness shows only after a `backtest <tf>` rebuild —
+**done for 30min; rebuild 5/15/60min when wanted.** DSR is near-zero for most edge-map edges (deflated vs 26 siblings) —
+shown in the row but deliberately NOT a Note flag (would be noise).
+
+### ▶▶ Possible NEXT items (none started; pick per priority)
+- **Rebuild `5min/15min/60min` edge maps** so robustness shows on those tfs too (`ram_istp backtest 15min`, etc.).
+- **Spec's "show CIs" on the Top-10** — needs the edge map to store per-trade R-series (it stores summary stats only;
+  `expectancy_ci` needs the series). The deep-dive already shows CIs. A format change; opt-in + separate cache if done.
+- The earlier-flagged number-movers (cost-constant reconciliation, DSR effective-trials→12) — still require explicit
+  sign-off + an anchor re-baseline before flipping. Untouched this session.
 
 ## ◀ EARLIER 2026-06-29 — intraday safety gate + perf + ATR input (all pushed: `141dee0`, `337f8cc`, `dc0913c`)
 All display-only / signals-only; Confidence + edge map + the 63MOONS/BAJFINANCE anchors untouched. **167 tests** (was 165).
