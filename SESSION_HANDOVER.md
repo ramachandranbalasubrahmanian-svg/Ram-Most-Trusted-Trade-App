@@ -4,17 +4,18 @@
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
 > `SESSION_HANDOVER.md` (esp. ◀ THIS SESSION + the one remaining P1 item below), and continue on `main`.**
 >
-> **Git state (2026-06-29 cont.):** owner switched to PUSH — pushing as we go. Local `main` tip = **`5503a0e`** (+ a
-> handover commit). **205 tests pass; build clean; both anchors byte-identical.**
+> **Git state (2026-06-29 cont.):** owner switched to PUSH — pushing as we go. Local `main` tip = **`a1693f9`** (+ a
+> handover commit). **210 tests pass; build clean; both anchors byte-identical.**
 > **DONE: P0-2b + split guard + ALL 4 P1 items + news-caution layer + Live Trade Plan (budget/risk/ATR sizing +
-> participation/liquidity + market-regime/breadth banner + basket correlation/ENB + MC risk-of-ruin).**
+> participation/liquidity + market-regime/breadth banner + basket correlation/ENB + MC risk-of-ruin) + the FULL
+> decision-support menu (5 of 5).**
 >
-> **Decision-support menu (offered; owner: "you decide" + "1 and 2" → built 3 of 5):** BUILT — participation/liquidity
-> (`203c174`), regime+breadth banner (`ec19c9f`), basket correlation+risk-of-ruin (`5503a0e`). **Still on the menu (NOT
-> built):** (a) **MAE/heat** — stop validation on the deep-dive; needs `run_fill`/`TradeOutcome` to also record max
-> adverse excursion per trade (a fill-engine change → re-run the BAJFINANCE anchor after, but MAE is additive so it
-> should stay green); (b) **calibration scorecard** — Confidence-vs-realized reliability curve from the journal
-> (`journal_sync`); compounds once real trades are logged, so highest LONG-term value.
+> **Decision-support menu — ALL 5 BUILT:** participation/liquidity (`203c174`), regime+breadth banner (`ec19c9f`),
+> basket correlation+risk-of-ruin (`5503a0e`), **MAE/heat stop-validation on the deep-dive** (`30a33ea` —
+> `TradeOutcome.mae_r` recorded read-only in `run_fill`, anchor stayed byte-identical; winners' median/p90 heat on the
+> card), **calibration scorecard** (`a1693f9` — NEW `src/calibration.rs`, `GET /api/calibration`, panel on `/desk`;
+> matches journal closed trades to the edge map's win_pct → predicted-vs-realized reliability curve; compounds as trades
+> are logged).
 >
 > **News layer (`4bd783e`):** `GET /api/news?symbol=&side=` + a per-pick caution row under the ★ Sharpest setups —
 > flags CAUTIOUS BUY/SELL when news/today's move contradicts the signal. **Needs `INDIANAPI_KEY` in `.env` to activate**
