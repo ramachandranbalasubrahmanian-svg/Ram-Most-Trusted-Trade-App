@@ -218,6 +218,10 @@ pub struct RankedSignal {
     pub tick_sweep: i8,
     #[serde(default)]
     pub spread_widening: bool,
+    /// Average daily share volume (annotated post-rank for the optional liquidity
+    /// view-filter; 0 when unknown). Display-only.
+    #[serde(default)]
+    pub adv: f64,
     /// Honest caveat / context shown in the row (e.g. low sample, wide spread).
     pub note: String,
 }

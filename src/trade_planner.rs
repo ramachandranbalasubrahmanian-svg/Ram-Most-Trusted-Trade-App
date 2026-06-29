@@ -304,6 +304,7 @@ mod tests {
             block_mult: 0.0,
             tick_sweep: 0,
             spread_widening: false,
+            adv: 0.0,
             note: String::new(),
         }
     }

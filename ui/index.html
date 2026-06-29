@@ -216,6 +216,20 @@
       </div>
     </section>
 
+    <!-- ===================== TRADING-CONDITION FILTERS (opt-in, default OFF) ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] px-3 py-2">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div class="flex items-center gap-3 flex-wrap text-[11px]">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Condition filters</span>
+          <label class="flex items-center gap-1 cursor-pointer text-slate-300"><input type="checkbox" id="fVix" class="accent-sky-500"> VIX&gt;20 only</label>
+          <label class="flex items-center gap-1 cursor-pointer text-slate-300"><input type="checkbox" id="fNifty" class="accent-sky-500"> NIFTY-aligned only</label>
+          <label class="flex items-center gap-1 cursor-pointer text-slate-300"><input type="checkbox" id="fLiquid" class="accent-sky-500"> Liquid only (ADV≥50k)</label>
+        </div>
+        <span id="condSummary" class="text-[10px] text-slate-500"></span>
+      </div>
+      <div class="text-[9px] text-slate-600 mt-1">Opt-in VIEW filters — they only HIDE rows you toggle off; the engine still computes every signal and Confidence is never touched. All default OFF (honesty-first: you decide).</div>
+    </section>
+
     <!-- ===================== TABLES ===================== -->
     <section class="grid grid-cols-1 2xl:grid-cols-2 gap-3">
       <!-- BUY -->
@@ -782,13 +796,52 @@
       return "<tr>" + cells + "</tr>";
     }
 
+    // Opt-in trading-condition view filters (default OFF). They only HIDE rows;
+    // the engine computes everything and Confidence is never touched.
+    var viewFilters = { vix: false, nifty: false, liquid: false };
+    var lastRegime = null; // set by renderRegime
+    function condReason(kind) {
+      // Returns "" when the kind is allowed, else a short reason it's blocked.
+      if (viewFilters.vix) {
+        var v = lastRegime ? num(lastRegime.vix, 0) : 0;
+        if (!(v > 20)) return "VIX " + fixed(v, 1) + " ≤ 20";
+      }
+      if (viewFilters.nifty && lastRegime) {
+        var bias = str(lastRegime.bias, ""), trend = str(lastRegime.nifty_trend, "");
+        if (kind === "buy" && !(bias.indexOf("longs") >= 0 || trend === "up")) return "NIFTY not aligned for longs";
+        if (kind === "sell" && !(bias.indexOf("shorts") >= 0 || trend === "down")) return "NIFTY not aligned for shorts";
+      }
+      return "";
+    }
+    function applyViewFilters(rows, kind) {
+      var blocked = condReason(kind);
+      if (blocked) return { rows: [], blocked: blocked };
+      var out = rows;
+      if (viewFilters.liquid) out = out.filter(function (r) { return num(r.adv, 0) >= 50000; });
+      return { rows: out, blocked: "" };
+    }
     function renderTable(headEl, bodyEl, rows, kind) {
       headEl.innerHTML = headHtml(); // refresh each time so the sort arrow is current
       var sorted = sortRows(arr(rows));
-      if (!sorted.length) { bodyEl.innerHTML = emptyRow(); return; }
+      var f = applyViewFilters(sorted, kind);
+      if (f.blocked) { bodyEl.innerHTML = '<tr><td colspan="20" class="text-center text-[11px] text-amber-400/80 py-3">Hidden by your condition filter: ' + esc(f.blocked) + '</td></tr>'; return; }
+      if (!f.rows.length) { bodyEl.innerHTML = emptyRow(); return; }
       var html = "";
-      for (var i = 0; i < sorted.length; i++) html += rowHtml(sorted[i], kind);
+      for (var i = 0; i < f.rows.length; i++) html += rowHtml(f.rows[i], kind);
       bodyEl.innerHTML = html;
+    }
+    function reRenderTables() {
+      renderTable(els.buyHead, els.buyBody, lastBuy, "buy");
+      renderTable(els.sellHead, els.sellBody, lastSell, "sell");
+      updateCondSummary();
+    }
+    function updateCondSummary() {
+      var on = [];
+      if (viewFilters.vix) on.push("VIX>20");
+      if (viewFilters.nifty) on.push("NIFTY-aligned");
+      if (viewFilters.liquid) on.push("ADV≥50k");
+      var el = $("condSummary"); if (!el) return;
+      el.textContent = on.length ? ("filters ON: " + on.join(" · ")) : "no filters — all signals shown";
     }
 
     // ----------------------------------------------------------------
@@ -1119,6 +1172,7 @@
     // Market-regime + breadth context banner (display-only).
     function renderRegime(reg) {
       reg = reg && typeof reg === "object" ? reg : {};
+      lastRegime = reg.available ? reg : lastRegime; // keep for the condition filters
       var wrap = $("regimeWrap"); if (!wrap) return;
       if (!reg.available) { wrap.classList.add("hidden"); return; }
       wrap.classList.remove("hidden");
@@ -1270,6 +1324,12 @@
     loadFreshness();
     loadTradability();
     renderBestPicks();
+    // Condition-filter toggles (opt-in, default OFF) — re-render the tables on change.
+    [["fVix", "vix"], ["fNifty", "nifty"], ["fLiquid", "liquid"]].forEach(function (pair) {
+      var el = $(pair[0]);
+      if (el) el.addEventListener("change", function () { viewFilters[pair[1]] = el.checked; reRenderTables(); });
+    });
+    updateCondSummary();
     connect();
   })();
   </script>

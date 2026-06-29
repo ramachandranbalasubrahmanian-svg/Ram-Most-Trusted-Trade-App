@@ -160,6 +160,7 @@ fn to_ranked(c: &Candidate, sizing: &Sizing) -> RankedSignal {
         block_mult: c.features.block_mult,
         tick_sweep: c.features.tick_sweep,
         spread_widening: c.features.spread_widening,
+        adv: 0.0, // annotated post-rank from the ADV map (for the liquidity filter)
         note: build_note(c),
     }
 }
@@ -411,6 +412,7 @@ mod tests {
             block_mult: 0.0,
             tick_sweep: 0,
             spread_widening: false,
+            adv: 0.0,
             note: String::new(),
         };
         // 50% -> green.

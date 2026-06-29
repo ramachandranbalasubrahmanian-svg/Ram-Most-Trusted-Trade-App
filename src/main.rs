@@ -603,6 +603,11 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
                     let cands = engine.snapshot_candidates();
                     let set = *settings.read().unwrap();
                     let (mut top_buy, mut top_sell) = risk_manager::rank(&cands, &set, &limits);
+                    // Annotate each row's ADV (avg daily volume) for the optional
+                    // liquidity view-filter (display-only; never prunes here).
+                    for r in top_buy.iter_mut().chain(top_sell.iter_mut()) {
+                        r.adv = adv_map.get(r.symbol.as_str()).copied().unwrap_or(0.0);
+                    }
                     let risk_meter = risk_manager::risk_meter(&top_buy, &top_sell, &set);
                     // Budget/risk/ATR-aware actionable basket (display-only).
                     let mut trade_plan = trade_planner::build_plan(&top_buy, &top_sell, &set, &sector_map, &adv_map, &returns_map);
