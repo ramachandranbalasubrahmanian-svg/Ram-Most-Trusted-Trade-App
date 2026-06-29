@@ -19,6 +19,13 @@ use serde::{Deserialize, Serialize};
 use crate::config::{self, Direction, Timeframe};
 use crate::storage_kernel::{self, Candle};
 
+// Display-only robustness params for the edge-map tier. Mirror the deep-dive
+// (`suggestion_engine`: OOS 0.30, embargo 0.02, 5 walk-forward folds) so the
+// annotation is comparable to the per-stock card. These NEVER feed `eligible()`.
+const ROBUST_OOS_FRACTION: f64 = 0.30;
+const ROBUST_EMBARGO_FRACTION: f64 = 0.02;
+const ROBUST_WF_FOLDS: usize = 5;
+
 // ===========================================================================
 // Indicators
 // ===========================================================================
@@ -911,6 +918,11 @@ pub struct EdgeRecord {
     pub timeframe: String,
     pub metrics: Metrics,
     pub eligible: bool,
+    /// Display-only robustness annotations (OOS / walk-forward / per-symbol DSR).
+    /// Computed from the SAME trades as `metrics`; never feeds `eligible()`.
+    /// `#[serde(default)]` so a pre-robustness cached edge map still loads.
+    #[serde(default)]
+    pub robustness: crate::types::Robustness,
 }
 
 fn eligible(m: &Metrics) -> bool {
@@ -940,7 +952,10 @@ pub fn backtest_symbol(
         crate::costs::backtest_roundtrip_pct(),
     );
 
+    let total_bars = bars.len();
     let mut out = Vec::new();
+    // Per-symbol trial Sharpes (this symbol's strategy×direction set) for DSR.
+    let mut trial_sharpes: Vec<f64> = Vec::new();
     for strat in registry() {
         let sigs = strat.signals(&bars, &ind);
         for dir in [Direction::Long, Direction::Short] {
@@ -952,12 +967,32 @@ pub fn backtest_symbol(
             if entries.is_empty() {
                 continue;
             }
-            let rs = simulate(&bars, &ind.atr, &entries, dir, k, rr, cost);
-            if rs.is_empty() {
+            // Use simulate_detailed (== simulate, both via run_fill/SimConfig::legacy)
+            // so `rs` is byte-identical to the legacy path — metrics + the anchor are
+            // untouched — while also giving entry indices for OOS / walk-forward.
+            let trades = simulate_detailed(&bars, &ind.atr, &entries, dir, k, rr, cost);
+            if trades.is_empty() {
                 continue;
             }
+            let rs: Vec<f64> = trades.iter().map(|(_, r)| *r).collect();
             let metrics = Metrics::from_rs(&rs);
             let eligible = eligible(&metrics);
+
+            // --- display-only robustness (never feeds eligible()) ---
+            let (_is_rs, oos_rs) = crate::validation::purged_embargoed_split(
+                &trades, total_bars, ROBUST_OOS_FRACTION, ROBUST_EMBARGO_FRACTION,
+            );
+            let oos_n = oos_rs.len();
+            let oos_expectancy = if oos_rs.is_empty() {
+                None
+            } else {
+                Some(crate::stats::mean(&oos_rs))
+            };
+            let wf_consistency =
+                crate::validation::walkforward_consistency(&trades, total_bars, ROBUST_WF_FOLDS);
+            let sharpe = crate::stats::sharpe_per_trade(&rs);
+            trial_sharpes.push(sharpe);
+
             out.push(EdgeRecord {
                 symbol: symbol.to_string(),
                 strategy: strat.name().to_string(),
@@ -965,8 +1000,21 @@ pub fn backtest_symbol(
                 timeframe: tf.dir().to_string(),
                 metrics,
                 eligible,
+                robustness: crate::types::Robustness {
+                    oos_expectancy,
+                    oos_n,
+                    wf_consistency,
+                    dsr: 0.0, // filled below, once the trial set is complete
+                },
             });
         }
+    }
+    // Second pass: per-symbol DSR deflates each record's Sharpe by the multiple
+    // testing implied by ITS OWN strategy×direction trial set (≈26 trials).
+    // `out` and `trial_sharpes` are pushed together ⇒ index-aligned 1:1.
+    for (rec, &sharpe) in out.iter_mut().zip(trial_sharpes.iter()) {
+        rec.robustness.dsr =
+            crate::stats::deflated_sharpe(sharpe, rec.metrics.n, &trial_sharpes);
     }
     Ok(out)
 }
@@ -1260,6 +1308,7 @@ pub fn build_index(records: &[EdgeRecord]) -> EdgeIndex {
             profit_factor: r.metrics.profit_factor,
             win_pct: r.metrics.win_pct,
             n: r.metrics.n,
+            robustness: r.robustness.clone(),
         });
     }
     idx
@@ -1371,6 +1420,7 @@ mod tests {
             timeframe: "30min".to_string(),
             metrics: Metrics::from_rs(&[]),
             eligible,
+            robustness: Default::default(),
         };
         let records = vec![
             rec("AAA", true),
@@ -1401,6 +1451,7 @@ mod tests {
             timeframe: "15min".to_string(),
             metrics: Metrics::from_rs(&[1.0, -0.5, 1.0]),
             eligible,
+            robustness: Default::default(),
         };
         let mut map = vec![
             rec("AAA", "vwap_trend", true),
@@ -1439,6 +1490,7 @@ mod tests {
             timeframe: "30min".to_string(),
             metrics: Metrics::from_rs(&[0.3, -0.7, 1.1, -0.4]),
             eligible,
+            robustness: Default::default(),
         };
         let a = rec("AAA", "vwap_cross", true);
         let b = rec("BAJFINANCE", "gap_and_go", true);
@@ -1509,5 +1561,33 @@ mod tests {
             "anchor PF drifted: {}",
             r.metrics.profit_factor
         );
+    }
+
+    #[test]
+    fn robustness_annotations_populated_and_in_range() {
+        // The display-only robustness columns compute alongside metrics from the
+        // SAME trades. Verify they populate and stay in sane ranges — without
+        // touching the (anchor-verified) metrics. Skips when the archive is absent.
+        let root = config::data_root();
+        let f = config::parquet_path(&root, "BAJFINANCE", Timeframe::Min15);
+        if !f.exists() {
+            eprintln!("SKIP robustness_annotations_populated_and_in_range: archive absent");
+            return;
+        }
+        let conn = storage_kernel::open_conn().expect("duckdb conn");
+        let records =
+            backtest_symbol(&conn, &root, "BAJFINANCE", Timeframe::Min15).expect("backtest");
+        let r = records
+            .iter()
+            .find(|r| r.strategy == "gap_and_go" && r.direction == Direction::Short)
+            .expect("anchor edge present");
+        let rob = &r.robustness;
+        // OOS held out from a 130-trade edge ⇒ a non-trivial OOS tail.
+        assert!(rob.oos_n > 0, "expected some OOS trades, got {}", rob.oos_n);
+        assert!(rob.oos_n < r.metrics.n, "OOS must be a subset of all trades");
+        assert!((0.0..=1.0).contains(&rob.wf_consistency), "wf out of range: {}", rob.wf_consistency);
+        assert!((0.0..=1.0).contains(&rob.dsr), "dsr out of range: {}", rob.dsr);
+        // The anchor's metrics MUST be unchanged by the robustness pass.
+        assert_eq!(r.metrics.n, 130, "metrics must be byte-identical");
     }
 }

@@ -301,6 +301,7 @@ impl Engine {
                     profit_factor,
                     win_pct,
                     n,
+                    robustness,
                 } = edge;
                 let live_score = Self::live_score(*direction, &features);
                 // Rank on the James–Stein-shrunk expectancy so small-n lucky edges
@@ -322,6 +323,7 @@ impl Engine {
                     profit_factor: *profit_factor,
                     win_pct: *win_pct,
                     n: *n,
+                    robustness: robustness.clone(),
                     last_price,
                     atr,
                     features,
@@ -492,6 +494,7 @@ mod tests {
                 profit_factor: 2.0,
                 win_pct: 55.0,
                 n: 40,
+                robustness: Default::default(),
             }],
         );
         let mut eng = Engine::new(&symbols, &HashMap::new(), &edges, 1);

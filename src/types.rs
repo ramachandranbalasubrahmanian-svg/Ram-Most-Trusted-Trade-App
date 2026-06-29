@@ -52,6 +52,24 @@ pub struct Tick {
 // Edge map projection (strategy_engine → analytics)
 // ---------------------------------------------------------------------------
 
+/// Display-only robustness annotations for an edge-map / Top-10 edge. The
+/// edge-map tier ranks on `eligible()` only; these are the deep-tier robustness
+/// stats (purged+embargoed OOS, walk-forward consistency, per-symbol deflated
+/// Sharpe) carried alongside so the Top-10 can be SHOWN them. They NEVER change
+/// `eligible()`, Confidence, ranking, or sizing — annotation only. All default
+/// to "not computed" so an OLD cached edge map still deserializes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Robustness {
+    /// Mean R on the held-out (purged+embargoed) out-of-sample tail; None when
+    /// there were too few OOS trades to estimate.
+    pub oos_expectancy: Option<f64>,
+    pub oos_n: usize,
+    /// Walk-forward fold consistency in [0, 1] (share of folds that stayed +EV).
+    pub wf_consistency: f64,
+    /// Deflated Sharpe over this symbol's own strategy×direction trial set [0, 1].
+    pub dsr: f64,
+}
+
 /// A single eligible backtested edge, flattened for fast live lookup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EligibleEdge {
@@ -61,6 +79,9 @@ pub struct EligibleEdge {
     pub profit_factor: f64,
     pub win_pct: f64,
     pub n: usize,
+    /// Display-only robustness annotation (see `Robustness`).
+    #[serde(default)]
+    pub robustness: Robustness,
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +126,9 @@ pub struct Candidate {
     pub profit_factor: f64,
     pub win_pct: f64,
     pub n: usize,
+    /// Display-only robustness annotation carried from the edge map.
+    #[serde(default)]
+    pub robustness: Robustness,
     // live
     pub last_price: f64,
     /// ATR (price units) to size stops/targets from.
@@ -159,6 +183,9 @@ pub struct RankedSignal {
     pub win_pct: f64,
     pub profit_factor: f64,
     pub n: usize,
+    /// Display-only robustness annotation (OOS / walk-forward / DSR).
+    #[serde(default)]
+    pub robustness: Robustness,
     pub score: f64,
     pub obi: f64,
     pub rvol: f64,

@@ -1247,6 +1247,7 @@ async fn onboard_symbol_handler(State(state): State<AppState>, Json(req): Json<O
                 profit_factor: r.metrics.profit_factor,
                 win_pct: r.metrics.win_pct,
                 n: r.metrics.n,
+                robustness: r.robustness.clone(),
             })
             .collect();
         let outcome = crate::strategy_engine::merge_edge_records(&sym, rows, tf, universe)

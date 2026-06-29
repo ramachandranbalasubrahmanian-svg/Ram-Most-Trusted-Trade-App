@@ -973,7 +973,7 @@ mod tests {
         Holding { symbol: symbol.into(), qty, avg_cost: avg, broker: broker.into(), sector: sector.map(|s| s.into()), last_price: None }
     }
     fn edge(win_pct: f64, pf: f64, n: usize) -> EligibleEdge {
-        EligibleEdge { strategy: "vwap_cross".into(), direction: Direction::Long, expectancy_r: 0.2, profit_factor: pf, win_pct, n }
+        EligibleEdge { strategy: "vwap_cross".into(), direction: Direction::Long, expectancy_r: 0.2, profit_factor: pf, win_pct, n, robustness: Default::default() }
     }
     fn edges_with(symbols: &[(&str, EligibleEdge)]) -> EdgeIndex {
         let mut m: EdgeIndex = EdgeIndex::new();

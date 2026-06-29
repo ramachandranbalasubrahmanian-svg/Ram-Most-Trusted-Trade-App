@@ -707,9 +707,21 @@
       cells += '<td style="text-align:right" class="num ' + signedRClass(r.obi) + '">' + fixed(r.obi, 2) + "</td>";
       // RVOL
       cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.rvol, 2) + "</td>";
-      // Note
+      // Note + display-only robustness annotation (OOS / walk-forward / DSR from
+      // the edge map). These never gate the row — context to read before trading.
       var note = str(r.note, "");
-      cells += '<td style="text-align:left" class="text-slate-500 text-[11px] max-w-[220px] truncate" title="' + esc(note) + '">' + esc(note) + "</td>";
+      var rob = r.robustness || {};
+      var robBits = [];
+      if (isFinite(num(rob.oos_expectancy, NaN))) robBits.push("OOS " + fixed(rob.oos_expectancy, 2) + "R (n=" + intFmt(rob.oos_n) + ")");
+      if (isFinite(num(rob.wf_consistency, NaN))) robBits.push("WF " + Math.round(num(rob.wf_consistency, 0) * 100) + "%");
+      var dsrv = num(rob.dsr, NaN);
+      if (isFinite(dsrv)) robBits.push("DSR " + (dsrv > 0 && dsrv < 0.01 ? "<0.01" : fixed(dsrv, 2)));
+      var robText = robBits.join(" · ");
+      var fullTip = note + (note && robText ? " — " : "") + (robText ? "robustness: " + robText : "");
+      var robInline = robText
+        ? '<div class="text-[9px] text-slate-600 leading-none mt-0.5" title="purged+embargoed out-of-sample mean R · walk-forward fold consistency · per-symbol deflated Sharpe — display-only, not part of the edge">' + esc(robText) + '</div>'
+        : '';
+      cells += '<td style="text-align:left" class="text-slate-500 text-[11px] max-w-[240px]" title="' + esc(fullTip) + '"><div class="truncate">' + esc(note) + '</div>' + robInline + "</td>";
 
       return "<tr>" + cells + "</tr>";
     }

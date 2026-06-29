@@ -104,15 +104,30 @@ pub fn size(
 
 /// Build the honest caveat string for a row: short, comma-joined flags.
 fn build_note(c: &Candidate) -> String {
-    let mut flags: Vec<&str> = Vec::new();
+    let mut flags: Vec<String> = Vec::new();
     if c.n < 50 {
-        flags.push("low n");
+        flags.push("low n".to_string());
     }
     if c.features.spread_pct > 0.2 {
-        flags.push("wide spread");
+        flags.push("wide spread".to_string());
     }
     if c.features.obi.abs() < 0.05 {
-        flags.push("thin OBI");
+        flags.push("thin OBI".to_string());
+    }
+    // Display-only robustness caveats from the edge map (never gate the row). We
+    // flag the two ACTIONABLE ones — a non-positive out-of-sample tail (the edge
+    // fails when held out) and weak walk-forward consistency. DSR is shown in the
+    // row annotation but not flagged here: deflated against a symbol's 26 sibling
+    // trials it is near-zero for almost every edge-map edge, so a flag would be
+    // pure noise rather than a signal.
+    let rob = &c.robustness;
+    if let Some(oos) = rob.oos_expectancy {
+        if oos <= 0.0 {
+            flags.push(format!("OOS {oos:+.2}R (fails out-of-sample)"));
+        }
+    }
+    if rob.oos_n > 0 && rob.wf_consistency < 0.5 {
+        flags.push(format!("WF {:.0}% (inconsistent)", rob.wf_consistency * 100.0));
     }
     flags.join(", ")
 }
@@ -136,6 +151,7 @@ fn to_ranked(c: &Candidate, sizing: &Sizing) -> RankedSignal {
         win_pct: c.win_pct,
         profit_factor: c.profit_factor,
         n: c.n,
+        robustness: c.robustness.clone(),
         score: c.score,
         obi: c.features.obi,
         rvol: c.features.rvol,
@@ -380,6 +396,7 @@ mod tests {
             shrunk_expectancy_r: 0.0,
             win_pct: 0.0,
             profit_factor: 0.0,
+            robustness: Default::default(),
             n: 100,
             score: 1.0,
             obi: 0.0,
@@ -433,6 +450,7 @@ mod tests {
             profit_factor: 1.5,
             win_pct: 50.0,
             n: 100,
+            robustness: Default::default(),
             last_price: 1000.0,
             atr: 10.0,
             features: crate::types::LiveFeatures::default(),
