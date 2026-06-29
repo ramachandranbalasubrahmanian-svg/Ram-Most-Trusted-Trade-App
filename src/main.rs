@@ -39,6 +39,7 @@ mod suggestion_engine;
 mod swing_analyzer;
 mod symbol_resolver;
 mod tradability;
+mod trade_planner;
 mod types;
 mod validation;
 
@@ -542,9 +543,17 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
         }
     };
 
+    // Load a SYMBOL → sector map ONCE for the Live Trade Plan's per-sector cap
+    // (best-effort; empty when metadata is absent — the cap then just disables).
+    let sector_map = match storage_kernel::open_conn() {
+        Ok(conn) => symbol_resolver::SymbolResolver::load(&conn, &root).sector_map(),
+        Err(_) => std::collections::HashMap::new(),
+    };
+
     // Analytics + risk thread: fold ticks, emit a ranked packet every second.
     let ana = {
         let (baselines, edge_index, symbols) = (baselines, edge_index, symbols.clone());
+        let sector_map = sector_map;
         let (settings, packet, notify, stop) =
             (settings.clone(), packet.clone(), notify.clone(), stop.clone());
         let freeze = freeze.clone();
@@ -576,6 +585,8 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
                     let set = *settings.read().unwrap();
                     let (mut top_buy, mut top_sell) = risk_manager::rank(&cands, &set, &limits);
                     let risk_meter = risk_manager::risk_meter(&top_buy, &top_sell, &set);
+                    // Budget/risk/ATR-aware actionable basket (display-only).
+                    let mut trade_plan = trade_planner::build_plan(&top_buy, &top_sell, &set, &sector_map);
                     let mut diagnostics = engine.diagnostics();
                     diagnostics.tick_to_signal_us = t0.elapsed().as_micros() as u64;
                     diagnostics.ticks_per_sec = ticks;
@@ -590,6 +601,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
                         if f.frozen {
                             top_buy.clear();
                             top_sell.clear();
+                            trade_plan = types::TradePlan::default();
                             alerts.insert(
                                 0,
                                 types::Alert {
@@ -610,6 +622,7 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
                         top_buy,
                         top_sell,
                         risk_meter,
+                        trade_plan,
                         diagnostics,
                         alerts,
                     };

@@ -119,9 +119,10 @@
       <!-- Risk gauge -->
       <div class="lg:col-span-5 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
         <div class="flex items-center justify-between mb-2">
-          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Exposure</span>
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Exposure <span class="normal-case text-slate-600 font-normal">· if you took ALL ideas</span></span>
           <span id="exposurePct" class="num text-sm font-bold text-slate-200">0.0%</span>
         </div>
+        <div class="text-[9px] text-slate-600 mb-1.5 -mt-1">Over 100% = the Top-10 are <i>independent ideas</i>; you can't take them all. See the <span class="text-sky-400">▣ Live Trade Plan</span> below for what actually fits.</div>
         <div class="h-3 w-full rounded-full bg-slate-800 overflow-hidden">
           <div id="exposureBar" class="h-full rounded-full bg-emerald-500 transition-all duration-300" style="width:0%"></div>
         </div>
@@ -267,6 +268,20 @@
       <div class="px-3 pb-3 pt-2 border-t border-slate-800 text-[10px] text-slate-500 leading-relaxed">
         ⚠ Profit/Loss are net-of-cost scenarios, not guarantees. Verify MIS-eligibility (T2T/ASM-GSM reject intraday), spread &amp; circuit bands live; square-off ~15:20 IST. No orders are placed.
       </div>
+    </section>
+
+    <!-- ===================== LIVE TRADE PLAN (budget/risk/ATR-aware basket) ===================== -->
+    <section id="planWrap" class="rounded-lg border border-sky-900/50 bg-[#0d1320]">
+      <div class="px-3 py-2 border-b border-slate-800 flex items-start justify-between flex-wrap gap-2">
+        <div>
+          <span class="text-xs font-bold uppercase tracking-wider text-sky-300">▣ Live Trade Plan — what fits your budget &amp; risk</span>
+          <div class="text-[10px] text-slate-500 mt-0.5">The realistic basket: highest-score ideas that fit your 5× leverage, total-risk cap &amp; diversification — each sized to <b>your risk%</b> off the stock's ATR. The Top-10 are <i>ideas</i>; this is what you could actually take together. <b>Not advice.</b></div>
+        </div>
+        <span id="planHeadline" class="text-[11px] font-semibold"></span>
+      </div>
+      <div id="planTotals" class="px-3 py-2 border-b border-slate-800/60"></div>
+      <div id="planBody" class="p-3 overflow-x-auto"></div>
+      <div id="planNotes" class="px-3 pb-3 pt-2 border-t border-slate-800 text-[10px] text-slate-500 leading-relaxed"></div>
     </section>
 
     <!-- ===================== HONESTY BANNER ===================== -->
@@ -523,6 +538,7 @@
       els.buyCount.textContent = lastBuy.length + " names";
       els.sellCount.textContent = lastSell.length + " names";
       renderBestPicks();
+      renderTradePlan(pkt.trade_plan);
 
       // Diagnostics
       applyDiagnostics(pkt.diagnostics);
@@ -1060,6 +1076,75 @@
           });
       });
     }
+    // Live Trade Plan: the budget/risk/ATR-aware basket from pkt.trade_plan.
+    function planColorCls(c) {
+      return c === "red" ? "text-rose-300" : c === "amber" ? "text-amber-300" : "text-emerald-300";
+    }
+    function renderTradePlan(plan) {
+      plan = plan && typeof plan === "object" ? plan : {};
+      var pos = arr(plan.positions);
+      var t = plan.totals || {};
+      var totalsEl = $("planTotals"), bodyEl = $("planBody"), notesEl = $("planNotes"), headEl = $("planHeadline");
+      if (!totalsEl || !bodyEl) return;
+      if (!pos.length) {
+        if (headEl) headEl.textContent = "";
+        totalsEl.innerHTML = "";
+        bodyEl.innerHTML = '<div class="text-[12px] text-slate-500">No basket yet — waiting for signals that fit your budget/risk.</div>';
+        notesEl.innerHTML = arr(plan.notes).map(function (n) { return esc(n); }).join(" · ");
+        return;
+      }
+      if (headEl) {
+        headEl.innerHTML = '<span class="' + planColorCls(str(t.color, "green")) + '">' +
+          intFmt(t.n_positions) + ' trades · ' + pct1(num(t.deployed_pct, 0)) + ' deployed · ' +
+          pct1(num(t.total_risk_pct, 0)) + ' at risk</span>';
+      }
+      // Totals strip.
+      function cell(label, val, cls) {
+        return '<div class="rounded-md border border-slate-800 bg-slate-900/40 px-2 py-1">' +
+          '<div class="text-[9px] uppercase tracking-wide text-slate-500">' + esc(label) + '</div>' +
+          '<div class="text-[12px] num ' + (cls || "text-slate-200") + '">' + val + '</div></div>';
+      }
+      totalsEl.innerHTML = '<div class="grid grid-cols-3 sm:grid-cols-6 gap-1.5">' +
+        cell("Positions", intFmt(t.n_positions) + ' (' + intFmt(t.n_long) + 'L/' + intFmt(t.n_short) + 'S)') +
+        cell("Deployed", signedRupee(t.deployed).replace("+", ""), planColorCls(str(t.color, "green"))) +
+        cell("of Max Notional", pct1(num(t.deployed_pct, 0))) +
+        cell("Total at Risk", signedRupee(t.total_risk_inr).replace("+", ""), "text-rose-300") +
+        cell("Risk % of Budget", pct1(num(t.total_risk_pct, 0)), "text-rose-300") +
+        cell("Free Margin", signedRupee(t.free_margin).replace("+", "")) +
+        '</div>' +
+        '<div class="grid grid-cols-3 gap-1.5 mt-1.5">' +
+        cell("Exp. P&L", (isFinite(num(t.exp_pnl, NaN)) ? signedRupee(t.exp_pnl) : "—"), num(t.exp_pnl, 0) >= 0 ? "text-emerald-300" : "text-rose-300") +
+        cell("All targets hit", signedRupee(t.best_case), "text-emerald-300") +
+        cell("All stops hit", signedRupee(t.worst_case), "text-rose-300") +
+        '</div>';
+      // Positions table.
+      var h = '<table class="w-full text-[12px] num"><thead><tr class="text-slate-500 text-[10px] uppercase tracking-wide">' +
+        '<th class="text-left pr-2 py-1">Stock</th><th class="text-left pr-2 py-1">Side</th>' +
+        '<th class="text-right pr-2 py-1">Qty</th><th class="text-right pr-2 py-1">Entry</th>' +
+        '<th class="text-right pr-2 py-1">SL</th><th class="text-right pr-2 py-1">Target</th>' +
+        '<th class="text-right pr-2 py-1">ATR%</th><th class="text-right pr-2 py-1">Risk ₹</th>' +
+        '<th class="text-right pr-2 py-1">Notional</th><th class="text-left pl-2 py-1">Sector</th></tr></thead><tbody>';
+      pos.forEach(function (p) {
+        var buy = String(p.side).toUpperCase().indexOf("BUY") >= 0 || String(p.side).toUpperCase().indexOf("LONG") >= 0;
+        var sideCls = buy ? "text-emerald-300" : "text-rose-300";
+        h += '<tr class="border-t border-slate-800/60">' +
+          '<td class="py-1 pr-2 font-bold ' + sideCls + '">' + esc(str(p.symbol, "—")) + '</td>' +
+          '<td class="py-1 pr-2 ' + sideCls + '">' + (buy ? "BUY" : "SELL") + '</td>' +
+          '<td class="py-1 pr-2 text-right text-slate-200 font-medium">' + intFmt(p.shares) + '</td>' +
+          '<td class="py-1 pr-2 text-right text-slate-300">' + fixed(p.entry, 2) + '</td>' +
+          '<td class="py-1 pr-2 text-right text-rose-300/80">' + fixed(p.sl, 2) + '</td>' +
+          '<td class="py-1 pr-2 text-right text-emerald-300/80">' + fixed(p.target, 2) + '</td>' +
+          '<td class="py-1 pr-2 text-right text-slate-400">' + fixed(p.atr_pct, 1) + '%</td>' +
+          '<td class="py-1 pr-2 text-right text-rose-300">' + signedRupee(p.risk_inr).replace("+", "") + '</td>' +
+          '<td class="py-1 pr-2 text-right text-slate-400">' + signedRupee(p.notional).replace("+", "") + '</td>' +
+          '<td class="py-1 pl-2 text-left text-slate-500">' + esc(str(p.sector, "—")) + '</td>' +
+          '</tr>';
+      });
+      h += '</tbody></table>';
+      bodyEl.innerHTML = h;
+      notesEl.innerHTML = arr(plan.notes).map(function (n) { return '• ' + esc(n); }).join("<br>");
+    }
+
     function renderBestPicks() {
       var body = $("bestBody"); if (!body) return;
       var buys = rankSide(typeof lastBuy !== "undefined" ? lastBuy : [], "buy");

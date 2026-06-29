@@ -162,6 +162,18 @@ pub const RISK_DEFAULT_PCT: f64 = 0.01;
 /// MIS intraday leverage cap used for the budget → max-notional guard.
 pub const LEVERAGE: f64 = 5.0;
 
+/// Live Trade Plan: portfolio total-risk ceiling as a fraction of budget. The
+/// per-trade risk% is the user's; the plan additionally caps the SUM of risk
+/// across the selected basket here, so e.g. five 1% trades (5%) are allowed but a
+/// high per-trade risk% can't silently stack into reckless aggregate risk. The
+/// effective cap is `max(one trade's risk, budget × this)` — a single trade at
+/// the user's risk% is always allowed even if it alone exceeds this.
+pub const MAX_PORTFOLIO_RISK_PCT: f64 = 0.06;
+/// Live Trade Plan: most positions held concurrently (also the RiskLimits default).
+pub const PLAN_MAX_CONCURRENT: usize = 5;
+/// Live Trade Plan: most positions per sector (diversification guard).
+pub const PLAN_MAX_PER_SECTOR: usize = 2;
+
 // --- Trading Desk: capital pool, risk tiers, circuit breaker ---------------
 
 /// Liquid trading capital pool for the Trading Desk (₹10,00,000).

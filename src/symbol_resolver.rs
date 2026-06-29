@@ -146,6 +146,12 @@ impl SymbolResolver {
         self.sector_of.get(sym).cloned()
     }
 
+    /// A SYMBOL → sector map (clone). Used by the Live Trade Plan's per-sector
+    /// diversification cap. Empty when metadata is absent (cap then disabled).
+    pub fn sector_map(&self) -> std::collections::HashMap<String, String> {
+        self.sector_of.clone()
+    }
+
     /// Resolve a raw statement name (+ optional ISIN) to a trading symbol.
     pub fn resolve(&self, raw: &str, _isin: Option<&str>) -> Resolved {
         let raw_up = raw.trim().to_uppercase();

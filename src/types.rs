@@ -242,6 +242,75 @@ pub struct SettingsView {
     pub risk_pct: f64,
 }
 
+/// One position in the Live Trade Plan — a Top-10 idea that fits the budget/risk
+/// basket. Display-only (no orders). Carried from a `RankedSignal`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlanPosition {
+    pub symbol: String,
+    pub side: String,
+    pub strategy: String,
+    pub shares: i64,
+    pub entry: f64,
+    pub sl: f64,
+    pub target: f64,
+    /// ₹ actually at risk if the stop hits (= |proj_loss|).
+    pub risk_inr: f64,
+    pub notional: f64,
+    /// ATR (price units) implied by the stop distance.
+    pub atr: f64,
+    /// Stop distance as % of entry — "how far the SL sits".
+    pub atr_pct: f64,
+    pub proj_profit: f64,
+    pub proj_loss: f64,
+    pub exp_pnl: f64,
+    /// Sector (best-effort; empty when unknown).
+    pub sector: String,
+}
+
+/// Portfolio aggregates for the Live Trade Plan.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlanTotals {
+    pub n_positions: usize,
+    pub n_long: usize,
+    pub n_short: usize,
+    pub budget: f64,
+    pub max_notional: f64,
+    pub deployed: f64,
+    /// deployed / max_notional × 100.
+    pub deployed_pct: f64,
+    pub free_margin: f64,
+    /// Sum of per-position ₹ risk.
+    pub total_risk_inr: f64,
+    /// total_risk_inr / budget × 100 — the real aggregate risk if all stops hit.
+    pub total_risk_pct: f64,
+    /// Expectancy-weighted basket P&L.
+    pub exp_pnl: f64,
+    /// All targets hit.
+    pub best_case: f64,
+    /// All stops hit (≤ 0).
+    pub worst_case: f64,
+    pub long_notional: f64,
+    pub short_notional: f64,
+    /// "green" | "amber" | "red" exposure colour for the basket.
+    pub color: String,
+}
+
+/// The Live Trade Plan: a budget/risk/ATR-aware basket selected from the Top-10.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TradePlan {
+    pub positions: Vec<PlanPosition>,
+    pub totals: PlanTotals,
+    /// How many ranked ideas were considered.
+    pub considered: usize,
+    /// Ideas dropped because they didn't fit (leverage / risk cap / count / sector).
+    pub skipped_leverage: usize,
+    pub skipped_risk_cap: usize,
+    pub skipped_concurrent: usize,
+    pub skipped_sector: usize,
+    /// Honest, plain-English notes (skip reasons, directional bias, …).
+    pub notes: Vec<String>,
+}
+
 /// The complete payload pushed over `/ws/live_signals` on every update.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalPacket {
@@ -253,6 +322,9 @@ pub struct SignalPacket {
     pub top_buy: Vec<RankedSignal>,
     pub top_sell: Vec<RankedSignal>,
     pub risk_meter: RiskMeter,
+    /// Budget/risk/ATR-aware actionable basket (display-only).
+    #[serde(default)]
+    pub trade_plan: TradePlan,
     pub diagnostics: Diagnostics,
     pub alerts: Vec<Alert>,
 }
@@ -267,6 +339,7 @@ impl SignalPacket {
             top_buy: Vec::new(),
             top_sell: Vec::new(),
             risk_meter: RiskMeter::default(),
+            trade_plan: TradePlan::default(),
             diagnostics: Diagnostics::default(),
             alerts: Vec::new(),
         }
