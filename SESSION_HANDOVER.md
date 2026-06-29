@@ -2,12 +2,24 @@
 
 ## ▶ RESUME (paste this into a new session)
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
-> `SESSION_HANDOVER.md` (esp. the ▶▶ NEXT-SESSION PLAN below), and continue on `main`.**
+> `SESSION_HANDOVER.md` (esp. ◀ THIS SESSION + the one remaining P1 item below), and continue on `main`.**
 >
-> **Git state:** clean & fully PUSHED. `origin/main` == local `main` == **`dc0913c`**. Everything below is on GitHub.
-> 167 tests pass; build clean. The 14 GB archive + `cache/` edge maps are gitignored (local only) — a fresh clone has no
-> data and rebuilds via `backtest`. (Only untracked file: `COMPETITIVE_ANALYSIS_2026.md`, pre-existing, not committed.)
-> Edge maps were FULLY REBUILT (all 1,752 symbols, 5/15/30/60min; 1day empty by design); anchors re-baselined (§6).
+> **Git state (2026-06-29 cont.):** clean working tree, **5 commits AHEAD of origin and NOT pushed** — the owner
+> chose to HOLD the work local for review. Local `main` tip = **`76ec8f9`**; `origin/main` still = **`82b8cf2`**.
+> **Decide on `git push origin main` before doing more.** **181 tests pass; build clean; both anchors byte-identical.**
+> The 14 GB archive + `cache/` edge maps + `fundamentals.parquet` are gitignored (local only). (Only untracked file:
+> `COMPETITIVE_ANALYSIS_2026.md`, pre-existing.)
+>
+> The 5 local commits (oldest→newest): `d4b74f8` P0-2b details onboarding · `fc6f454` data-quality guard ·
+> `5af6c01` fundamentals panel · `815b6dd` shrunk-expectancy ranking · `76ec8f9` CPCV/PBO panel. See ◀ THIS SESSION.
+> **Resume shell:**
+> ```bash
+> . "$HOME/.cargo/env"; cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
+> git log --oneline -6                                  # tip 76ec8f9; origin behind at 82b8cf2 (NOT pushed)
+> pkill -f "ram_istp serve"; pkill -f "ram_istp live"   # single-instance: stop leftovers first
+> cargo build && cargo test                             # 181 tests pass
+> ./target/debug/ram_istp serve 30min                   # dashboards → :8787 (finder/scanner warm ~2 min, in bg)
+> ```
 
 Then run the resume command:
 ```bash
@@ -28,7 +40,63 @@ cargo build && cargo test                                   # 167 tests should p
 #       then P1 (robustness columns, shrunk ranking, CPCV/PBO, fundamentals, coverage panel).
 ```
 
-## ◀ THIS SESSION (2026-06-29) — intraday safety gate + perf + ATR input (all pushed: `141dee0`, `337f8cc`, `dc0913c`)
+## ◀ THIS SESSION (2026-06-29 cont.) — P0-2b + split guard + 3 of 4 P1 items (5 commits, LOCAL ONLY, not pushed)
+All display-only / signals-only / firewalled; eligibility gate, Confidence, cost model, and **both anchors untouched**
+(`anchor_bajfinance_edge_map_stable` + `anchor_63moons_deep_dive_stable` byte-identical). **181 tests** (was 167).
+Every feature was verified end-to-end (live endpoint + rendered-output checks), not just unit-tested.
+1. **P0-2b add_stock DETAILS onboarding** (`d4b74f8`) — NEW `enrich_stock.py` (sibling of `download_stock.py`): upserts
+   `symbol_metadata` (sector/industry/mcap/name/isin from Yahoo `.info`, recent_listings fallback), upserts corp-actions
+   (per-stock + combined parquet, replacing ONLY that symbol's rows), writes the split-adjusted `daily_adj` slice, and
+   pulls indianapi fundamentals **only if `INDIANAPI_KEY` is set** (paid). Atomic writes; honest "—" on missing fields.
+   `POST /api/enrich_symbol` (mirrors add_stock_handler; strict symbol whitelist) + chained in `add_stock.html`
+   (download → onboard edges → enrich details). Upsert proven non-destructive (all 21,016 other corp-action rows
+   byte-identical by hash).
+2. **Split-continuity / bad-tick data-quality guard** (`fc6f454`) — NEW `src/data_quality.rs` (firewalled: config +
+   storage_kernel). Pure `assess()`: invalid/non-finite prices, worst single-day discontinuity, uncorrected-split
+   cross-ref vs `corporate_actions_all.parquet`, + a "recent corporate action" tag. Verdict ok|caution|unreliable.
+   `GET /api/data_quality?symbol=` (on-demand, live tf) → red "DATA QUALITY — UNRELIABLE" banner on the deep-dive.
+   **Calibrated on real data, NO hardcoded name list:** PRIVISCL (65 ₹0.00 bars, 3689× jump) + KAMOPAINTS (378× jump,
+   ₹0.02) → unreliable; **CUPID & RELIANCE → ok (no false positive — CUPID's splits ARE adjusted, worst jump 1.25×)**,
+   CUPID still surfaces its 5:1/2:1 split as context. +6 tests.
+3. **P1 fundamentals panel** (`5af6c01`) — NEW `build_fundamentals.py` flattens the unconsumed `indianapi/stock/*.json`
+   → `fundamentals.parquet` (P/E, ROE, D/E, PEG, 5y growth, margin, div yield, P/B, promoter %, mcap; 270 covered, 6
+   empty skipped; spot-checked accurate). NEW `src/fundamentals.rs` (firewalled: storage_kernel) +
+   `GET /api/fundamentals?symbol=` → a "Fundamentals · context only" grid on the deep-dive (honest "—"/uncovered).
+   `enrich_stock.py` does a best-effort single-symbol upsert (reuses `flatten_one`). +2 tests.
+4. **P1 shrunk-expectancy ranking** (`815b6dd`) — the live Top-10 ranked on RAW expectancy × live_score, so small-n
+   flukes topped it (67 eligible edges carry n<50). Now ranks on James–Stein-shrunk expectancy (`SHRINK_PRIOR_R=0.0`,
+   `SHRINK_STRENGTH=40` in config). `analytics_kernel::snapshot_candidates`: `score = shrunk × live_score`; raw carried
+   for display. `Candidate`/`RankedSignal` gain `shrunk_expectancy_r`; `index.html` shows a "ranks X.XXR" tag + rewritten
+   Score help. **Anchor-safe (anchors test EdgeRecord.metrics, not Top-10 order).** Verified live: STUDDS (n=65) now sits
+   below MWL (n=215) despite identical raw 0.264R. +2 tests.
+5. **P1 CPCV / PBO panel** (`76ec8f9`) — NEW pure `src/cpcv.rs` (Bailey CSCV → Probability of Backtest Overfitting;
+   block_means + cscv_pbo with midrank ties + C(S,S/2) splits; +5 tests incl. dominant→PBO≈0, specialist→PBO>60%).
+   `suggestion_engine`: a READ-ONLY tap at the per-interval merge computes PBO **per timeframe** (configs must share one
+   bar grid) from the trades already backtested, 8 blocks. `StockSuggestion.pbo_by_tf` (#[serde(default)]) →
+   per-tf PBO panel on the deep-dive. **Anchor-safe (tap only reads the already-built config set).** Verified live on
+   RELIANCE (2.4s): 40 configs × 8 blocks/tf, PBO 0–4.3%.
+
+### ⏭ ONE remaining P1 item (NOT started) — robustness columns on the edge-map / Top-10 tier
+The deep pass already runs OOS/WF/DSR; the **edge-map / live Top-10 tier does NOT** (it ranks on `eligible()` only).
+This is the heaviest remaining item — **it changes the edge-map cache format and needs a full `backtest` rebuild to
+populate, plus multi-struct plumbing** — deliberately left for a fresh, careful session. Concrete plan (all gathered
+this session):
+- Extend `EdgeRecord` (src/strategy_engine.rs — currently {symbol, strategy, direction, timeframe, metrics, eligible})
+  with `oos_expectancy: Option<f64>`, `oos_n: usize`, `wf_consistency: f64` (+ optional per-symbol DSR over its 26
+  strat×dir trials). Compute them in `backtest_symbol`'s config eval from the same trades, EXACTLY like
+  `suggestion_engine::build_config_stat` does (`validation::purged_embargoed_split` with `OOS_FRACTION`/`EMBARGO_FRACTION`
+  + `validation::walkforward_consistency` with `WF_FOLDS`). Add `#[serde(default)]` so OLD caches still load.
+- **Do NOT change `eligible()`** (display-only annotation). Thread the new fields through `EligibleEdge` (build_index)
+  → `Candidate` (analytics_kernel::snapshot_candidates) → `RankedSignal` (risk_manager::to_ranked) → `index.html`
+  Top-10 columns — same path the `shrunk_expectancy_r` plumbing just used (4 structs + 2 test ctors).
+- **Anchor check:** `anchor_bajfinance_edge_map_stable` runs `backtest_symbol` and asserts `metrics.{n,expectancy,
+  profit_factor}` — adding OOS/WF fields does NOT touch those, but RE-RUN it after the change. A full edge-map rebuild
+  is required for the new columns to show in the live Top-10 (in-memory universe fixed at startup; same caveat as onboarding).
+- Pair with the spec's "show CIs" only if the edge map starts storing per-trade R-series (it doesn't today; the live
+  Top-10 carries summary stats only, so `expectancy_ci` — which needs the R-series — can't run there without a format
+  change). The deep-dive already shows CIs (it has the series).
+
+## ◀ EARLIER 2026-06-29 — intraday safety gate + perf + ATR input (all pushed: `141dee0`, `337f8cc`, `dc0913c`)
 All display-only / signals-only; Confidence + edge map + the 63MOONS/BAJFINANCE anchors untouched. **167 tests** (was 165).
 1. **Finder perf** (`141dee0`) — `suggestion_engine::fit_universe()` caches the capital/risk-INDEPENDENT backtest search
    (date|count keyed); capital/risk slider changes now re-run only the cheap sizing loop. **~81s → ~15ms**, results
