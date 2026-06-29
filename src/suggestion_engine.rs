@@ -1058,6 +1058,8 @@ struct ScanBest {
     strat: SuggestStrategy,
     tf: Timeframe,
     rr: f64,
+    sl_mult: f64,
+    atr: f64,
     confidence: u32,
     expectancy: f64,
     win_rate: f64,
@@ -1160,6 +1162,8 @@ fn gate_and_pick(cands: Vec<ConfigStat>, trial_sharpes: &[f64]) -> Option<ScanBe
             strat: cs.strat,
             tf: cs.tf,
             rr: cs.rr,
+            sl_mult: cs.sl_mult,
+            atr: cs.atr,
             confidence: conf,
             expectancy: cs.expectancy,
             win_rate: cs.win_rate,
@@ -1181,6 +1185,15 @@ fn gate_and_pick(cands: Vec<ConfigStat>, trial_sharpes: &[f64]) -> Option<ScanBe
 }
 
 fn scan_best_to_row(symbol: &str, side: &str, b: &ScanBest) -> ScannerRow {
+    // Stop / target from the winning config (capital-independent). Sizing + net
+    // P&L are filled per-request by `size_scan_result`.
+    let sl_dist = b.sl_mult * b.atr;
+    let long = side == "BUY";
+    let (sl, target) = if long {
+        (b.entry - sl_dist, b.entry + b.rr * sl_dist)
+    } else {
+        (b.entry + sl_dist, b.entry - b.rr * sl_dist)
+    };
     ScannerRow {
         symbol: symbol.to_string(),
         side: side.to_string(),
@@ -1193,9 +1206,40 @@ fn scan_best_to_row(symbol: &str, side: &str, b: &ScanBest) -> ScannerRow {
         profit_factor: b.profit_factor,
         n_trades: b.n,
         entry: b.entry,
+        sl,
+        target,
+        atr: b.atr,
+        shares: 0,
+        net_profit: 0.0,
+        net_loss: 0.0,
         reliability: "scan".to_string(),
         prob_floor: b.prob_floor,
         shortlist: b.shortlist,
+    }
+}
+
+/// Size every scanner row to the given capital + risk% — shares (capped by 5×
+/// buying power) and net P&L after itemized round-trip cost — in place. This is
+/// capital/risk-dependent, so it runs per-request on the cached (capital/risk-
+/// INDEPENDENT) scan, mirroring the finder's search/sizing split. Display-only.
+pub fn size_scan_result(result: &mut ScanResult, capital: f64, risk_pct: f64) {
+    let risk_amount = capital * risk_pct;
+    let leverage = config::LEVERAGE;
+    for row in result.top_buy.iter_mut().chain(result.top_sell.iter_mut()) {
+        let sl_dist = (row.entry - row.sl).abs();
+        if sl_dist <= 0.0 || row.entry <= 0.0 {
+            row.shares = 0;
+            row.net_profit = 0.0;
+            row.net_loss = 0.0;
+            continue;
+        }
+        let by_risk = (risk_amount / sl_dist).floor().max(0.0);
+        let affordable = (capital * leverage / row.entry).floor().max(0.0);
+        let shares = by_risk.min(affordable).max(0.0) as i64;
+        row.shares = shares;
+        let long = row.side == "BUY";
+        row.net_profit = crate::costs::net_pnl(shares, row.entry, row.target, long).0;
+        row.net_loss = crate::costs::net_pnl(shares, row.entry, row.sl, long).0;
     }
 }
 
@@ -1418,6 +1462,8 @@ pub fn find_capital_fit(
     risk_pct: f64,
 ) -> FinderResult {
     let universe = fit_universe(root, symbols);
+    // Largest ATR across every backtested stock — the UI's "Max ATR" slider top.
+    let max_atr_universe = universe.iter().map(|b| b.atr).fold(0.0_f64, f64::max);
 
     let risk_amount = capital * risk_pct;
     let leverage = config::LEVERAGE;
@@ -1509,6 +1555,7 @@ pub fn find_capital_fit(
         rows,
         qualifying,
         scanned: symbols.len(),
+        max_atr_universe,
         built_ist,
     }
 }

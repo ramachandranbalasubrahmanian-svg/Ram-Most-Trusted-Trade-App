@@ -432,6 +432,21 @@ pub struct ScannerRow {
     pub profit_factor: f64,
     pub n_trades: usize,
     pub entry: f64,
+    /// Stop / target (entry ± sl_mult·ATR, ± rr·sl_mult·ATR) — capital-independent.
+    #[serde(default)]
+    pub sl: f64,
+    #[serde(default)]
+    pub target: f64,
+    #[serde(default)]
+    pub atr: f64,
+    /// Sizing for the user's capital + risk% (filled per-request by the handler;
+    /// net P&L is after itemized round-trip cost). 0 when un-sized / unaffordable.
+    #[serde(default)]
+    pub shares: i64,
+    #[serde(default)]
+    pub net_profit: f64,
+    #[serde(default)]
+    pub net_loss: f64,
     /// Reliability provenance of this row's Confidence. The scanner gates over a
     /// lighter 3-interval (15m/30m/60m) DSR trial set; the per-stock deep-dive
     /// searches 6 intervals and is the stricter, authoritative number. "scan"
@@ -515,6 +530,10 @@ pub struct FinderResult {
     pub rows: Vec<FinderRow>,
     pub qualifying: usize,
     pub scanned: usize,
+    /// Largest ATR (₹/share) across all backtested stocks today — the upper bound
+    /// for the UI's "Max ATR" slider.
+    #[serde(default)]
+    pub max_atr_universe: f64,
     pub built_ist: String,
 }
 

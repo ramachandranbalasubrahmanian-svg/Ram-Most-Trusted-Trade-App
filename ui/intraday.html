@@ -95,7 +95,7 @@
     <!-- ===================== CONTROLS ===================== -->
     <section class="grid grid-cols-1 lg:grid-cols-12 gap-3">
       <!-- Capital -->
-      <div class="lg:col-span-4 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+      <div class="lg:col-span-3 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
         <div class="flex items-center justify-between mb-2">
           <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Capital</span>
           <span class="text-[10px] text-slate-600">5× MIS leverage</span>
@@ -110,7 +110,7 @@
       </div>
 
       <!-- Risk -->
-      <div class="lg:col-span-4 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+      <div class="lg:col-span-3 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
         <div class="flex items-center justify-between mb-2">
           <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Risk / Trade</span>
           <span id="riskVal" class="num text-xl font-bold text-amber-300">2.50%</span>
@@ -121,8 +121,21 @@
         </div>
       </div>
 
+      <!-- Max ATR / share -->
+      <div class="lg:col-span-3 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Max ATR / share</span>
+          <span id="atrVal" class="num text-xl font-bold text-sky-300">₹—</span>
+        </div>
+        <input id="atrRange" type="range" class="w-full mt-1" min="1" max="100" step="1" value="100" />
+        <div class="flex justify-between text-[9px] text-slate-600 num mt-1">
+          <span>₹1</span><span id="atrMaxLabel">max</span>
+        </div>
+        <div class="text-[9px] text-slate-600 mt-1.5">Finds stocks with ATR ≤ this (lower = tighter ₹ stop, more shares).</div>
+      </div>
+
       <!-- Derived + Apply -->
-      <div class="lg:col-span-4 rounded-lg border border-slate-800 bg-[#0d1320] p-3 flex flex-col justify-between">
+      <div class="lg:col-span-3 rounded-lg border border-slate-800 bg-[#0d1320] p-3 flex flex-col justify-between">
         <div class="grid grid-cols-2 gap-2 text-[11px]">
           <div>
             <div class="text-slate-600 uppercase tracking-wide text-[9px]">₹ Risk / trade</div>
@@ -412,7 +425,28 @@
     var state = {
       capital: CAPITAL_DEFAULT,
       riskPct: RISK_DEFAULT, // percent (0.25..5.0)
+      maxAtr: null,      // ₹/share ATR ceiling for the finder (null = no cap yet)
+      atrCeilMax: null,  // slider top = universe max ATR today (from the finder)
     };
+
+    // Configure the Max-ATR slider from the universe's max ATR (returned by the
+    // finder). At the slider's top there is no effective cap; lowering it filters.
+    function configureAtrSlider(maxAtrUniverse) {
+      var m = Math.max(1, Math.ceil(num(maxAtrUniverse, 0)));
+      if (!isFinite(m) || m <= 1) return;
+      state.atrCeilMax = m;
+      var el = $("atrRange");
+      el.max = String(m);
+      el.step = m > 200 ? "1" : "0.5";
+      if (state.maxAtr == null) { state.maxAtr = m; el.value = String(m); } // start at top = no cap
+      if ($("atrMaxLabel")) $("atrMaxLabel").textContent = "₹" + m;
+      renderAtr();
+    }
+    function renderAtr() {
+      if (state.maxAtr == null) { $("atrVal").textContent = "₹—"; return; }
+      var atTop = state.atrCeilMax != null && state.maxAtr >= state.atrCeilMax;
+      $("atrVal").textContent = "₹" + (state.maxAtr % 1 === 0 ? state.maxAtr.toFixed(0) : state.maxAtr.toFixed(1)) + (atTop ? "" : "");
+    }
 
     function clampCapital(c) {
       c = Math.round(num(c, CAPITAL_DEFAULT));
@@ -768,15 +802,24 @@
       }
       return '<div class="rounded-lg border border-emerald-900/50 bg-emerald-950/10 px-3 py-2 text-[11px] text-emerald-300/90 mb-2">✓ ' + esc(str(t.reason, "No local intraday blocker.")) + '</div>';
     }
-    // Compact inline badge for scanner / finder rows.
+    // Compact inline badge for scanner / finder rows. Green ✓ when intraday-clean.
     function tradBadge(sym) {
       var t = tradOf(sym); if (!t) return "";
       var v = str(t.verdict, "ok");
       var spec = v === "blocked" ? ["⛔ NO-MIS", "bg-rose-900/60 text-rose-300"]
         : v === "high_risk" ? ["⚠ RISK", "bg-amber-900/60 text-amber-300"]
-        : v === "caution" ? ["⚠", "bg-amber-900/40 text-amber-300/90"] : null;
-      if (!spec) return "";
+        : v === "caution" ? ["⚠", "bg-amber-900/40 text-amber-300/90"]
+        : ["✓", "bg-emerald-900/50 text-emerald-300"]; // ok → intraday-clean
       return ' <span class="ml-1 px-1 rounded text-[9px] font-bold align-middle ' + spec[1] + '" title="' + esc(str(t.reason, "")) + '">' + spec[0] + '</span>';
+    }
+    // Verdict colour for a symbol where the cell colour is free (the finder):
+    // green = clean for intraday, amber = caution/high-risk, red = blocked.
+    function tradSymClass(sym, fb) {
+      var t = tradOf(sym); if (!t) return fb || "text-slate-100";
+      var v = str(t.verdict, "ok");
+      return v === "blocked" ? "text-rose-400"
+        : (v === "high_risk" || v === "caution") ? "text-amber-300"
+        : "text-emerald-400";
     }
 
     function renderSuggestion(s) {
@@ -873,6 +916,12 @@
       { label: "PF", align: "right" },
       { label: "n", align: "right" },
       { label: "Entry", align: "right" },
+      { label: "ATR", align: "right" },
+      { label: "SL", align: "right" },
+      { label: "Target", align: "right" },
+      { label: "Qty", align: "right" },
+      { label: "Profit", align: "right" },
+      { label: "Loss", align: "right" },
     ];
 
     function scanHeadHtml() {
@@ -902,18 +951,33 @@
       cells += '<td style="text-align:right" class="num text-slate-300">' + fixed(r.profit_factor, 2) + "</td>";
       cells += '<td style="text-align:right" class="num text-slate-500">' + intFmt(r.n_trades) + "</td>";
       cells += '<td style="text-align:right" class="num text-slate-200">' + price(r.entry) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-400">' + price(r.atr) + "</td>";
+      cells += '<td style="text-align:right" class="num text-rose-300/80">' + price(r.sl) + "</td>";
+      cells += '<td style="text-align:right" class="num text-emerald-300/80">' + price(r.target) + "</td>";
+      cells += '<td style="text-align:right" class="num text-slate-100 font-medium">' + intFmt(r.shares) + "</td>";
+      cells += '<td style="text-align:right" class="num text-emerald-400 font-semibold">' + rupee(r.net_profit) + "</td>";
+      cells += '<td style="text-align:right" class="num text-rose-400 font-semibold">' + rupee(r.net_loss) + "</td>";
       return "<tr>" + cells + "</tr>";
     }
     function renderScanTable(headEl, bodyEl, rows, kind) {
       headEl.innerHTML = scanHeadHtml();
       rows = arr(rows);
+      // Apply the same Max-ATR ceiling here (client-side) so the scanner honours it too.
+      if (state.maxAtr != null && state.atrCeilMax != null && state.maxAtr < state.atrCeilMax) {
+        rows = rows.filter(function (r) { return num(r.atr, 0) <= state.maxAtr; });
+      }
       if (!rows.length) { bodyEl.innerHTML = scanEmptyRow(); return; }
       var html = "";
       for (var i = 0; i < rows.length; i++) html += scanRowHtml(rows[i], kind);
       bodyEl.innerHTML = html;
     }
 
-    var scanLoaded = false, scanLoading = false;
+    var scanLoaded = false, scanLoading = false, lastScanBuy = [], lastScanSell = [];
+    function rerenderScan() {
+      if (!scanLoaded) return;
+      renderScanTable($("scanBuyHead"), $("scanBuyBody"), lastScanBuy, "buy");
+      renderScanTable($("scanSellHead"), $("scanSellBody"), lastScanSell, "sell");
+    }
     function runScan(force) {
       if (scanLoading) return;
       if (scanLoaded && !force) return;
@@ -927,8 +991,9 @@
         "&risk=" + encodeURIComponent(state.riskPct); // server expects a percent (e.g. 2.5)
       getJson(url).then(function (res) {
         res = res && typeof res === "object" ? res : {};
-        renderScanTable($("scanBuyHead"), $("scanBuyBody"), res.top_buy, "buy");
-        renderScanTable($("scanSellHead"), $("scanSellBody"), res.top_sell, "sell");
+        lastScanBuy = arr(res.top_buy); lastScanSell = arr(res.top_sell);
+        renderScanTable($("scanBuyHead"), $("scanBuyBody"), lastScanBuy, "buy");
+        renderScanTable($("scanSellHead"), $("scanSellBody"), lastScanSell, "sell");
         $("scanBuyCount").textContent = arr(res.top_buy).length + " names";
         $("scanSellCount").textContent = arr(res.top_sell).length + " names";
         var scanned = intFmt(res.scanned);
@@ -992,7 +1057,7 @@
       var side = str(r.side, "").toUpperCase();
       var sideClass = side === "BUY" ? "text-emerald-300" : (side === "SELL" ? "text-rose-300" : "text-slate-300");
       var cells = "";
-      cells += '<td style="text-align:left"><span class="font-bold text-slate-100">' + esc(str(r.symbol, "—")) + "</span>" + tradBadge(r.symbol) + "</td>";
+      cells += '<td style="text-align:left"><span class="font-bold ' + tradSymClass(r.symbol, "text-slate-100") + '">' + esc(str(r.symbol, "—")) + "</span>" + tradBadge(r.symbol) + "</td>";
       cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.strategy, "—")) + "</td>";
       cells += '<td style="text-align:left"><span class="font-semibold ' + sideClass + '">' + esc(side || "—") + "</span></td>";
       cells += '<td style="text-align:left" class="text-slate-400">' + esc(str(r.interval, "—")) + "</td>";
@@ -1025,8 +1090,10 @@
       $("finderOut").innerHTML = "";
       var url = "/api/finder?capital=" + encodeURIComponent(state.capital) +
         "&risk=" + encodeURIComponent(state.riskPct); // server expects a percent (e.g. 2.5)
+      if (state.maxAtr != null) url += "&max_atr=" + encodeURIComponent(state.maxAtr);
       getJson(url).then(function (res) {
         res = res && typeof res === "object" ? res : {};
+        configureAtrSlider(res.max_atr_universe); // sets the slider's top from today's data
         var rows = arr(res.rows);
         $("finderHead").innerHTML = finderHeadHtml();
         if (!rows.length) {
@@ -1041,10 +1108,14 @@
         var qualifying = intFmt(res.qualifying);
         var scanned = intFmt(res.scanned);
         var built = esc(str(res.built_ist, "—"));
+        var atrNote = (state.maxAtr != null && state.atrCeilMax != null && state.maxAtr < state.atrCeilMax)
+          ? ' <span class="text-sky-300">· ATR ≤ ₹' + (state.maxAtr % 1 === 0 ? state.maxAtr.toFixed(0) : state.maxAtr.toFixed(1)) + '</span>'
+          : '';
         $("finderMeta").innerHTML =
           '<span class="text-slate-300">Showing ' + qualifying + ' of ' + scanned + ' scanned</span>' +
+          atrNote +
           ' <span class="text-slate-600">· built ' + built + '</span>' +
-          ' <span class="text-slate-600">· ranked by fit-adjusted edge</span>';
+          ' <span class="text-slate-600">· capital + risk + ATR fit</span>';
         finderLoaded = true;
       }).catch(function () {
         $("finderBody").innerHTML = finderEmptyRow();
@@ -1100,6 +1171,20 @@
       renderControls();
     });
 
+    // Max-ATR ceiling: drag = live label + instant scanner re-filter; release =
+    // also re-run the finder (which filters server-side).
+    $("atrRange").addEventListener("input", function () {
+      state.maxAtr = num($("atrRange").value, state.maxAtr);
+      renderAtr();
+      rerenderScan();
+    });
+    $("atrRange").addEventListener("change", function () {
+      state.maxAtr = num($("atrRange").value, state.maxAtr);
+      renderAtr();
+      rerenderScan();
+      if (finderLoaded) runFinder(true);
+    });
+
     $("applyBtn").addEventListener("click", function () {
       state.capital = clampCapital($("capitalInput").value);
       state.riskPct = clampRisk($("riskRange").value);
@@ -1138,6 +1223,13 @@
     loadSymbols();
     loadRegime();
     loadTradability();
+    // Configure the Max-ATR slider from today's universe (one cached finder read).
+    (function initAtrSlider() {
+      var url = "/api/finder?capital=" + encodeURIComponent(state.capital) + "&risk=" + encodeURIComponent(state.riskPct);
+      getJson(url).then(function (res) {
+        if (res && isFinite(num(res.max_atr_universe, NaN))) configureAtrSlider(res.max_atr_universe);
+      }).catch(function () { /* slider keeps its default range until the finder runs */ });
+    })();
   })();
   </script>
 </body>

@@ -169,6 +169,9 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Resp
 struct SuggestParams {
     capital: Option<f64>,
     risk: Option<f64>,
+    /// Optional max-ATR (₹/share) ceiling for the finder — keep only stocks at or
+    /// below this volatility. Applied per-request so the (capital,risk) cache stays valid.
+    max_atr: Option<f64>,
 }
 
 /// `GET /api/symbols` — the intraday-tradeable universe, sorted; `[]` on error.
@@ -555,7 +558,12 @@ async fn scanner_handler(
     })
     .await
     {
-        Some(r) => Json(r).into_response(),
+        // The cached scan is capital/risk-INDEPENDENT; size the returned clone to
+        // the request's capital + risk% (shares + net P&L) before sending.
+        Some(mut r) => {
+            crate::suggestion_engine::size_scan_result(&mut r, capital, risk);
+            Json(r).into_response()
+        }
         None => (StatusCode::INTERNAL_SERVER_ERROR, "scan_universe failed").into_response(),
     }
 }
@@ -576,7 +584,17 @@ async fn finder_handler(
         Some(crate::suggestion_engine::find_capital_fit(&root, &symbols, capital, risk))
     };
     match read_through(slot, "finder", compute, |r: &FinderResult| r.built_ist.clone()).await {
-        Some(r) => Json(r).into_response(),
+        // ATR ceiling is applied per-request on the cached (capital,risk) result,
+        // so the cache stays valid and `max_atr_universe` (the slider top) is kept.
+        Some(mut r) => {
+            if let Some(cap_atr) = params.max_atr {
+                if cap_atr > 0.0 {
+                    r.rows.retain(|row| row.atr <= cap_atr);
+                    r.qualifying = r.rows.len();
+                }
+            }
+            Json(r).into_response()
+        }
         None => (StatusCode::INTERNAL_SERVER_ERROR, "find_capital_fit failed").into_response(),
     }
 }

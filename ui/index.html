@@ -834,7 +834,13 @@
       else if (t.trade_to_trade) b.push('<span class="ml-1 px-1 rounded bg-rose-900/60 text-rose-300 text-[9px] font-bold align-middle">T2T</span>');
       if (t.liquidity === "very thin" || t.liquidity === "thin") b.push('<span class="ml-1 px-1 rounded bg-amber-900/50 text-amber-300 text-[9px] font-bold align-middle">THIN</span>');
       if (t.low_priced) b.push('<span class="ml-1 px-1 rounded bg-amber-900/40 text-amber-300/90 text-[9px] font-bold align-middle">₹LOW</span>');
-      if (!b.length) return "";
+      if (!b.length) {
+        // Intraday-clean (EQ, liquid, no surveillance flag) → positive green ✓.
+        if (t.verdict === "ok") {
+          return ' <span class="ml-1 px-1 rounded bg-emerald-900/50 text-emerald-300 text-[9px] font-bold align-middle" title="' + esc(str(t.reason, "")) + '">✓</span>';
+        }
+        return "";
+      }
       // Tooltip carries the verdict reason (or the caption).
       return '<span title="' + esc(str(t.reason, str(t.caption, ""))) + '">' + b.join("") + '</span>';
     }
