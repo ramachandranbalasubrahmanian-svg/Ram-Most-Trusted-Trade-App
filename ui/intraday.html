@@ -917,6 +917,31 @@
         '<div class="text-[10px] text-slate-600 mt-1.5">Not part of the edge or Confidence — company context to sanity-check a price signal.</div></div>';
     }
 
+    // Sector rotational momentum (display-only): the stock vs its OWN sector index.
+    var SECMOM = {};
+    function secMomOf(sym) { return SECMOM[String(sym).toUpperCase()]; }
+    function sectorMomentumHtml(sym) {
+      var s = secMomOf(sym);
+      if (!s) return "";
+      if (!s.available) {
+        return '<div class="rounded-lg border border-slate-800 bg-[#0d1320] px-3 py-2 text-[11px] text-slate-600 mt-2">Sector momentum: ' + esc(str(s.note, "unavailable")) + '</div>';
+      }
+      var v = str(s.verdict, "in-line");
+      var vCls = v === "leader" ? "text-emerald-300" : v === "laggard" ? "text-rose-300" : "text-slate-300";
+      var rs5 = num(s.rs_5d, 0);
+      function rsCls(x) { return x > 0 ? "text-emerald-400" : x < 0 ? "text-rose-400" : "text-slate-300"; }
+      return '<div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3 mt-2">' +
+        '<div class="flex items-baseline justify-between mb-1">' +
+        '<div class="text-[11px] uppercase tracking-wide text-slate-500">Sector momentum · vs ' + esc(str(s.index_name, "—")) + (s.broad_fallback ? ' (broad)' : '') + '</div>' +
+        '<span class="text-[11px] font-bold px-1.5 rounded ' + (v === "leader" ? "bg-emerald-900/50" : v === "laggard" ? "bg-rose-900/50" : "bg-slate-800/70") + ' ' + vCls + '">' + esc(v.toUpperCase()) + '</span></div>' +
+        '<div class="grid grid-cols-3 gap-1.5 num">' +
+        '<div class="rounded-md border border-slate-800 bg-slate-900/40 px-2 py-1"><div class="text-[9px] uppercase tracking-wide text-slate-500">Latest RS</div><div class="text-[12px] ' + rsCls(num(s.rs_1d, 0)) + '">' + (num(s.rs_1d, 0) >= 0 ? "+" : "") + fixed(s.rs_1d, 2) + '</div></div>' +
+        '<div class="rounded-md border border-slate-800 bg-slate-900/40 px-2 py-1"><div class="text-[9px] uppercase tracking-wide text-slate-500">RS 5-day</div><div class="text-[12px] ' + rsCls(rs5) + '">' + (rs5 >= 0 ? "+" : "") + fixed(rs5, 1) + '%</div></div>' +
+        '<div class="rounded-md border border-slate-800 bg-slate-900/40 px-2 py-1"><div class="text-[9px] uppercase tracking-wide text-slate-500">RS 20-day</div><div class="text-[12px] ' + rsCls(num(s.rs_20d, 0)) + '">' + (num(s.rs_20d, 0) >= 0 ? "+" : "") + fixed(s.rs_20d, 1) + '%</div></div>' +
+        '</div>' +
+        '<div class="text-[10px] text-slate-500 mt-1.5">' + esc(str(s.note, "")) + ' Display-only — never part of the edge.</div></div>';
+    }
+
     // CSCV Probability of Backtest Overfitting per timeframe (display-only). High
     // PBO ⇒ the best in-sample config is likely a fluke; low ⇒ the edge survives
     // out-of-sample reshuffles. Never part of Confidence/the gate.
@@ -977,6 +1002,8 @@
       html += fundamentalsHtml(str(s.symbol, ""));
       // Backtest-overfitting (PBO) panel (display-only; firewalled from the edge).
       html += pboHtml(s);
+      // Sector rotational momentum panel (display-only; firewalled from the edge).
+      html += sectorMomentumHtml(str(s.symbol, ""));
 
       // blocks
       var blocks = arr(s.blocks);
@@ -1026,6 +1053,7 @@
         loadTradability(),
         getJson(dqUrl).then(function (dq) { if (dq && dq.symbol && !dq.error) { DQ[String(dq.symbol).toUpperCase()] = dq; } }).catch(function () {}),
         getJson(fundUrl).then(function (r) { if (r && r.available && r.fundamentals) { FUND[String(r.fundamentals.symbol).toUpperCase()] = r.fundamentals; } }).catch(function () {}),
+        getJson("/api/sector_momentum?symbol=" + encodeURIComponent(sym)).then(function (sm) { if (sm && sm.symbol) { SECMOM[String(sm.symbol).toUpperCase()] = sm; } }).catch(function () {}),
       ]).then(function (arr) {
         try { renderSuggestion(arr[0]); }
         catch (e) { $("suggestionOut").innerHTML = errorBox("Received a response but could not render it."); }

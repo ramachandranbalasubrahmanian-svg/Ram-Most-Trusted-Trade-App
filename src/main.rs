@@ -34,6 +34,7 @@ mod portfolio_import;
 mod portfolio_rotation;
 mod regime;
 mod risk_manager;
+mod sector_momentum;
 mod server;
 mod stats;
 mod storage_kernel;

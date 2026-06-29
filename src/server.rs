@@ -107,6 +107,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/enrich_symbol", post(enrich_symbol_handler))
         .route("/api/data_quality", get(data_quality_handler))
         .route("/api/fundamentals", get(fundamentals_handler))
+        .route("/api/sector_momentum", get(sector_momentum_handler))
         .route("/api/news", get(news_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/calibration", get(calibration_handler))
@@ -1423,6 +1424,33 @@ async fn fundamentals_handler(State(state): State<AppState>, Query(q): Query<Fun
         Ok(Some(f)) => Json(serde_json::json!({"available": true, "fundamentals": f})).into_response(),
         Ok(None) => Json(serde_json::json!({"available": false})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("fundamentals task panicked: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SectorMomentumQuery {
+    symbol: String,
+}
+
+/// `GET /api/sector_momentum?symbol=X` — display-only sector rotational momentum:
+/// the stock's recent move vs ITS OWN sector index (NIFTYBANK/NIFTYIT/… or a
+/// labelled NIFTY50 fallback), with a leader/in-line/laggard read. EOD daily, not
+/// live intraday. NEVER feeds Confidence/the gate/ranking. Read-only.
+async fn sector_momentum_handler(State(state): State<AppState>, Query(q): Query<SectorMomentumQuery>) -> Response {
+    let sym = q.symbol.trim().to_uppercase();
+    if !valid_nse_symbol(&sym) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid symbol"}))).into_response();
+    }
+    let root = state.root.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = crate::storage_kernel::open_conn().ok()?;
+        Some(crate::sector_momentum::compute(&conn, &root, &sym))
+    })
+    .await;
+    match result {
+        Ok(Some(sm)) => Json(sm).into_response(),
+        Ok(None) => (StatusCode::INTERNAL_SERVER_ERROR, "sector momentum: duckdb open failed").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("sector_momentum task panicked: {e}")).into_response(),
     }
 }
 
