@@ -4,20 +4,31 @@
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
 > `SESSION_HANDOVER.md` (esp. ◀ THIS SESSION + the one remaining P1 item below), and continue on `main`.**
 >
-> **Git state (2026-06-29 cont.):** clean working tree, **11 commits AHEAD of origin and NOT pushed** — the owner
-> chose to HOLD the work local for review. Local `main` tip = **`f37da90`**; `origin/main` still = **`82b8cf2`**.
-> **Decide on `git push origin main` before doing more.** **195 tests pass; build clean; both anchors byte-identical.**
-> **ALL of P0-2b + the split guard + ALL FOUR P1 items + an IndianAPI news-caution layer + a Live Trade Plan are DONE.**
+> **Git state (2026-06-29 cont.):** clean working tree, **13 commits AHEAD of origin and NOT pushed** — the owner
+> chose to HOLD the work local for review. Local `main` tip = **`203c174`**; `origin/main` still = **`82b8cf2`**.
+> **Decide on `git push origin main` before doing more.** **197 tests pass; build clean; both anchors byte-identical.**
+> **DONE: P0-2b + split guard + ALL 4 P1 items + news-caution layer + Live Trade Plan + participation/liquidity flag.**
+>
+> **Decision-support menu (offered, owner picked "you decide" → built #1):** a trader-decision analytics menu was
+> proposed. **Participation/liquidity-at-size is BUILT (`203c174`)**. Still on the menu (NOT built, recommended order):
+> (2) MAE/heat (stop validation, on the deep-dive — needs run_fill to record max adverse excursion);
+> (3) regime+breadth banner (NIFTY trend + INDIA VIX + adv/decline — `index_daily_all` on disk, `regime.rs` has the
+> NIFTY map; answers the all-long/short basket bias); (4) basket correlation + risk-of-ruin (ENB + seeded-MC on the
+> Live Trade Plan's actual names — reuse `/portfolio` correlation + the MC engine); (5) calibration scorecard
+> (Confidence vs realized, journal-based — compounds once trades are logged).
 >
 > **News layer (`4bd783e`):** `GET /api/news?symbol=&side=` + a per-pick caution row under the ★ Sharpest setups —
 > flags CAUTIOUS BUY/SELL when news/today's move contradicts the signal. **Needs `INDIANAPI_KEY` in `.env` to activate**
 > (a credential — the owner adds it; app reads via dotenvy, never logs). Without the key it shows an honest "unavailable".
 >
-> **Live Trade Plan (`f37da90`):** NEW `src/trade_planner.rs` (firewalled, display-only) + `trade_plan` in the WS packet
-> + a "▣ Live Trade Plan" panel on `/`. Per-signal sizing already used budget·risk·ATR; the risk meter SUMMED all 20
-> ideas (405% nonsense). The plan greedily picks the realistic basket: highest-score across both sides, each at the
-> user's risk%, capped by 5× leverage notional + a 6% portfolio total-risk ceiling + 5 concurrent + 2/sector; counts +
-> explains skips; warns on all-long/all-short bias. Reactive to the budget/risk sliders. Never orders/Confidence.
+> **Live Trade Plan (`f37da90`) + participation flag (`203c174`):** NEW `src/trade_planner.rs` (firewalled, display-only)
+> + `trade_plan` in the WS packet + a "▣ Live Trade Plan" panel on `/`. Per-signal sizing already used budget·risk·ATR;
+> the risk meter SUMMED all 20 ideas (405% nonsense). The plan greedily picks the realistic basket: highest-score across
+> both sides, each at the user's risk%, capped by 5× leverage notional + a 6% portfolio total-risk ceiling + 5 concurrent
+> + 2/sector; counts + explains skips; warns on all-long/all-short bias. **Plus a participation/liquidity flag**
+> (`storage_kernel::load_adv_map` → qty-vs-ADV per position: ok/caution/heavy/illiquid + max_safe_qty at 1% of ADV) — it
+> proved EUROBOND was 25% / TCC 13% of daily volume (orders the market can't absorb). A flag, never a filter. Reactive to
+> the budget/risk sliders. Never orders/Confidence.
 > The 14 GB archive + `cache/` edge maps + `fundamentals.parquet` are gitignored (local only). (Only untracked file:
 > `COMPETITIVE_ANALYSIS_2026.md`, pre-existing.)
 >
