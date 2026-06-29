@@ -253,6 +253,99 @@
         });
     }
 
+    // After candles + edges, onboard the stock's DETAILS (display-only reference
+    // data): sector/industry/market-cap, corporate actions, split-adjusted daily,
+    // and (if a key is set) fundamentals. Never feeds the edge map or Confidence.
+    function crFmt(inr){
+      if (!isNum(inr) || inr <= 0){ return null; }
+      var cr = inr / 1e7; // ₹ → ₹ crore
+      if (cr >= 1e5){ return "₹" + (cr / 1e5).toFixed(2) + " L Cr"; }
+      return "₹" + cr.toFixed(0) + " Cr";
+    }
+    function renderEnrich(resp){
+      resp = resp && typeof resp === "object" ? resp : {};
+      var meta = resp.metadata || {};
+      var ca = resp.corp_actions || {};
+      var adj = resp.daily_adj || {};
+      var fun = resp.fundamentals || {};
+      var parts = [];
+      parts.push('<div class="rounded-lg border border-slate-800 bg-slate-900/30 p-3 mt-2">');
+      parts.push('<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Stock details</div>');
+
+      // metadata line (sector / industry / market cap) — honest about gaps.
+      if (str(meta.status, "") === "ok"){
+        var bits = [];
+        if (str(meta.sector, "")){ bits.push('<span class="text-slate-300">' + esc(str(meta.sector, "")) + '</span>'); }
+        if (str(meta.industry, "")){ bits.push('<span class="text-slate-400">' + esc(str(meta.industry, "")) + '</span>'); }
+        var cap = crFmt(meta.market_cap_inr);
+        if (cap){ bits.push('<span class="num text-slate-400">' + esc(cap) + '</span>'); }
+        if (!bits.length){
+          parts.push('<div class="text-[12px] text-amber-300">No sector/industry found from the data source — verify on NSE. (Saved name only.)</div>');
+        } else {
+          parts.push('<div class="text-[12px]">' + bits.join(' · ') + '</div>');
+          parts.push('<div class="text-[11px] text-slate-500">' + esc(str(meta.action, "saved")) + ' in symbol metadata</div>');
+        }
+      } else {
+        parts.push('<div class="text-[12px] text-amber-300">Metadata not saved: ' + esc(str(meta.error, "unknown")) + '</div>');
+      }
+
+      // corporate actions
+      if (str(ca.status, "") === "ok"){
+        parts.push('<div class="text-[12px] text-slate-400 mt-1">Corporate actions: ' +
+          intFmt(ca.n_dividends) + ' dividend(s), ' + intFmt(ca.n_splits) + ' split(s)</div>');
+      } else if (str(ca.status, "")){
+        parts.push('<div class="text-[11px] text-amber-300 mt-1">Corp actions: ' + esc(str(ca.error, ca.status)) + '</div>');
+      }
+
+      // split-adjusted daily slice
+      if (str(adj.status, "") === "ok"){
+        parts.push('<div class="text-[12px] text-slate-400">Split-adjusted daily: ' + intFmt(adj.rows) +
+          ' rows (' + intFmt(adj.splits_applied) + ' split adj.)</div>');
+      } else if (str(adj.reason, "")){
+        parts.push('<div class="text-[11px] text-slate-500">Split-adjusted daily: ' + esc(str(adj.reason, "")) + '</div>');
+      }
+
+      // fundamentals (paid; opt-in)
+      if (str(fun.status, "") === "ok"){
+        parts.push('<div class="text-[12px] text-emerald-300/90">Fundamentals: saved' +
+          (str(fun.company, "") ? ' — ' + esc(str(fun.company, "")) : "") + '</div>');
+      } else if (str(fun.reason, "")){
+        parts.push('<div class="text-[11px] text-slate-500">Fundamentals: ' + esc(str(fun.reason, "")) + '</div>');
+      } else if (str(fun.error, "")){
+        parts.push('<div class="text-[11px] text-amber-300">Fundamentals: ' + esc(str(fun.error, "")) + '</div>');
+      }
+
+      parts.push('</div>');
+      $("result").insertAdjacentHTML("beforeend", parts.join(""));
+    }
+
+    function enrich(sym){
+      $("status").innerHTML = '<span class="text-sky-300">Adding details for <span class="num">' + esc(sym) + '</span>…</span>';
+      return fetch("/api/enrich_symbol", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: sym })
+      })
+        .then(function(r){ return r.json(); })
+        .then(function(resp){
+          if (resp && resp.error){
+            $("result").insertAdjacentHTML("beforeend",
+              '<div class="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3 text-[12px] text-amber-300 mt-2">' +
+              'Candles + edges saved, but details enrichment failed: ' + esc(resp.error) + '</div>');
+          } else {
+            renderEnrich(resp);
+          }
+        })
+        .catch(function(e){
+          $("result").insertAdjacentHTML("beforeend",
+            '<div class="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3 text-[12px] text-amber-300 mt-2">' +
+            'Candles + edges saved, but details enrichment could not run: ' + esc(String(e)) + '</div>');
+        })
+        .then(function(){
+          $("status").innerHTML = '<span class="text-emerald-400 font-semibold">✓ Done.</span>';
+        });
+    }
+
     function download(){
       var sym = (input.value || "").trim().toUpperCase();
       if (!sym){ return; }
@@ -268,9 +361,12 @@
         .then(function(resp){
           if (resp && resp.error){ showError(resp.error); return null; }
           renderResult(resp);
-          // Chain into edge onboarding only when the daily candles actually saved.
+          // Chain into edge onboarding then details enrichment, only when the
+          // daily candles actually saved. Each step is independent + resilient.
           var dailyOk = resp && resp.daily && str(resp.daily.status, "") === "ok";
-          if (dailyOk){ return onboard(sym); }
+          if (dailyOk){
+            return onboard(sym).then(function(){ return enrich(sym); });
+          }
           return null;
         })
         .catch(function(e){ showError(String(e)); })

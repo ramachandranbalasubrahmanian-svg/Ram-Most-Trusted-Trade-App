@@ -104,6 +104,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/add_stock", get(add_stock_page_handler))
         .route("/api/add_stock", post(add_stock_handler))
         .route("/api/onboard_symbol", post(onboard_symbol_handler))
+        .route("/api/enrich_symbol", post(enrich_symbol_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/journal/log", post(journal_log_handler))
         .route("/api/journal/update", post(journal_update_handler))
@@ -1283,6 +1284,71 @@ async fn onboard_symbol_handler(State(state): State<AppState>, Json(req): Json<O
         Ok(Ok(r)) => Json(r).into_response(),
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("onboard task panicked: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct EnrichRequest {
+    symbol: String,
+}
+
+/// `POST /api/enrich_symbol` {symbol} — onboard one stock's *details* (not candles)
+/// via `enrich_stock.py`: upsert its `symbol_metadata` row (sector/industry/mcap/
+/// name/isin from Yahoo), append/upsert its corporate actions, write its
+/// split-adjusted `daily_adj` slice, and (only if `INDIANAPI_KEY` is set) pull its
+/// fundamentals snapshot. The sibling of `add_stock` (candles) — together they make
+/// "add a stock" complete end-to-end.
+///
+/// Honesty/scope: DISPLAY-ONLY reference data. It never touches the edge map, the
+/// eligibility gate, Confidence, or any backtest (the intraday backtest reads the
+/// raw resampled candles, not `daily_adj/`), so it cannot move an anchor. Symbol is
+/// strictly validated (alphanumeric + `&-`) before it reaches the subprocess arg.
+/// Each enrichment step is independent — one failing never aborts the rest, and a
+/// missing field is reported honestly (never fabricated). Runs on `spawn_blocking`
+/// (Yahoo + optional indianapi network). Touches market data + the cache, never a broker.
+async fn enrich_symbol_handler(State(state): State<AppState>, Json(req): Json<EnrichRequest>) -> Response {
+    let sym = req.symbol.trim().to_uppercase();
+    if !valid_nse_symbol(&sym) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid symbol — use the NSE trading code, e.g. 63MOONS"})),
+        )
+            .into_response();
+    }
+    let root = state.root.clone();
+    let script = root.parent().map(|p| p.join("enrich_stock.py")).unwrap_or_else(|| root.join("enrich_stock.py"));
+
+    let resp = tokio::task::spawn_blocking(move || {
+        if !script.exists() {
+            return Err(format!("enricher not found at {}", script.display()));
+        }
+        let out = std::process::Command::new("python3")
+            .arg(&script)
+            .arg(&sym)
+            .arg("--root")
+            .arg(&root)
+            .output();
+        match out {
+            Ok(o) => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                let last = stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+                match serde_json::from_str::<serde_json::Value>(last) {
+                    Ok(v) => Ok(v),
+                    Err(_) => {
+                        let err_tail: String = String::from_utf8_lossy(&o.stderr).lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
+                        Err(format!("enricher produced no result. {err_tail}"))
+                    }
+                }
+            }
+            Err(e) => Err(format!("could not run the enricher (is python3 installed?): {e}")),
+        }
+    })
+    .await;
+
+    match resp {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("enrich_symbol task panicked: {e}")).into_response(),
     }
 }
 
