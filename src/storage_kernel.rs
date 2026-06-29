@@ -72,6 +72,40 @@ pub fn discover_symbols(root: &Path) -> Result<Vec<String>> {
     Ok(out.into_iter().collect())
 }
 
+/// SYMBOL → average daily share VOLUME over the most recent `days` sessions, from
+/// `nse_daily_all.parquet`. Used by the Live Trade Plan's participation-rate
+/// (qty-vs-ADV) liquidity flag. Best-effort: returns an empty map if the file is
+/// absent or unreadable (the flag then just doesn't show — never fabricated).
+pub fn load_adv_map(conn: &Connection, root: &Path, days: usize) -> std::collections::HashMap<String, f64> {
+    let mut out = std::collections::HashMap::new();
+    let path = root.join("nse_daily_all.parquet");
+    if !path.exists() {
+        return out;
+    }
+    let sql = format!(
+        "WITH recent AS ( \
+            SELECT symbol, CAST(volume AS DOUBLE) AS volume, \
+                   row_number() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn \
+            FROM read_parquet({}) ) \
+         SELECT symbol, AVG(volume) FROM recent WHERE rn <= {} GROUP BY symbol",
+        quote_path(&path),
+        days.max(1),
+    );
+    if let Ok(mut stmt) = conn.prepare(&sql) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<f64>>(1)?.unwrap_or(0.0)))
+        }) {
+            for row in rows.flatten() {
+                let (sym, adv) = row;
+                if adv.is_finite() && adv > 0.0 {
+                    out.insert(sym.trim().to_uppercase(), adv);
+                }
+            }
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // DuckDB helpers
 // ---------------------------------------------------------------------------

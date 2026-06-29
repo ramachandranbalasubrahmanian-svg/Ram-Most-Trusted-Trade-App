@@ -1123,20 +1123,32 @@
         '<th class="text-right pr-2 py-1">Qty</th><th class="text-right pr-2 py-1">Entry</th>' +
         '<th class="text-right pr-2 py-1">SL</th><th class="text-right pr-2 py-1">Target</th>' +
         '<th class="text-right pr-2 py-1">ATR%</th><th class="text-right pr-2 py-1">Risk ₹</th>' +
-        '<th class="text-right pr-2 py-1">Notional</th><th class="text-left pl-2 py-1">Sector</th></tr></thead><tbody>';
+        '<th class="text-right pr-2 py-1">Notional</th><th class="text-right pr-2 py-1">% ADV</th>' +
+        '<th class="text-left pl-2 py-1">Sector</th></tr></thead><tbody>';
+      function liqCls(v) {
+        return v === "ok" ? "text-emerald-300" : v === "caution" ? "text-amber-300"
+          : (v === "heavy" || v === "illiquid") ? "text-rose-300" : "text-slate-500";
+      }
       pos.forEach(function (p) {
         var buy = String(p.side).toUpperCase().indexOf("BUY") >= 0 || String(p.side).toUpperCase().indexOf("LONG") >= 0;
         var sideCls = buy ? "text-emerald-300" : "text-rose-300";
-        h += '<tr class="border-t border-slate-800/60">' +
+        var liq = str(p.liquidity, "unknown");
+        var bad = liq === "heavy" || liq === "illiquid";
+        var liqCell = liq === "unknown"
+          ? '<span class="text-slate-600" title="no volume data">—</span>'
+          : '<span class="' + liqCls(liq) + '" title="' + (bad ? "Order too big for this stock — " : "") + 'planned ' + intFmt(p.shares) + ' vs ~' + intFmt(p.adv) + ' avg daily vol. Safe fill ≈ ' + intFmt(p.max_safe_qty) + ' shares (1% of ADV).">' +
+            fixed(p.participation_pct, 1) + '%' + (bad ? ' ⚠' : '') + '</span>';
+        h += '<tr class="border-t border-slate-800/60' + (bad ? ' bg-rose-950/20' : '') + '">' +
           '<td class="py-1 pr-2 font-bold ' + sideCls + '">' + esc(str(p.symbol, "—")) + '</td>' +
           '<td class="py-1 pr-2 ' + sideCls + '">' + (buy ? "BUY" : "SELL") + '</td>' +
-          '<td class="py-1 pr-2 text-right text-slate-200 font-medium">' + intFmt(p.shares) + '</td>' +
+          '<td class="py-1 pr-2 text-right font-medium ' + (bad ? "text-rose-300" : "text-slate-200") + '">' + intFmt(p.shares) + '</td>' +
           '<td class="py-1 pr-2 text-right text-slate-300">' + fixed(p.entry, 2) + '</td>' +
           '<td class="py-1 pr-2 text-right text-rose-300/80">' + fixed(p.sl, 2) + '</td>' +
           '<td class="py-1 pr-2 text-right text-emerald-300/80">' + fixed(p.target, 2) + '</td>' +
           '<td class="py-1 pr-2 text-right text-slate-400">' + fixed(p.atr_pct, 1) + '%</td>' +
           '<td class="py-1 pr-2 text-right text-rose-300">' + signedRupee(p.risk_inr).replace("+", "") + '</td>' +
           '<td class="py-1 pr-2 text-right text-slate-400">' + signedRupee(p.notional).replace("+", "") + '</td>' +
+          '<td class="py-1 pr-2 text-right num">' + liqCell + '</td>' +
           '<td class="py-1 pl-2 text-left text-slate-500">' + esc(str(p.sector, "—")) + '</td>' +
           '</tr>';
       });

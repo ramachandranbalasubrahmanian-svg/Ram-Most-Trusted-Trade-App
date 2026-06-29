@@ -26,13 +26,28 @@ use std::collections::HashMap;
 use crate::config::{self, UserSettings};
 use crate::types::{PlanPosition, PlanTotals, RankedSignal, TradePlan};
 
+/// Liquidity verdict from a participation rate (planned qty / ADV, in %). Pure.
+/// `None` ADV ⇒ "unknown" (never assumed fillable).
+fn liquidity_verdict(participation_pct: Option<f64>) -> &'static str {
+    match participation_pct {
+        None => "unknown",
+        Some(p) if p < 1.0 => "ok",
+        Some(p) if p < 5.0 => "caution",
+        Some(p) if p < 20.0 => "heavy",
+        Some(_) => "illiquid",
+    }
+}
+
 /// Build the Live Trade Plan from the ranked Top-10 lists. `sectors` maps SYMBOL
-/// → sector (best-effort; an empty map simply disables the per-sector cap). Pure.
+/// → sector (best-effort; empty disables the per-sector cap). `adv` maps SYMBOL →
+/// average daily share volume (best-effort; empty disables the liquidity flag).
+/// Pure.
 pub fn build_plan(
     buy: &[RankedSignal],
     sell: &[RankedSignal],
     settings: &UserSettings,
     sectors: &HashMap<String, String>,
+    adv: &HashMap<String, f64>,
 ) -> TradePlan {
     let budget = settings.budget;
     let max_notional = settings.max_notional();
@@ -99,6 +114,11 @@ pub fn build_plan(
         let sl_dist = (r.entry - r.sl).abs();
         let atr = if config::SL_ATR_MULT > 0.0 { sl_dist / config::SL_ATR_MULT } else { 0.0 };
         let atr_pct = if r.entry > 0.0 { sl_dist / r.entry * 100.0 } else { 0.0 };
+        // Liquidity-at-size: planned qty vs average daily volume.
+        let adv_v = adv.get(r.symbol.as_str()).copied().unwrap_or(0.0);
+        let participation_pct = if adv_v > 0.0 { r.shares as f64 / adv_v * 100.0 } else { 0.0 };
+        let liquidity = liquidity_verdict(if adv_v > 0.0 { Some(participation_pct) } else { None });
+        let max_safe_qty = (adv_v * config::LIQUIDITY_PARTICIPATION_CAP).floor() as i64;
         positions.push(PlanPosition {
             symbol: r.symbol.clone(),
             side: r.side.clone(),
@@ -115,6 +135,10 @@ pub fn build_plan(
             proj_loss: r.proj_loss,
             exp_pnl: r.exp_pnl,
             sector,
+            adv: adv_v,
+            participation_pct,
+            liquidity: liquidity.to_string(),
+            max_safe_qty,
         });
     }
 
@@ -154,6 +178,9 @@ fn compute_totals(positions: &[PlanPosition], budget: f64, max_notional: f64) ->
         t.exp_pnl += p.exp_pnl;
         t.best_case += p.proj_profit;
         t.worst_case += p.proj_loss;
+        if p.liquidity == "heavy" || p.liquidity == "illiquid" {
+            t.n_illiquid += 1;
+        }
     }
     t.deployed_pct = if max_notional > 0.0 { t.deployed / max_notional * 100.0 } else { 0.0 };
     t.free_margin = max_notional - t.deployed;
@@ -220,6 +247,13 @@ fn build_notes(
             config::PLAN_MAX_PER_SECTOR
         ));
     }
+    // Liquidity-at-size warning — the order may be too big for the stock.
+    if t.n_illiquid > 0 {
+        notes.push(format!(
+            "⚠ {} position(s) exceed a safe fill size (>5% of daily volume) — the SL/target prices are unrealistic at that qty; reduce to the 'max fill' shown or skip.",
+            t.n_illiquid
+        ));
+    }
     // Directional bias.
     if t.n_long > 0 && t.n_short == 0 {
         notes.push("Basket is ALL LONG — fully exposed to a market-wide down move.".to_string());
@@ -272,7 +306,7 @@ mod tests {
             sig("BBB", "BUY", 2.0, 1000.0, 200, 3.3),
             sig("CCC", "BUY", 1.0, 1000.0, 200, 3.3),
         ];
-        let plan = build_plan(&buy, &[], &s, &HashMap::new());
+        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new());
         assert_eq!(plan.positions.len(), 2, "two fit, third over leverage");
         assert_eq!(plan.positions[0].symbol, "AAA", "highest score first");
         assert_eq!(plan.skipped_leverage, 1);
@@ -287,7 +321,7 @@ mod tests {
         let buy: Vec<RankedSignal> = (0..7)
             .map(|i| sig(&format!("S{i}"), "BUY", 10.0 - i as f64, 100.0, 10, 1.0))
             .collect();
-        let plan = build_plan(&buy, &[], &s, &HashMap::new());
+        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new());
         assert_eq!(plan.positions.len(), config::PLAN_MAX_CONCURRENT);
         assert_eq!(plan.skipped_concurrent, 7 - config::PLAN_MAX_CONCURRENT);
     }
@@ -302,7 +336,7 @@ mod tests {
         for i in 0..4 {
             sectors.insert(format!("B{i}"), "Banking".to_string());
         }
-        let plan = build_plan(&buy, &[], &s, &sectors);
+        let plan = build_plan(&buy, &[], &s, &sectors, &HashMap::new());
         assert_eq!(plan.positions.len(), config::PLAN_MAX_PER_SECTOR, "≤2 per sector");
         assert_eq!(plan.skipped_sector, 4 - config::PLAN_MAX_PER_SECTOR);
     }
@@ -314,7 +348,7 @@ mod tests {
         let buy: Vec<RankedSignal> = (0..5)
             .map(|i| sig(&format!("R{i}"), "BUY", 10.0 - i as f64, 10.0, 1000, 2.0)) // risk=1000*2=2000, notional=10k
             .collect();
-        let plan = build_plan(&buy, &[], &s, &HashMap::new());
+        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new());
         // risk_cap = max(2000, 6000) = 6000 ⇒ 3 trades (6000), 4th skipped-risk.
         assert_eq!(plan.positions.len(), 3);
         assert_eq!(plan.skipped_risk_cap, 2);
@@ -322,9 +356,35 @@ mod tests {
     }
 
     #[test]
+    fn liquidity_flags_oversized_orders() {
+        let s = UserSettings::new(10_000_000.0, 0.01);
+        // One name with 1000 planned shares; ADV says only 5,000/day trade ⇒ 20%
+        // participation ⇒ "illiquid"; max safe = floor(1% × 5000) = 50.
+        let buy = vec![sig("THIN", "BUY", 5.0, 100.0, 1000, 1.0)];
+        let mut adv = HashMap::new();
+        adv.insert("THIN".to_string(), 5_000.0);
+        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &adv);
+        let p = &plan.positions[0];
+        assert!((p.participation_pct - 20.0).abs() < 1e-6);
+        assert_eq!(p.liquidity, "illiquid");
+        assert_eq!(p.max_safe_qty, 50);
+        assert_eq!(plan.totals.n_illiquid, 1);
+        assert!(plan.notes.iter().any(|n| n.contains("safe fill size")));
+    }
+
+    #[test]
+    fn liquidity_unknown_when_no_adv() {
+        let s = UserSettings::new(10_000_000.0, 0.01);
+        let buy = vec![sig("X", "BUY", 5.0, 100.0, 10, 1.0)];
+        let plan = build_plan(&buy, &[], &s, &HashMap::new(), &HashMap::new());
+        assert_eq!(plan.positions[0].liquidity, "unknown");
+        assert_eq!(plan.totals.n_illiquid, 0);
+    }
+
+    #[test]
     fn empty_signals_give_empty_plan() {
         let s = UserSettings::new(500_000.0, 0.01);
-        let plan = build_plan(&[], &[], &s, &HashMap::new());
+        let plan = build_plan(&[], &[], &s, &HashMap::new(), &HashMap::new());
         assert_eq!(plan.positions.len(), 0);
         assert!(plan.notes[0].contains("No tradable basket"));
     }
@@ -334,7 +394,7 @@ mod tests {
         let s = UserSettings::new(10_000_000.0, 0.01);
         let buy = vec![sig("L1", "BUY", 5.0, 100.0, 10, 1.0)];
         let sell = vec![sig("S1", "SELL", 9.0, 100.0, 10, 1.0)];
-        let plan = build_plan(&buy, &sell, &s, &HashMap::new());
+        let plan = build_plan(&buy, &sell, &s, &HashMap::new(), &HashMap::new());
         assert_eq!(plan.positions[0].symbol, "S1", "higher-score short ranks first");
         assert_eq!(plan.totals.n_long, 1);
         assert_eq!(plan.totals.n_short, 1);

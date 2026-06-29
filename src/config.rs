@@ -173,6 +173,12 @@ pub const MAX_PORTFOLIO_RISK_PCT: f64 = 0.06;
 pub const PLAN_MAX_CONCURRENT: usize = 5;
 /// Live Trade Plan: most positions per sector (diversification guard).
 pub const PLAN_MAX_PER_SECTOR: usize = 2;
+/// Live Trade Plan: "safe" intraday fill ceiling as a fraction of average daily
+/// volume. An order above ~1% of ADV starts moving the price against you on entry
+/// AND exit; `max_safe_qty = floor(this × ADV)` is shown as a fillable guide.
+pub const LIQUIDITY_PARTICIPATION_CAP: f64 = 0.01;
+/// ADV lookback (trading days) for the participation-rate liquidity flag.
+pub const ADV_WINDOW_DAYS: usize = 20;
 
 // --- Trading Desk: capital pool, risk tiers, circuit breaker ---------------
 

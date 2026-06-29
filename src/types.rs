@@ -265,6 +265,15 @@ pub struct PlanPosition {
     pub exp_pnl: f64,
     /// Sector (best-effort; empty when unknown).
     pub sector: String,
+    // --- liquidity-at-size (participation rate) ---
+    /// Average daily share volume (recent window); 0 when unknown.
+    pub adv: f64,
+    /// Planned qty as % of ADV — market-impact proxy.
+    pub participation_pct: f64,
+    /// "ok" | "caution" | "heavy" | "illiquid" | "unknown".
+    pub liquidity: String,
+    /// Shares you could fill within the safe participation cap (≈1% of ADV).
+    pub max_safe_qty: i64,
 }
 
 /// Portfolio aggregates for the Live Trade Plan.
@@ -291,6 +300,8 @@ pub struct PlanTotals {
     pub worst_case: f64,
     pub long_notional: f64,
     pub short_notional: f64,
+    /// Positions whose planned qty exceeds the safe fill size (heavy/illiquid).
+    pub n_illiquid: usize,
     /// "green" | "amber" | "red" exposure colour for the basket.
     pub color: String,
 }
