@@ -4,33 +4,58 @@
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
 > `SESSION_HANDOVER.md` (esp. the ▶▶ NEXT-SESSION PLAN below), and continue on `main`.**
 >
-> **Git state:** the freshness-panel + onboard + tradability + full-rebuild work below is **committed LOCALLY on `main`
-> but NOT pushed** (three commits on top of `9bad1f5`). `origin/main` is at `9bad1f5` (the prior UI/add-stock commit was
-> pushed this session). Run `git log --oneline -5`; **push when ready** with `git push origin main`. 165 tests pass; build
-> clean. **The edge maps were FULLY REBUILT this session** (all 1,752 symbols, 5/15/30/60min; 1day empty by design) — the
-> cached maps + anchor were stale (pre-itemized-cost), now re-baselined (see §6 + the FULL REBUILD note). New 30min SHA1
-> `2a127eac`. The rebuilt maps are gitignored (local only) — a fresh clone rebuilds via `backtest`.
+> **Git state:** clean & fully PUSHED. `origin/main` == local `main` == **`dc0913c`**. Everything below is on GitHub.
+> 167 tests pass; build clean. The 14 GB archive + `cache/` edge maps are gitignored (local only) — a fresh clone has no
+> data and rebuilds via `backtest`. (Only untracked file: `COMPETITIVE_ANALYSIS_2026.md`, pre-existing, not committed.)
+> Edge maps were FULLY REBUILT (all 1,752 symbols, 5/15/30/60min; 1day empty by design); anchors re-baselined (§6).
 
 Then run the resume command:
 ```bash
 . "$HOME/.cargo/env"
 cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
-git log --oneline -5                                        # ← freshness+onboard+tradability committed LOCALLY (push when ready)
+git log --oneline -6                                        # tip dc0913c; origin == local (all pushed)
 pkill -f "ram_istp serve"; pkill -f "ram_istp live"         # stop any leftover instance (single-instance!)
-cargo build && cargo test                                   # 165 tests should pass
+cargo build && cargo test                                   # 167 tests should pass
 ./target/debug/ram_istp serve 30min                         # dashboards at http://127.0.0.1:8787
-#   /            → Live Signals: Top-10 + EDGE-MAP FRESHNESS banner + tradability badges (T2T/THIN/₹LOW)
-#   /add_stock   → add an NSE code → downloads candles → AUTO-ONBOARDS (backtest+merge) → shows eligible edges found
-#   /api/edge_map_status  → per-tf universe/backtested/eligible/new-since-build/files-changed
-#   /api/onboard_symbol   → POST {symbol}: incremental per-symbol backtest+merge (byte-preserving, anchor-safe)
-#   /api/tradability      → series/T2T + median ₹ turnover + price/micro-cap flags (ASM/GSM honestly "not loaded")
+#   NOTE: finder/scanner universe warms ~2 min in the background after start (first run slow, then instant)
+#   /            → Live Signals: Top-10 + EDGE-MAP FRESHNESS banner + tradability badges (⛔NO-MIS/THIN/₹LOW/green ✓)
+#                  + "★ Sharpest setups" (top-2 Buy/2 Sell, stock·qty·profit·loss; blocked names hard-excluded)
+#   /intraday    → deep-dive (RED ⛔ STAY-AWAY banner if T2T/surveillance) · Scanner (now ATR·SL·Target·Qty·Profit·Loss)
+#                  · Capital-Fit Finder with a 3rd input: "Max ATR / share" slider (₹1→today's max), green=clean symbol
+#   /add_stock   → add an NSE code → downloads candles → AUTO-ONBOARDS (backtest+merge) → shows eligible edges
+#   /api/edge_map_status · /api/onboard_symbol · /api/tradability (verdict: blocked|high_risk|caution|ok)
 # THEN: remaining P0 — P0-2b add_stock DETAILS onboarding (symbol_metadata/sector/corp-actions/fundamentals via Python),
 #       then P1 (robustness columns, shrunk ranking, CPCV/PBO, fundamentals, coverage panel).
 ```
 
-## ◀ THIS SESSION (2026-06-28) — freshness panel + incremental onboarding + tradability + anchor re-baseline
-Three NEXT-SESSION-PLAN P0s + a regression-anchor fix. All display-only / signals-only; eligibility gate, Confidence,
-cost model untouched. **165 tests** (was 155); **2 local commits** on top of `9bad1f5` (NOT pushed).
+## ◀ THIS SESSION (2026-06-29) — intraday safety gate + perf + ATR input (all pushed: `141dee0`, `337f8cc`, `dc0913c`)
+All display-only / signals-only; Confidence + edge map + the 63MOONS/BAJFINANCE anchors untouched. **167 tests** (was 165).
+1. **Finder perf** (`141dee0`) — `suggestion_engine::fit_universe()` caches the capital/risk-INDEPENDENT backtest search
+   (date|count keyed); capital/risk slider changes now re-run only the cheap sizing loop. **~81s → ~15ms**, results
+   byte-identical. Startup warm builds it once (~2 min).
+2. **SEBI-surveillance / intraday gate** (`337f8cc`) — `tradability.rs` now returns a **verdict**: `blocked` (T2T/BE/BZ
+   series OR a loaded surveillance name) / `high_risk` (very-thin liquidity) / `caution` (thin/penny/micro) / `ok`.
+   Enforced on EVERY intraday rec surface via `/api/tradability`: `/intraday` deep-dive shows a prominent **RED "⛔ STAY
+   AWAY"** banner above the stats when blocked (fires even if all params are green); scanner+finder+Top-10 get ⛔/⚠ badges;
+   `/` **Best-Picks** ("★ Sharpest setups" minimal top-2 Buy/Sell panel) HARD-EXCLUDES blocked. NOT applied to
+   /desk + /portfolio (positional/delivery, where T2T is allowed). **ASM/GSM enable hook:** drop a
+   `surveillance.csv` (`symbol,measure`) in the data root → those names become `blocked` (proven; absent ⇒ honest
+   "not loaded — verify on NSE", never assumed clean).
+3. **Scanner trade-plan + Max-ATR 3rd input + green signal** (`dc0913c`) —
+   - Scanner (10 Buy/10 Sell) now shows **ATR · SL · Target · Qty · Profit · Loss**, sized to capital+risk, **net of cost**
+     (handler sizes the cached scan per-request via `size_scan_result`; `ScannerRow` carries sl/target/atr + sizing).
+   - **Max ATR / share** slider (₹1 → `FinderResult.max_atr_universe`, ₹386 now) — a 3rd input next to Capital+Risk.
+     Finder filters rows by ATR ≤ ceiling **per-request in the handler** (KeyedCache stays valid); scanner filters
+     client-side. "Best stocks for Capital + Risk + ATR." Lower ATR ⇒ tighter ₹ stop ⇒ more shares.
+   - **Green "clean for intraday"** signal: verdict==ok → finder symbol GREEN + ✓ badge on Top-10/scanner (amber=caution/
+     high-risk, red=blocked); side colours preserved on Top-10/scanner; tooltip keeps the honest ASM/GSM caveat.
+
+**Data note:** the prior session's FULL REBUILD (cached edge maps, gitignored) is on disk; a fresh clone must re-run
+`backtest 5min/15min/30min/60min`. The finder/scanner caches are process-memory (rebuilt each `serve` start via warm).
+
+## ◀ PREVIOUS SESSION (2026-06-28) — freshness panel + incremental onboarding + tradability + anchor re-baseline + full rebuild
+Three NEXT-SESSION-PLAN P0s + a regression-anchor fix + the full universe rebuild (all now pushed; see commits
+`fa80694`/`1845dda`/`7e3a6d7`). All display-only / signals-only; eligibility gate, Confidence, cost model untouched.
 1. **P0-1 Edge-map freshness panel** — `EdgeMapMeta` sidecar (`save_edge_map_meta`) + `GET /api/edge_map_status` +
    `/` banner. Surfaces universe 1,634 vs 541 backtested (1,093 not yet onboarded), per-tf, new-since-build, stale files.
 2. **P0-2 Incremental onboarding** — `strategy_engine::merge_edge_records` (byte-preserving text-splice for new symbols,
