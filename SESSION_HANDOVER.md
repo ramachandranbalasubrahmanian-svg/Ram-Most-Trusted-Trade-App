@@ -3,7 +3,7 @@
 ## ▶ RESUME — 2026-06-30 evening (paste this into a new session)
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read this top section, continue on `main`.**
 >
-> **Git:** `main` tip = **`d229db5`** — pushed, in sync with origin (the `live_integration` branch is merged in). **Tests: 229 passed / 0 failed (re-verified this session).** Repo: `github.com/ramachandranbalasubrahmanian-svg/Ram-Most-Trusted-Trade-App`.
+> **Git:** `main` tip = **`6a3cadf`** — pushed, in sync with origin (the `live_integration` branch is merged in). **Tests: 229 passed / 0 failed (re-verified this session).** Repo: `github.com/ramachandranbalasubrahmanian-svg/Ram-Most-Trusted-Trade-App`.
 > **Running:** dashboard via launchd (`com.ramistp.dashboard`, KeepAlive) on **http://127.0.0.1:8787** (`serve 30min`), on **fresh June-30 intraday data + rebuilt edge maps**.
 > **Token:** valid for 2026-06-30 (expires ~6 AM). **Morning: re-login on `/kite` for the live feed.**
 >
