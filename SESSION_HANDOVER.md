@@ -1,6 +1,42 @@
 # RAM_ISTP — Session Handover
 
-## ▶ RESUME (paste this into a new session)
+## ▶ RESUME — 2026-06-30 evening (paste this into a new session)
+> **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read this top section, continue on `main`.**
+>
+> **Git:** `main` tip = **`d229db5`** — pushed, in sync with origin (the `live_integration` branch is merged in). **Tests: 229 passed / 0 failed (re-verified this session).** Repo: `github.com/ramachandranbalasubrahmanian-svg/Ram-Most-Trusted-Trade-App`.
+> **Running:** dashboard via launchd (`com.ramistp.dashboard`, KeepAlive) on **http://127.0.0.1:8787** (`serve 30min`), on **fresh June-30 intraday data + rebuilt edge maps**.
+> **Token:** valid for 2026-06-30 (expires ~6 AM). **Morning: re-login on `/kite` for the live feed.**
+>
+> **⟲ 2026-06-30 late-evening resume:** on re-test the `63MOONS` deep-dive anchor was failing — `n_trades` `2604→2605`. Cause: an evening refresh ran *after* the 17:33 `2604` commit (`corp_actions` 18:38, `*_adj` archives 18:49–19:07); the deep-dive reads the adjusted archives, so the split-adjustment shift added one VWAP-SELL signal. All other stats held within tolerance (win 51.4 · PF 1.18 · exp +0.07R · Sharpe 0.07 · **Conf 59** · t≈3.48) — pure data increment. **Re-baselined to 2605; suite back to 229/0.** Also confirmed: the 🔴 NaN-close issue (#1) is now **resolved** (only 4 stray NaN closes across all of June, all 2026-06-29 = 0.0%).
+>
+> **Resume shell:**
+> ```bash
+> . "$HOME/.cargo/env"; cd /Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture
+> git log --oneline -6                                     # tip 7e386cb (pushed)
+> pgrep -fl "ram_istp serve" || launchctl kickstart -k "gui/$(id -u)/com.ramistp.dashboard"
+> cargo test --release                                     # expect 229 passed, 0 failed
+> open http://127.0.0.1:8787                                # Backtested · Live Integration · Trade Plan
+> ```
+
+### ◀ THIS SESSION (2026-06-30) — what shipped (all on `main`)
+- **Live Integration** (`/live_integration`, `ui/live_integration.html`): per-stock LIVE view — Kite quote + 5-level depth + OBI (3 s poll), whole-market pending order book (all brokers, via total buy/sell qty), S/R (pivots), tradability, news sentiment, and a transparent lean-buy/sell/stand-aside verdict. External data fetched ONLY for the selected symbol.
+- **Live Trade Plan** (`/live_trade_plan`, `ui/live_trade_plan.html`): symbol + capital + risk% → reuses `/api/suggest` → verdict-led BUY/SELL/**Stand aside** + Entry/SL/Target/Qty + ATR·R scenarios with historical win%/heat + live order-book agreement + edge evidence + fundamentals. **Leads with the engine verdict** (most large caps = Stand aside; weak intraday edge). News excluded by request.
+- **Backend:** NEW `src/kite_quote.rs` (Kite REST quote+depth, prices in rupees, token read from `.kite_token.json`, never logged) + `GET /api/live_quote?symbol=`. Dormant `/api/my_orders` (own-orders endpoint, UI-removed — can strip).
+- **Nav:** "Live signals" → **"Backtested"**; added **Live Integration** + **Trade Plan** tabs across all pages.
+- **Data:** FIXED a pandas-`Timestamp` "invalid from date" bug in `1500-Stocks-Parquest/03_download_1min_zerodha.py` (the file is gitignored). Sharded download (`--of 8`, ~12 min) backfilled **June 29 + June 30** intraday for all ~1763 stocks; rebuilt all intraday edge maps (30min = 1617 eligible). `src/pivots.rs` now skips NaN closes (last-valid fallback).
+- **Anchor:** re-baselined `anchor_63moons_deep_dive_stable` 2603→2604 (t_stat 3.475) — pure June-29 data increment, edge materially identical.
+- `ui/index.html`: risk slider 1–7 % in 0.25 steps. `.gitignore`: added `*.log`. `INDIANAPI_KEY` added to `.env` (news live).
+
+### ⚠️ OPEN ITEMS / next session
+1. **✅ RESOLVED — NaN-close daily data:** the evening daily refresh repaired it. `nse_daily_all.parquet` now has only **4** NaN closes across all of June (all 2026-06-29, 0.0%) vs the ~96 % catastrophe at handover time. Pivots/fundamentals/regime no longer degraded. (Was: Yahoo refresh wrote NaN for ~96 % of 06-29; root-cause `1500-Stocks-Parquest/02_download_daily_yahoo.py`. The 4 stragglers are negligible — optional cleanup.)
+2. **🟡 Rotate `INDIANAPI_KEY`** — it was pasted into chat this session (treat as compromised). Revoke + regenerate, update `.env`.
+3. **🟡 Morning Kite re-login** on `/kite` for the live feed (token expires ~6 AM).
+4. **🟢 Swing-trade page** — planned for the weekend: build from the project's own 20-day daily-breakout edge + fundamentals; **NO Tickertape integration** (it has no public API — manual research only). See memory `project_ram_istp_swing_plan`.
+5. **Ops (re-assessed 06-30 late):** the two refresh agents are **NOT duplicates** — they serve *different projects*: `com.ramistp.datarefresh` → this Rust app's 1500-stock parquet archive (`scheduled_refresh.py`, every-30min w/ after-16:00 guard); `com.intraday.dailyrefresh` → the **separate Python `Intraday` project's** `trading.db` (`daily_refresh.py`, 16:00 weekdays). Both now pin **python3.14** (the old py3.9 path is gone). Removing the `com.intraday.*` agents would disable the Python project's pipeline — **do NOT do that without the owner's call.** Real bug to fix: **`com.intraday.backup` last exited status 1 (failing)** — diagnose via `~/Library/Logs/com.intraday.backup.err.log` (Python project's `backup_db.py`/`pipeline_health.py`).
+
+---
+
+## ▶ RESUME (previous — paste this into a new session)
 > **Open `/Users/srihariramachandran/Documents/Claude-Projects/RAM_ISTP_Rust_Architecture`, read
 > `SESSION_HANDOVER.md` (esp. ◀ THIS SESSION + the one remaining P1 item below), and continue on `main`.**
 >
