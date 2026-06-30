@@ -1991,12 +1991,15 @@ mod tests {
         assert_eq!(c.side, "SELL", "anchor side drifted");
         assert_eq!(c.interval, "30 Minutes", "anchor interval drifted");
         approx(c.rr, 2.0, 1e-9, "rr");
-        assert_eq!(c.n_trades, 2603, "anchor n_trades drifted (data refresh? re-baseline)");
+        // Re-baselined 2026-06-30: +1 trade (2603→2604) after the 2026-06-29 intraday
+        // backfill. Pure data increment — all other stats stayed within tolerance and
+        // Confidence held at 59, so the edge is materially identical (no code change).
+        assert_eq!(c.n_trades, 2604, "anchor n_trades drifted (data refresh? re-baseline)");
         assert_eq!(c.confidence, Some(59), "anchor confidence drifted");
         approx(c.win_rate, 51.4, 0.1, "win_rate");
         approx(c.profit_factor, 1.18, 0.01, "profit_factor");
         approx(c.expectancy_r, 0.07, 0.01, "expectancy_r");
         approx(c.sharpe, 0.07, 0.01, "sharpe");
-        approx(c.t_stat, 3.46, 0.01, "t_stat");
+        approx(c.t_stat, 3.475, 0.01, "t_stat"); // re-baselined with n=2604 (was 3.46 at n=2603)
     }
 }
