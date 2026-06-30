@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAM ISTP · Live Trade Plan · Decision</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: { mono: ['ui-monospace','SFMono-Regular','Menlo','Monaco','Consolas','monospace'] } } } };
+  </script>
+  <style>
+    html, body { background: #0a0e14; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #cbd5e1; }
+    .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+    .pulse-dot { animation: pulse 1.6s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    input[type="range"] { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: #1e293b; outline: none; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #38bdf8; cursor: pointer; border: 2px solid #0a0e14; }
+  </style>
+</head>
+<body class="min-h-screen antialiased">
+  <header class="sticky top-0 z-20 border-b border-slate-800 bg-[#0a0e14]/95 backdrop-blur">
+    <div class="mx-auto max-w-[1700px] px-4 py-2.5 flex items-center gap-4 flex-wrap">
+      <div class="flex items-center gap-2.5">
+        <div class="h-7 w-7 rounded-md bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm">R</div>
+        <div>
+          <div class="text-sm font-bold tracking-tight text-slate-100 leading-none">RAM ISTP</div>
+          <div class="text-[10px] text-slate-500 leading-none mt-0.5">Live Trade Plan · Decision</div>
+        </div>
+      </div>
+      <span id="sessionBadge" class="px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-slate-700 text-slate-300">—</span>
+      <nav class="flex items-center gap-1 text-[12px]">
+        <a href="/" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Backtested</a>
+        <a href="/intraday" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Intraday</a>
+        <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
+        <a href="/journal" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Journal</a>
+        <a href="/portfolio" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Portfolio</a>
+        <a href="/add_stock" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">+ Add stock</a>
+        <a href="/kite" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Kite</a>
+        <a href="/data" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Data</a>
+        <a href="/live_integration" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Live Integration</a>
+        <a href="/live_trade_plan" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Trade Plan</a>
+      </nav>
+      <div class="flex-1"></div>
+      <div class="flex items-center gap-2 text-xs num"><span class="text-slate-500">IST</span><span id="tsIst" class="font-semibold text-slate-200">—</span></div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[1700px] px-4 py-3 space-y-3">
+    <div class="rounded-lg border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-200/90">
+      <span class="font-bold">Advisory only — never an order.</span> Given a stock + your capital + risk%, this builds the engine's best
+      validated setup (technicals + order book + fundamentals; <b>no news</b>) and sizes it. It <b>leads with the engine's own verdict</b> —
+      if the apparent edge is a selection artifact, it says <b>Stand aside</b>, not "buy". Entry/SL/Target/Qty are a plan to verify on your
+      terminal — the move is framed in ATR + R-multiples and the real historical hit-rate, never a fabricated price forecast.
+    </div>
+
+    <!-- controls -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] p-3 grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+      <div class="md:col-span-3">
+        <label class="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">NSE symbol</label>
+        <input id="symInput" type="text" placeholder="e.g. RELIANCE" autocomplete="off" spellcheck="false"
+          class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-sm font-semibold text-slate-100 uppercase tracking-wide focus:outline-none focus:border-sky-500" />
+      </div>
+      <div class="md:col-span-4">
+        <div class="flex items-center justify-between mb-1"><label class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Capital</label><span class="text-[10px] text-slate-600">5× MIS</span></div>
+        <input id="capInput" type="text" value="5,00,000" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-sm num text-slate-100 focus:outline-none focus:border-sky-500" />
+      </div>
+      <div class="md:col-span-3">
+        <div class="flex items-center justify-between mb-1"><label class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Risk / trade</label><span id="riskVal" class="num text-sm font-bold text-amber-300">1.00%</span></div>
+        <input id="riskRange" type="range" min="0.25" max="5" step="0.25" value="1" class="w-full" />
+      </div>
+      <div class="md:col-span-2">
+        <button id="analyzeBtn" class="w-full px-4 py-1.5 rounded bg-sky-600 hover:bg-sky-500 text-white text-sm font-semibold active:scale-95 transition">Analyze →</button>
+      </div>
+    </section>
+
+    <div id="errBox" class="hidden rounded-lg border border-rose-900/50 bg-rose-950/20 px-3 py-2 text-[12px] text-rose-200"></div>
+    <div id="loading" class="hidden text-[12px] text-slate-500 px-1">Running the full per-symbol backtest (≈2–4s) + live quote…</div>
+
+    <section id="results" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-3">
+      <!-- LEFT: the decision + plan -->
+      <div class="lg:col-span-5 space-y-3">
+        <!-- VERDICT -->
+        <div id="verdictBox" class="rounded-lg border-2 p-4">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Engine decision · <span id="resSym">—</span></span>
+            <span id="liveDot" class="flex items-center gap-1 text-[10px] text-slate-500"><span class="h-2 w-2 rounded-full bg-slate-600"></span><span id="liveLabel">—</span></span>
+          </div>
+          <div id="verdictLabel" class="text-2xl font-extrabold tracking-wide mt-1">—</div>
+          <div id="verdictWhy" class="text-[11px] text-slate-400 mt-1 leading-snug">—</div>
+        </div>
+        <!-- PLAN -->
+        <div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">Trade plan <span id="planScope" class="normal-case text-slate-600 font-normal"></span></div>
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="rounded bg-slate-900/60 border border-slate-800 py-2"><div class="text-[9px] text-slate-600 uppercase">Entry</div><div id="pEntry" class="num text-base font-bold text-slate-100">—</div></div>
+            <div class="rounded bg-rose-950/30 border border-rose-900/40 py-2"><div class="text-[9px] text-rose-400/70 uppercase">Stop loss</div><div id="pSl" class="num text-base font-bold text-rose-300">—</div></div>
+            <div class="rounded bg-emerald-950/30 border border-emerald-900/40 py-2"><div class="text-[9px] text-emerald-400/70 uppercase">Target</div><div id="pTarget" class="num text-base font-bold text-emerald-300">—</div></div>
+          </div>
+          <div class="grid grid-cols-3 gap-2 mt-2 text-[11px] num">
+            <div><span class="text-slate-600">Qty </span><span id="pQty" class="text-slate-100 font-bold">—</span></div>
+            <div><span class="text-slate-600">R:R </span><span id="pRr" class="text-slate-200">—</span></div>
+            <div><span class="text-slate-600">ATR </span><span id="pAtr" class="text-slate-200">—</span></div>
+          </div>
+          <div class="grid grid-cols-2 gap-2 mt-2 text-[11px] num">
+            <div class="text-rose-300">Risk: <span id="pRisk">—</span> <span id="pRiskPct" class="text-slate-500"></span></div>
+            <div class="text-emerald-300 text-right">Reward: <span id="pReward">—</span> <span id="pRewardPct" class="text-slate-500"></span></div>
+          </div>
+          <div id="liveVsPlan" class="text-[10px] text-slate-500 num mt-2 pt-2 border-t border-slate-800">—</div>
+        </div>
+        <!-- SCENARIOS -->
+        <div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">How far up / down · honest scenarios</div>
+          <div id="scenarios" class="space-y-1 text-[11px]"></div>
+        </div>
+      </div>
+
+      <!-- MIDDLE: edge backing + live order book -->
+      <div class="lg:col-span-4 space-y-3">
+        <div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">Is the edge real? · backtest evidence</div>
+          <div id="edgeStats" class="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] num"></div>
+          <div id="edgeWarn" class="hidden text-[10px] text-amber-300/90 mt-2 pt-2 border-t border-slate-800 leading-snug"></div>
+        </div>
+        <div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">Live order-book check <span class="normal-case text-slate-600 font-normal">(does the book agree?)</span></div>
+          <div id="obCheck" class="text-[12px]">—</div>
+          <div class="grid grid-cols-2 gap-2 mt-2 text-[11px] num">
+            <div class="rounded bg-emerald-950/30 border border-emerald-900/40 px-2 py-1"><div class="text-[9px] text-emerald-400/70 uppercase">Open BUY qty</div><div id="obBuy" class="text-emerald-300 font-bold">—</div></div>
+            <div class="rounded bg-rose-950/30 border border-rose-900/40 px-2 py-1"><div class="text-[9px] text-rose-400/70 uppercase">Open SELL qty</div><div id="obSell" class="text-rose-300 font-bold">—</div></div>
+          </div>
+          <div id="obObi" class="text-[10px] text-slate-500 num mt-1">—</div>
+        </div>
+      </div>
+
+      <!-- RIGHT: fundamentals -->
+      <div class="lg:col-span-3 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+        <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">Fundamentals <span class="normal-case text-slate-600 font-normal">· context</span></div>
+        <div id="fundGrid" class="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] num"></div>
+      </div>
+    </section>
+
+    <div id="caveats" class="hidden rounded-lg border border-slate-800 bg-[#0d1320] px-3 py-2 text-[10px] text-slate-500 space-y-0.5"></div>
+  </main>
+
+<script>
+(function () {
+  "use strict";
+  var POLL_MS = 3000;
+  var $ = function (id) { return document.getElementById(id); };
+  function rupee(n) { if (n == null || !isFinite(n)) return "—"; return "₹" + Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 }); }
+  function fmtInt(n) { if (n == null || !isFinite(n)) return "—"; return Number(n).toLocaleString("en-IN"); }
+  function f2(n) { return (n == null || !isFinite(n)) ? "—" : Number(n).toFixed(2); }
+  async function getJson(url) { try { var r = await fetch(url, { cache: "no-store" }); return { ok: r.ok, data: await r.json() }; } catch (e) { return { ok: false, data: { error: String(e) } }; } }
+  function parseNum(s) { var n = parseFloat(String(s).replace(/[^0-9.]/g, "")); return isFinite(n) ? n : 0; }
+
+  setInterval(function () { $("tsIst").textContent = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata" }); }, 1000);
+  $("riskRange").addEventListener("input", function () { $("riskVal").textContent = Number(this.value).toFixed(2) + "%"; });
+  $("capInput").addEventListener("blur", function () { var v = parseNum(this.value); if (v > 0) this.value = v.toLocaleString("en-IN"); });
+
+  var state = { sym: null, card: null, block: null, cap: 0, risk: 0, timer: null, inflight: false };
+
+  function showErr(m) { var e = $("errBox"); e.textContent = m; e.classList.remove("hidden"); }
+  function clearErr() { $("errBox").classList.add("hidden"); }
+
+  async function analyze() {
+    var sym = ($("symInput").value || "").trim().toUpperCase();
+    var cap = parseNum($("capInput").value);
+    var risk = Number($("riskRange").value);
+    if (!sym) { showErr("Enter an NSE symbol."); return; }
+    if (cap <= 0) { showErr("Enter a capital amount."); return; }
+    clearErr();
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+    state.sym = sym; state.cap = cap; state.risk = risk;
+    $("loading").classList.remove("hidden"); $("results").classList.add("hidden"); $("caveats").classList.add("hidden");
+
+    var enc = encodeURIComponent(sym);
+    var res = await Promise.all([
+      getJson("/api/suggest/" + enc + "?capital=" + cap + "&risk=" + risk),
+      getJson("/api/fundamentals?symbol=" + enc)
+    ]);
+    $("loading").classList.add("hidden");
+    if (!res[0].ok) { showErr("Suggest failed: " + ((res[0].data && res[0].data.error) || "error")); return; }
+
+    var sug = res[0].data;
+    // pick the highest-confidence card across the 4 blocks (= best_overall)
+    var best = null, bestBlk = null;
+    (sug.blocks || []).forEach(function (b) {
+      var c = b.best;
+      if (c && (best === null || (c.confidence || -1) > (best.confidence || -1))) { best = c; bestBlk = b; }
+    });
+    state.card = best; state.block = bestBlk;
+    $("resSym").textContent = sym;
+    $("results").classList.remove("hidden"); $("caveats").classList.remove("hidden");
+
+    renderVerdict(sug, best, bestBlk);
+    renderPlan(best, bestBlk);
+    renderScenarios(best, bestBlk);
+    renderEdge(best);
+    renderFundamentals(res[1].ok ? res[1].data : null);
+    renderCaveats(sug, best, bestBlk);
+
+    await pollLive();
+    state.timer = setInterval(pollLive, POLL_MS);
+  }
+
+  function tradeable(blk) { return blk && (blk.verdict === "tradeable" || blk.verdict === "shortlist"); }
+
+  function renderVerdict(sug, c, blk) {
+    var box = $("verdictBox"), lbl = $("verdictLabel"), why = $("verdictWhy");
+    if (!c || !blk) {
+      box.className = "rounded-lg border-2 p-4 border-slate-700";
+      lbl.className = "text-2xl font-extrabold tracking-wide mt-1 text-slate-400";
+      lbl.textContent = "STAND ASIDE";
+      why.textContent = "No positive-expectancy setup found for this stock across the strategy library. No trade.";
+      return;
+    }
+    var side = c.side;
+    if (blk.verdict === "tradeable") {
+      box.className = "rounded-lg border-2 p-4 " + (side === "BUY" ? "border-emerald-600 bg-emerald-950/20" : "border-rose-600 bg-rose-950/20");
+      lbl.className = "text-2xl font-extrabold tracking-wide mt-1 " + (side === "BUY" ? "text-emerald-300" : "text-rose-300");
+      lbl.textContent = side + " " + (blk.name || "");
+      why.textContent = (sug.best_overall || "") + " — engine verdict: tradeable.";
+    } else if (blk.verdict === "shortlist") {
+      box.className = "rounded-lg border-2 p-4 border-amber-600/70 bg-amber-950/10";
+      lbl.className = "text-2xl font-extrabold tracking-wide mt-1 text-amber-300";
+      lbl.textContent = side + " · watch / min size";
+      why.textContent = (sug.best_overall || "") + " — borderline; small size only.";
+    } else {
+      box.className = "rounded-lg border-2 p-4 border-slate-700";
+      lbl.className = "text-2xl font-extrabold tracking-wide mt-1 text-slate-300";
+      lbl.textContent = "STAND ASIDE";
+      why.textContent = "Best apparent setup is " + side + " (" + (sug.best_overall || "") + "), but the engine verdict is '" + blk.verdict + "' — " + (c.selection_artifact || "no durable edge after correction. Do not trade this.");
+    }
+  }
+
+  function renderPlan(c, blk) {
+    if (!c) { ["pEntry","pSl","pTarget","pQty","pRr","pAtr","pRisk","pReward"].forEach(function (id) { $(id).textContent = "—"; }); $("liveVsPlan").textContent = ""; $("planScope").textContent = ""; return; }
+    var dim = tradeable(blk) ? "" : " opacity-60";
+    $("planScope").textContent = tradeable(blk) ? "· at planned entry (last close)" : "· context only — engine says skip";
+    $("pEntry").textContent = rupee(c.entry); $("pSl").textContent = rupee(c.sl); $("pTarget").textContent = rupee(c.target);
+    $("pQty").textContent = tradeable(blk) ? fmtInt(c.quantity) : "0 (no trade)";
+    $("pRr").textContent = "1:" + f2(c.rr); $("pAtr").textContent = rupee(c.atr);
+    $("pRisk").textContent = rupee(c.net_loss); $("pReward").textContent = rupee(c.net_profit);
+    var slPct = c.entry > 0 ? Math.abs(c.sl - c.entry) / c.entry * 100 : 0;
+    var tgPct = c.entry > 0 ? Math.abs(c.target - c.entry) / c.entry * 100 : 0;
+    $("pRiskPct").textContent = "(" + slPct.toFixed(2) + "%)"; $("pRewardPct").textContent = "(" + tgPct.toFixed(2) + "%)";
+    document.getElementById("results").querySelector(".lg\\:col-span-5").classList.toggle("opacity-100", true);
+  }
+
+  function renderScenarios(c, blk) {
+    var el = $("scenarios");
+    if (!c) { el.innerHTML = '<span class="text-slate-600">—</span>'; return; }
+    var rows = [];
+    var wr = c.win_rate, exp = c.expectancy_r;
+    rows.push(['Target hit', '+' + rupee(c.net_profit) + ' · +' + f2(c.rr) + 'R', (wr != null ? 'historically ~' + wr.toFixed(0) + '% of trades' : ''), 'emerald']);
+    rows.push(['Stop hit', rupee(c.net_loss) + ' · −1R', (wr != null ? '~' + (100 - wr).toFixed(0) + '% of trades' : ''), 'rose']);
+    rows.push(['Expectancy', (exp >= 0 ? '+' : '') + f2(exp) + 'R / trade', (c.exp_ci_low != null ? '90% CI ' + f2(c.exp_ci_low) + '…' + f2(c.exp_ci_high) + 'R' : ''), 'slate']);
+    if (c.mc_prob_profit != null) rows.push(['MC prob. profitable', c.mc_prob_profit.toFixed(0) + '%', '5000 bootstrap paths', 'slate']);
+    if (c.mae_winner_median != null) rows.push(['Typical heat (winners)', '−' + f2(c.mae_winner_median) + 'R median', 'p90 −' + f2(c.mae_winner_p90) + 'R — set SL beyond this', 'amber']);
+    el.innerHTML = rows.map(function (r) {
+      return '<div class="flex justify-between gap-2"><span class="text-slate-400">' + r[0] + '</span><span class="num text-' + r[3] + '-300 font-semibold">' + r[1] + '</span></div>'
+        + (r[2] ? '<div class="text-[9px] text-slate-600 -mt-0.5 mb-0.5">' + r[2] + '</div>' : '');
+    }).join("");
+  }
+
+  function renderEdge(c) {
+    var g = $("edgeStats");
+    if (!c) { g.innerHTML = '<span class="text-slate-600">—</span>'; return; }
+    function cell(k, v) { return '<div class="text-slate-600">' + k + '</div><div class="text-slate-200 text-right">' + v + '</div>'; }
+    g.innerHTML =
+      cell("Confidence", (c.confidence != null ? c.confidence + "/100" : "—") + (c.confidence_band ? " " + c.confidence_band : "")) +
+      cell("Conviction", c.conviction + "/100 " + (c.conviction_label || "")) +
+      cell("Win rate", (c.win_rate != null ? c.win_rate.toFixed(1) + "%" : "—")) +
+      cell("Trades (n)", fmtInt(c.n_trades)) +
+      cell("Profit factor", f2(c.profit_factor)) +
+      cell("Expectancy", f2(c.expectancy_r) + "R") +
+      cell("DSR", (c.dsr != null ? (c.dsr * 100).toFixed(0) + "%" : "—")) +
+      cell("MC prob-profit", (c.mc_prob_profit != null ? c.mc_prob_profit.toFixed(0) + "%" : "—"));
+    var w = $("edgeWarn");
+    if (c.selection_artifact) { w.classList.remove("hidden"); w.textContent = "⚠ " + c.selection_artifact; }
+    else { w.classList.add("hidden"); }
+  }
+
+  function renderFundamentals(resp) {
+    var g = $("fundGrid");
+    var f = resp && resp.available ? resp.fundamentals : null;
+    if (!f) { g.innerHTML = '<span class="text-slate-600 col-span-2">unavailable (needs fundamentals.parquet)</span>'; return; }
+    function p(v) { return v == null ? null : Number(v).toFixed(2) + "%"; }
+    var fields = [
+      ["P/E", f.pe != null ? Number(f.pe).toFixed(1) : null], ["P/B", f.price_to_book != null ? Number(f.price_to_book).toFixed(2) : null],
+      ["ROE", p(f.roe)], ["D/E", f.debt_to_equity != null ? Number(f.debt_to_equity).toFixed(2) : null],
+      ["PEG", f.peg != null ? Number(f.peg).toFixed(2) : null], ["Div yld", p(f.dividend_yield)],
+      ["Rev gr 5y", p(f.rev_growth_5y)], ["Margin", p(f.profit_margin)],
+      ["Promoter", p(f.promoter_pct)], ["Mcap cr", f.market_cap_cr != null ? Math.round(f.market_cap_cr).toLocaleString("en-IN") : null]
+    ];
+    function cell(k, v) { return '<div class="text-slate-600">' + k + '</div><div class="text-slate-200 text-right">' + (v == null || v === "" ? "—" : v) + '</div>'; }
+    g.innerHTML = fields.map(function (x) { return cell(x[0], x[1]); }).join("");
+    if (f.company) { g.innerHTML += '<div class="col-span-2 text-[9px] text-slate-600 mt-1">' + f.company + ' · as of ' + (f.as_of || "") + '</div>'; }
+  }
+
+  function renderCaveats(sug, c, blk) {
+    var cv = [];
+    cv.push("News deliberately excluded (your choice) — this is technicals + order book + fundamentals only.");
+    if (c) cv.push("Edge stats are from the backtest through " + (sug.last_date || "?") + " (" + (sug.days_old || 0) + "d old); the planned entry ₹" + f2(c.entry) + " is the last close, not the live tick.");
+    cv.push("Position size is min(risk-based, 5× leverage) — verify margin + tradability on your terminal before acting.");
+    cv.push("Advisory only — never auto-executed. The engine's verdict (Stand aside / tradeable) is the decision, not a naked BUY/SELL.");
+    $("caveats").innerHTML = cv.map(function (x) { return "<div>• " + x + "</div>"; }).join("");
+  }
+
+  // live overlay: price + order-book agreement, refreshed every 3s
+  async function pollLive() {
+    if (state.inflight || !state.sym) return;
+    state.inflight = true;
+    try {
+      var r = await getJson("/api/live_quote?symbol=" + encodeURIComponent(state.sym));
+      if (!r.ok) return;
+      var d = r.data, q = d.quote || {};
+      var live = !!d.session_live;
+      $("liveDot").querySelector("span").className = "h-2 w-2 rounded-full " + (live ? "bg-emerald-500 pulse-dot" : "bg-slate-600");
+      $("liveLabel").textContent = live ? "LIVE ₹" + f2(q.last_price) : "market closed";
+      $("sessionBadge").textContent = live ? "MARKET LIVE" : "MARKET CLOSED";
+      $("sessionBadge").className = "px-2 py-0.5 rounded text-[10px] font-bold tracking-wider " + (live ? "bg-emerald-900/60 text-emerald-300" : "bg-slate-700 text-slate-400");
+      // live vs planned entry
+      var c = state.card;
+      if (c) {
+        var gap = q.last_price - c.entry;
+        var gp = c.entry > 0 ? gap / c.entry * 100 : 0;
+        $("liveVsPlan").textContent = "Live ₹" + f2(q.last_price) + " vs planned entry ₹" + f2(c.entry) + " (" + (gap >= 0 ? "+" : "") + f2(gap) + ", " + (gp >= 0 ? "+" : "") + gp.toFixed(2) + "%) — shift levels by the gap if entering now.";
+      }
+      // order-book agreement
+      $("obBuy").textContent = fmtInt(q.total_buy_qty); $("obSell").textContent = fmtInt(q.total_sell_qty);
+      var obi = d.obi || 0;
+      $("obObi").textContent = "OBI " + (obi >= 0 ? "+" : "") + obi.toFixed(2) + (obi > 0.1 ? " · bid-heavy" : obi < -0.1 ? " · ask-heavy" : " · balanced") + "  ·  book " + (q.total_buy_qty > q.total_sell_qty ? "buy-skewed" : "sell-skewed");
+      var oc = $("obCheck");
+      if (!c || !tradeable(state.block)) { oc.innerHTML = '<span class="text-slate-500">No active plan to confirm.</span>'; }
+      else {
+        var bookBuy = (q.total_buy_qty || 0) >= (q.total_sell_qty || 0);
+        var agrees = (c.side === "BUY" && (obi > 0 || bookBuy)) || (c.side === "SELL" && (obi < 0 || !bookBuy));
+        oc.innerHTML = agrees
+          ? '<span class="text-emerald-300 font-semibold">✓ Live book AGREES</span> <span class="text-slate-500">with the ' + c.side + ' plan right now.</span>'
+          : '<span class="text-amber-300 font-semibold">⚠ Live book DISAGREES</span> <span class="text-slate-500">with the ' + c.side + ' plan right now — wait for alignment or skip.</span>';
+      }
+      if (!live) { oc.innerHTML += ' <span class="text-slate-600">(market closed — book stale)</span>'; }
+    } finally { state.inflight = false; }
+  }
+
+  $("analyzeBtn").onclick = analyze;
+  $("symInput").addEventListener("keydown", function (e) { if (e.key === "Enter") analyze(); });
+})();
+</script>
+</body>
+</html>

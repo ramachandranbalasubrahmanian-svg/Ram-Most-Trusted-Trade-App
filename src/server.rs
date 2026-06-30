@@ -85,6 +85,8 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/", get(index_handler))
         .route("/ws/live_signals", get(ws_handler))
         .route("/intraday", get(intraday_handler))
+        .route("/live_integration", get(live_integration_handler))
+        .route("/live_trade_plan", get(live_trade_plan_handler))
         .route("/api/symbols", get(symbols_handler))
         .route("/api/edge_map_status", get(edge_map_status_handler))
         .route("/api/tradability", get(tradability_handler))
@@ -112,6 +114,8 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/fundamentals", get(fundamentals_handler))
         .route("/api/sector_momentum", get(sector_momentum_handler))
         .route("/api/pivots", get(pivots_handler))
+        .route("/api/live_quote", get(live_quote_handler))
+        .route("/api/my_orders", get(my_orders_handler))
         .route("/api/news", get(news_handler))
         .route("/api/journal", get(journal_get_handler))
         .route("/api/calibration", get(calibration_handler))
@@ -167,6 +171,40 @@ async fn index_handler(State(state): State<AppState>) -> Response {
 
 /// `GET /intraday` — read `{static_dir}/intraday.html` at request time so UI
 /// edits show on refresh without a rebuild.
+/// `GET /live_integration` — the Live Integration · Specific Stock page (read from
+/// disk at request time, like the other pages, so UI edits show on refresh).
+async fn live_integration_handler(State(state): State<AppState>) -> Response {
+    let path = state.static_dir.join("live_integration.html");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => {
+            warn!("failed to read {}: {e:#}", path.display());
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not read {}: {e}", path.display()),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `GET /live_trade_plan` — the Live Trade Plan · Decision page (read from disk at
+/// request time). Reuses /api/suggest + /api/live_quote + /api/fundamentals.
+async fn live_trade_plan_handler(State(state): State<AppState>) -> Response {
+    let path = state.static_dir.join("live_trade_plan.html");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => {
+            warn!("failed to read {}: {e:#}", path.display());
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not read {}: {e}", path.display()),
+            )
+                .into_response()
+        }
+    }
+}
+
 async fn intraday_handler(State(state): State<AppState>) -> Response {
     let path = state.static_dir.join("intraday.html");
     match tokio::fs::read_to_string(&path).await {
@@ -1444,6 +1482,125 @@ async fn fundamentals_handler(State(state): State<AppState>, Query(q): Query<Fun
         Ok(Some(f)) => Json(serde_json::json!({"available": true, "fundamentals": f})).into_response(),
         Ok(None) => Json(serde_json::json!({"available": false})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("fundamentals task panicked: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LiveQuoteQuery {
+    symbol: String,
+}
+
+/// `GET /api/live_quote?symbol=` — on-demand LIVE price + day OHLCV + 5-level depth
+/// + derived order-book imbalance for ONE symbol. The Live Integration page polls
+/// this every few seconds for the *selected* stock only (never a universe scan).
+/// Advisory/display only — it is a read-only market-data fetch, never an order and
+/// never an input to Confidence/the edge map.
+async fn live_quote_handler(
+    State(state): State<AppState>,
+    Query(q): Query<LiveQuoteQuery>,
+) -> Response {
+    let sym = q.symbol.trim().to_uppercase();
+    if !valid_nse_symbol(&sym) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid symbol"}))).into_response();
+    }
+    let (api_key, access_token, _date) = match crate::kite_quote::read_token(&state.root) {
+        Ok(t) => t,
+        Err(e) => {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": e.to_string()}))).into_response();
+        }
+    };
+    match crate::kite_quote::fetch_quote(&api_key, &access_token, &sym, 4).await {
+        Ok(quote) => {
+            let (bid_qty, ask_qty, buy_orders, sell_orders) = quote
+                .depth
+                .as_ref()
+                .map(|d| {
+                    let b: i64 = d.bids.iter().map(|l| l.qty).sum();
+                    let a: i64 = d.asks.iter().map(|l| l.qty).sum();
+                    // number of resting orders at the visible top-5 levels (all brokers)
+                    let bo: i64 = d.bids.iter().map(|l| l.orders).sum();
+                    let so: i64 = d.asks.iter().map(|l| l.orders).sum();
+                    (b, a, bo, so)
+                })
+                .unwrap_or((0, 0, 0, 0));
+            // Order-book imbalance over the visible 5 levels, in [-1, 1].
+            let obi = if bid_qty + ask_qty > 0 {
+                (bid_qty - ask_qty) as f64 / (bid_qty + ask_qty) as f64
+            } else {
+                0.0
+            };
+            let (spread, spread_pct) = quote
+                .depth
+                .as_ref()
+                .map(|d| {
+                    let bb = d.bids[0].price;
+                    let ba = d.asks[0].price;
+                    if bb > 0.0 && ba > 0.0 {
+                        let s = ba - bb;
+                        (s, s / ((ba + bb) / 2.0) * 100.0)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                })
+                .unwrap_or((0.0, 0.0));
+            let session_live = crate::config::is_regular_session(
+                chrono::Utc::now().with_timezone(&crate::config::IST).time(),
+            );
+            Json(serde_json::json!({
+                "quote": quote,
+                "obi": obi,
+                "bid_qty": bid_qty,
+                "ask_qty": ask_qty,
+                "buy_orders": buy_orders,
+                "sell_orders": sell_orders,
+                "spread": spread,
+                "spread_pct": spread_pct,
+                "session_live": session_live,
+                "as_of_ist": now_ist_string(),
+            }))
+            .into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct MyOrdersQuery {
+    symbol: String,
+}
+
+/// `GET /api/my_orders?symbol=` — the USER'S OWN pending orders + active GTTs for
+/// one symbol (the only place a real entry/stoploss/target exists — those are
+/// private to the trader, never in the public exchange book). READ-ONLY: this
+/// never places, modifies, or cancels an order.
+async fn my_orders_handler(
+    State(state): State<AppState>,
+    Query(q): Query<MyOrdersQuery>,
+) -> Response {
+    let sym = q.symbol.trim().to_uppercase();
+    if !valid_nse_symbol(&sym) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid symbol"}))).into_response();
+    }
+    let (api_key, access_token, _date) = match crate::kite_quote::read_token(&state.root) {
+        Ok(t) => t,
+        Err(e) => {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": e.to_string()}))).into_response();
+        }
+    };
+    match crate::kite_quote::fetch_my_orders(&api_key, &access_token, &sym, 5).await {
+        Ok(orders) => {
+            let buy_count = orders.iter().filter(|o| o.side.eq_ignore_ascii_case("BUY")).count();
+            let sell_count = orders.iter().filter(|o| o.side.eq_ignore_ascii_case("SELL")).count();
+            Json(serde_json::json!({
+                "symbol": sym,
+                "orders": orders,
+                "buy_count": buy_count,
+                "sell_count": sell_count,
+                "as_of_ist": now_ist_string(),
+            }))
+            .into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
     }
 }
 

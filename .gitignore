@@ -23,3 +23,5 @@ nse_instruments_cache.json
 # Runtime journal DB + CSV exports (not source)
 /data/
 /serve.log
+# Session/run logs (backtest, download, shards)
+*.log

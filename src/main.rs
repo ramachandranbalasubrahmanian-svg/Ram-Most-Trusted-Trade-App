@@ -29,6 +29,7 @@ mod journal_import;
 mod journal_sync;
 mod kite_auth;
 mod kite_instruments;
+mod kite_quote;
 mod market_regime;
 mod news_engine;
 mod news_signal;

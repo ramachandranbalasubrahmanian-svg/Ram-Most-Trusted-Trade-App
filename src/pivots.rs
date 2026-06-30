@@ -61,9 +61,17 @@ fn last_hlc(
     if !path.exists() {
         return None;
     }
+    // Pick the latest row with a USABLE OHLC. Yahoo's most-recent daily bar can
+    // land with a NaN/null close (provisional row) while OHL are present — skip
+    // those and fall back to the last fully-valid prior session, rather than
+    // reporting "unavailable". (NaN is not NULL in DuckDB, so guard with isnan.)
     let sql = format!(
         "SELECT CAST(date AS DATE)::VARCHAR, high, low, close FROM read_parquet({}) \
-         WHERE upper(symbol) = upper(?) ORDER BY date DESC LIMIT 1",
+         WHERE upper(symbol) = upper(?) \
+           AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL \
+           AND NOT isnan(high) AND NOT isnan(low) AND NOT isnan(close) \
+           AND close > 0 AND high > 0 AND low > 0 \
+         ORDER BY date DESC LIMIT 1",
         storage_kernel::quote_path(&path)
     );
     conn.prepare(&sql).ok()?.query_row([symbol], |r| {

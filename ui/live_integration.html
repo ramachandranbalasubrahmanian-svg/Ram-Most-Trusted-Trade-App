@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAM ISTP · Live Integration · Specific Stock</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: { mono: ['ui-monospace','SFMono-Regular','Menlo','Monaco','Consolas','monospace'] } } } };
+  </script>
+  <style>
+    html, body { background: #0a0e14; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #cbd5e1; }
+    .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; }
+    ::-webkit-scrollbar-track { background: #0a0e14; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    .pulse-dot { animation: pulse 1.6s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    .depth-bar { transition: width .3s ease; }
+  </style>
+</head>
+<body class="min-h-screen antialiased">
+  <!-- ===================== HEADER ===================== -->
+  <header class="sticky top-0 z-20 border-b border-slate-800 bg-[#0a0e14]/95 backdrop-blur">
+    <div class="mx-auto max-w-[1700px] px-4 py-2.5 flex items-center gap-4 flex-wrap">
+      <div class="flex items-center gap-2.5">
+        <div class="h-7 w-7 rounded-md bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm">R</div>
+        <div>
+          <div class="text-sm font-bold tracking-tight text-slate-100 leading-none">RAM ISTP</div>
+          <div class="text-[10px] text-slate-500 leading-none mt-0.5">Live Integration · Specific Stock</div>
+        </div>
+      </div>
+      <span id="sessionBadge" class="px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-slate-700 text-slate-300">—</span>
+
+      <nav class="flex items-center gap-1 text-[12px]">
+        <a href="/" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Backtested</a>
+        <a href="/intraday" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Intraday</a>
+        <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
+        <a href="/journal" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Journal</a>
+        <a href="/portfolio" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Portfolio</a>
+        <a href="/add_stock" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">+ Add stock</a>
+        <a href="/kite" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Kite</a>
+        <a href="/data" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Data</a>
+        <a href="/live_integration" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Live Integration</a><a href="/live_trade_plan" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Trade Plan</a>
+      </nav>
+
+      <div class="flex-1"></div>
+      <div class="flex items-center gap-2 text-xs num">
+        <span class="text-slate-500">IST</span>
+        <span id="tsIst" class="font-semibold text-slate-200">—</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[1700px] px-4 py-3 space-y-3">
+
+    <!-- honesty banner -->
+    <div class="rounded-lg border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-200/90">
+      <span class="font-bold">Advisory only — never an order.</span> This page fetches LIVE data <b>only for the one stock you select</b>
+      (Kite quote + depth, refreshed every 3s; pivots / tradability / news fetched once). The verdict is a transparent factor read for
+      reference — verify on your terminal before trading. Live depth + order-book imbalance exist only during the 09:15–15:30 IST session.
+    </div>
+
+    <!-- ===================== CONTROLS ===================== -->
+    <section class="rounded-lg border border-slate-800 bg-[#0d1320] p-3 space-y-3">
+      <div class="flex items-end gap-2 flex-wrap">
+        <div>
+          <label class="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">NSE symbol</label>
+          <input id="symInput" type="text" placeholder="e.g. RELIANCE" autocomplete="off" spellcheck="false"
+            class="w-48 bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-sm font-semibold text-slate-100 uppercase tracking-wide focus:outline-none focus:border-sky-500" />
+        </div>
+        <button id="analyzeBtn" class="px-4 py-1.5 rounded bg-sky-600 hover:bg-sky-500 text-white text-sm font-semibold active:scale-95 transition">Analyze →</button>
+        <button id="stopBtn" class="px-3 py-1.5 rounded border border-slate-700 text-slate-400 hover:text-slate-100 text-xs hidden">⏸ Stop refresh</button>
+        <div id="pollState" class="text-[11px] text-slate-500 num"></div>
+      </div>
+
+      <!-- Top-10 quick picks (from the Backtested live signals) -->
+      <div>
+        <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Top-10 from Backtested signals — click to load its live view</div>
+        <div class="flex flex-wrap gap-2">
+          <div class="flex items-center gap-1.5">
+            <span class="text-[10px] font-bold text-emerald-300">BUY</span>
+            <div id="buyChips" class="flex flex-wrap gap-1"><span class="text-[11px] text-slate-600">connecting…</span></div>
+          </div>
+          <div class="flex items-center gap-1.5 ml-3">
+            <span class="text-[10px] font-bold text-rose-300">SELL</span>
+            <div id="sellChips" class="flex flex-wrap gap-1"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- error / hint -->
+    <div id="errBox" class="hidden rounded-lg border border-rose-900/50 bg-rose-950/20 px-3 py-2 text-[12px] text-rose-200"></div>
+
+    <!-- ===================== RESULTS ===================== -->
+    <section id="results" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-3">
+
+      <!-- LEFT: live price + verdict -->
+      <div class="lg:col-span-5 space-y-3">
+
+        <!-- Live price -->
+        <div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span id="resSym" class="text-lg font-bold text-slate-100">—</span>
+              <span id="liveDot" class="h-2 w-2 rounded-full bg-slate-600"></span>
+              <span id="liveLabel" class="text-[10px] text-slate-500">—</span>
+            </div>
+            <span id="asOf" class="text-[10px] text-slate-500 num">—</span>
+          </div>
+          <div class="flex items-baseline gap-3 mt-2">
+            <span id="ltp" class="num text-3xl font-bold text-slate-100">—</span>
+            <span id="chg" class="num text-sm font-semibold text-slate-400">—</span>
+          </div>
+          <div class="grid grid-cols-4 gap-2 mt-3 text-[11px] num">
+            <div><div class="text-slate-600 uppercase tracking-wide text-[9px]">Open</div><div id="dOpen" class="text-slate-200">—</div></div>
+            <div><div class="text-slate-600 uppercase tracking-wide text-[9px]">High</div><div id="dHigh" class="text-emerald-300">—</div></div>
+            <div><div class="text-slate-600 uppercase tracking-wide text-[9px]">Low</div><div id="dLow" class="text-rose-300">—</div></div>
+            <div><div class="text-slate-600 uppercase tracking-wide text-[9px]">Volume</div><div id="dVol" class="text-slate-200">—</div></div>
+          </div>
+          <div class="grid grid-cols-2 gap-2 mt-2 text-[10px] num text-slate-500">
+            <div>Lower circuit: <span id="lc" class="text-slate-300">—</span></div>
+            <div>Upper circuit: <span id="uc" class="text-slate-300">—</span></div>
+          </div>
+        </div>
+
+        <!-- VERDICT -->
+        <div class="rounded-lg border-2 p-3" id="verdictBox">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Live advisory verdict</span>
+            <span id="verdictLabel" class="text-base font-extrabold tracking-wide">—</span>
+          </div>
+          <div id="verdictNet" class="text-[11px] text-slate-400 num mt-0.5">—</div>
+          <div class="mt-2 space-y-1" id="factorList"></div>
+          <div class="mt-2 pt-2 border-t border-slate-800 text-[10px] text-slate-500 space-y-0.5" id="caveatList"></div>
+        </div>
+      </div>
+
+      <!-- MIDDLE: market depth -->
+      <div class="lg:col-span-4 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Market depth · 5 levels</span>
+          <span id="spreadInfo" class="text-[10px] text-slate-500 num">—</span>
+        </div>
+        <div id="depthMissing" class="hidden text-[12px] text-slate-500 py-6 text-center">No live depth — book is empty (market closed or pre/post session).</div>
+        <table id="depthTable" class="w-full text-[11px] num">
+          <thead>
+            <tr class="text-slate-600 text-[9px] uppercase">
+              <th class="text-left font-semibold py-1">Bid qty</th><th class="text-left font-semibold">Orders</th><th class="text-right font-semibold">Bid</th>
+              <th class="text-center w-2"></th>
+              <th class="text-left font-semibold">Ask</th><th class="text-right font-semibold">Orders</th><th class="text-right font-semibold">Ask qty</th>
+            </tr>
+          </thead>
+          <tbody id="depthBody"></tbody>
+        </table>
+        <!-- OBI -->
+        <div class="mt-3">
+          <div class="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+            <span>Order-book imbalance (OBI)</span><span id="obiVal" class="num text-slate-300 font-semibold">—</span>
+          </div>
+          <div class="h-3 w-full rounded-full bg-slate-800 overflow-hidden flex">
+            <div class="h-full bg-slate-700 flex-1 flex justify-end"><div id="obiSell" class="depth-bar h-full bg-rose-500" style="width:0%"></div></div>
+            <div class="h-full bg-slate-700 flex-1"><div id="obiBuy" class="depth-bar h-full bg-emerald-500" style="width:0%"></div></div>
+          </div>
+          <div class="flex justify-between text-[9px] text-slate-600 mt-0.5"><span id="askQty">ask —</span><span id="bidQty">bid —</span></div>
+        </div>
+        <!-- Whole-market pending order book (all brokers route to the single NSE book) -->
+        <div class="mt-3 pt-3 border-t border-slate-800">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Pending orders · whole market <span class="normal-case text-slate-600 font-normal">(all brokers · NSE book)</span></div>
+          <div class="grid grid-cols-2 gap-2 text-[11px] num">
+            <div class="rounded bg-emerald-950/30 border border-emerald-900/40 px-2 py-1.5">
+              <div class="text-[9px] text-emerald-400/70 uppercase tracking-wide">Open BUY qty</div>
+              <div id="totBuyQty" class="text-emerald-300 font-bold text-base">—</div>
+              <div id="buyOrders" class="text-[9px] text-slate-500">— orders (top 5)</div>
+            </div>
+            <div class="rounded bg-rose-950/30 border border-rose-900/40 px-2 py-1.5">
+              <div class="text-[9px] text-rose-400/70 uppercase tracking-wide">Open SELL qty</div>
+              <div id="totSellQty" class="text-rose-300 font-bold text-base">—</div>
+              <div id="sellOrders" class="text-[9px] text-slate-500">— orders (top 5)</div>
+            </div>
+          </div>
+          <div class="h-2.5 w-full rounded-full bg-slate-800 overflow-hidden flex mt-2">
+            <div id="pendBuyBar" class="depth-bar h-full bg-emerald-500" style="width:50%"></div>
+            <div id="pendSellBar" class="depth-bar h-full bg-rose-500" style="width:50%"></div>
+          </div>
+          <div id="pendNote" class="text-[10px] text-slate-400 mt-1 num">—</div>
+          <div class="text-[9px] text-slate-600 mt-1 italic leading-snug">Aggregate resting BUY/SELL quantity across the whole exchange book (every broker). The book carries no per-order stoploss/target — those are private conditional orders inside each broker, never published.</div>
+        </div>
+      </div>
+
+      <!-- RIGHT: S/R + tradability + sentiment -->
+      <div class="lg:col-span-3 space-y-3">
+        <!-- S/R -->
+        <div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">Support / Resistance <span id="srAsOf" class="normal-case text-slate-600 font-normal"></span></div>
+          <div id="srLadder" class="space-y-1 text-[11px] num"></div>
+        </div>
+        <!-- Tradability -->
+        <div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Tradability</div>
+          <div id="tradVerdict" class="text-sm font-bold">—</div>
+          <div id="tradReason" class="text-[11px] text-slate-400 mt-0.5">—</div>
+        </div>
+        <!-- Sentiment -->
+        <div class="rounded-lg border border-slate-800 bg-[#0d1320] p-3">
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">News sentiment</div>
+          <div id="newsVerdict" class="text-sm font-bold">—</div>
+          <div id="newsReason" class="text-[11px] text-slate-400 mt-0.5">—</div>
+          <ul id="newsHeadlines" class="mt-1.5 space-y-1 text-[10px] text-slate-500 list-disc list-inside"></ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+<script>
+(function () {
+  "use strict";
+  var POLL_MS = 3000;
+  var $ = function (id) { return document.getElementById(id); };
+  function rupee(n) { if (n == null || !isFinite(n)) return "—"; return "₹" + Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 }); }
+  function fmtInt(n) { if (n == null || !isFinite(n)) return "—"; return Number(n).toLocaleString("en-IN"); }
+  function pct(n) { if (n == null || !isFinite(n)) return "—"; return (n >= 0 ? "+" : "") + n.toFixed(2) + "%"; }
+
+  async function getJson(url) {
+    try { var r = await fetch(url, { cache: "no-store" }); var j = await r.json(); return { ok: r.ok, data: j }; }
+    catch (e) { return { ok: false, data: { error: String(e) } }; }
+  }
+
+  var state = { symbol: null, ctx: null, timer: null, inFlight: false };
+
+  // ---- clock ----
+  setInterval(function () {
+    var d = new Date();
+    $("tsIst").textContent = d.toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata" });
+  }, 1000);
+
+  // ---- Top-10 chips via the same websocket the Backtested page uses ----
+  function wsUrl() { var p = location.protocol === "https:" ? "wss:" : "ws:"; return p + "//" + location.host + "/ws/live_signals"; }
+  function chip(sym) {
+    var b = document.createElement("button");
+    b.className = "px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 active:scale-95 transition";
+    b.textContent = sym;
+    b.onclick = function () { $("symInput").value = sym; analyze(sym); };
+    return b;
+  }
+  function renderChips(pkt) {
+    var buy = (pkt.top_buy || []).map(function (s) { return s.symbol; });
+    var sell = (pkt.top_sell || []).map(function (s) { return s.symbol; });
+    var bc = $("buyChips"), sc = $("sellChips");
+    bc.innerHTML = ""; sc.innerHTML = "";
+    if (!buy.length) bc.innerHTML = '<span class="text-[11px] text-slate-600">none</span>';
+    buy.forEach(function (s) { bc.appendChild(chip(s)); });
+    sell.forEach(function (s) { sc.appendChild(chip(s)); });
+  }
+  (function connectWs() {
+    var ws;
+    try { ws = new WebSocket(wsUrl()); } catch (e) { $("buyChips").innerHTML = '<span class="text-[11px] text-slate-600">unavailable</span>'; return; }
+    ws.onmessage = function (ev) { try { renderChips(JSON.parse(ev.data)); } catch (e) {} };
+    ws.onclose = function () { setTimeout(connectWs, 4000); };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  })();
+
+  // ---- analyze a symbol ----
+  function showErr(msg) { var e = $("errBox"); e.textContent = msg; e.classList.remove("hidden"); }
+  function clearErr() { $("errBox").classList.add("hidden"); }
+
+  async function analyze(symRaw) {
+    var sym = (symRaw || "").trim().toUpperCase();
+    if (!sym) { showErr("Enter an NSE symbol."); return; }
+    clearErr();
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+    state.symbol = sym; state.ctx = null;
+    $("results").classList.remove("hidden");
+    $("resSym").textContent = sym;
+    $("stopBtn").classList.remove("hidden");
+
+    // one-shot context (S/R, tradability, news) — fetched ONCE per symbol
+    var enc = encodeURIComponent(sym);
+    var ctxResults = await Promise.all([
+      getJson("/api/pivots?symbol=" + enc),
+      getJson("/api/tradability?symbol=" + enc),
+      getJson("/api/news?symbol=" + enc)
+    ]);
+    // /api/tradability returns the whole universe map {by_symbol:{...}} — pull just this symbol.
+    var tradAll = ctxResults[1].ok ? ctxResults[1].data : null;
+    var tradOne = tradAll && tradAll.by_symbol ? (tradAll.by_symbol[sym] || null) : tradAll;
+    state.ctx = {
+      pivots: ctxResults[0].ok ? ctxResults[0].data : null,
+      trad: tradOne,
+      news: ctxResults[2].ok ? ctxResults[2].data : null
+    };
+    renderContext();
+
+    // live loop
+    await poll();
+    state.timer = setInterval(poll, POLL_MS);
+  }
+
+  async function poll() {
+    if (state.inFlight || !state.symbol) return;
+    state.inFlight = true;
+    try {
+      var res = await getJson("/api/live_quote?symbol=" + encodeURIComponent(state.symbol));
+      if (!res.ok) { renderLiveError(res.data && res.data.error); return; }
+      renderLive(res.data);
+      computeVerdict(res.data);
+    } finally { state.inFlight = false; }
+  }
+
+  function renderLiveError(msg) {
+    $("liveDot").className = "h-2 w-2 rounded-full bg-rose-500";
+    $("liveLabel").textContent = "live quote error";
+    $("pollState").textContent = "";
+    showErr("Live quote: " + (msg || "failed") + (String(msg || "").toLowerCase().indexOf("token") >= 0 ? " — re-login on the Kite page." : ""));
+  }
+
+  function renderLive(d) {
+    clearErr();
+    var q = d.quote || {};
+    $("ltp").textContent = rupee(q.last_price);
+    var chgAbs = (q.prev_close > 0) ? (q.last_price - q.prev_close) : null;
+    var chgPct = (q.prev_close > 0) ? (q.last_price - q.prev_close) / q.prev_close * 100 : null;
+    var chgEl = $("chg");
+    chgEl.textContent = (chgAbs != null ? (chgAbs >= 0 ? "+" : "") + chgAbs.toFixed(2) : "—") + "  (" + pct(chgPct) + ")  vs prev close";
+    chgEl.className = "num text-sm font-semibold " + (chgPct >= 0 ? "text-emerald-300" : "text-rose-300");
+    $("dOpen").textContent = rupee(q.open); $("dHigh").textContent = rupee(q.high);
+    $("dLow").textContent = rupee(q.low); $("dVol").textContent = fmtInt(q.volume);
+    $("lc").textContent = rupee(q.lower_circuit); $("uc").textContent = rupee(q.upper_circuit);
+    $("asOf").textContent = "as of " + (d.as_of_ist || "—");
+
+    var live = !!d.session_live;
+    $("liveDot").className = "h-2 w-2 rounded-full " + (live ? "bg-emerald-500 pulse-dot" : "bg-slate-600");
+    $("liveLabel").textContent = live ? "LIVE" : "market closed";
+    $("sessionBadge").textContent = live ? "MARKET LIVE" : "MARKET CLOSED";
+    $("sessionBadge").className = "px-2 py-0.5 rounded text-[10px] font-bold tracking-wider " + (live ? "bg-emerald-900/60 text-emerald-300" : "bg-slate-700 text-slate-400");
+    $("pollState").textContent = "↻ every 3s";
+
+    renderDepth(d);
+    renderPending(d);
+  }
+
+  function renderPending(d) {
+    var q = d.quote || {};
+    var tb = q.total_buy_qty || 0, ts = q.total_sell_qty || 0;
+    $("totBuyQty").textContent = fmtInt(tb);
+    $("totSellQty").textContent = fmtInt(ts);
+    $("buyOrders").textContent = fmtInt(d.buy_orders) + " orders (top 5)";
+    $("sellOrders").textContent = fmtInt(d.sell_orders) + " orders (top 5)";
+    var tot = tb + ts;
+    var bp = tot > 0 ? (tb / tot * 100) : 50;
+    $("pendBuyBar").style.width = bp + "%";
+    $("pendSellBar").style.width = (100 - bp) + "%";
+    if (tot <= 0) { $("pendNote").textContent = "No resting book (market closed)."; return; }
+    var lean = tb > ts ? "more BUYers queued" : tb < ts ? "more SELLers queued" : "balanced";
+    $("pendNote").textContent = "Buy " + bp.toFixed(0) + "% / Sell " + (100 - bp).toFixed(0) + "% — " + lean;
+  }
+
+  function renderDepth(d) {
+    var q = d.quote || {};
+    var dep = q.depth;
+    if (!q.depth_available || !dep) {
+      $("depthTable").classList.add("hidden"); $("depthMissing").classList.remove("hidden");
+      $("obiVal").textContent = "n/a"; $("obiBuy").style.width = "0%"; $("obiSell").style.width = "0%";
+      $("bidQty").textContent = "bid —"; $("askQty").textContent = "ask —"; $("spreadInfo").textContent = "—";
+      return;
+    }
+    $("depthTable").classList.remove("hidden"); $("depthMissing").classList.add("hidden");
+    var rows = "";
+    for (var i = 0; i < 5; i++) {
+      var b = dep.bids[i] || {}, a = dep.asks[i] || {};
+      rows += '<tr>'
+        + '<td class="text-left text-slate-300">' + fmtInt(b.qty) + '</td>'
+        + '<td class="text-left text-slate-600">' + fmtInt(b.orders) + '</td>'
+        + '<td class="text-right text-emerald-300 font-semibold">' + (b.price ? Number(b.price).toFixed(2) : "—") + '</td>'
+        + '<td></td>'
+        + '<td class="text-left text-rose-300 font-semibold">' + (a.price ? Number(a.price).toFixed(2) : "—") + '</td>'
+        + '<td class="text-right text-slate-600">' + fmtInt(a.orders) + '</td>'
+        + '<td class="text-right text-slate-300">' + fmtInt(a.qty) + '</td>'
+        + '</tr>';
+    }
+    $("depthBody").innerHTML = rows;
+    var obi = d.obi || 0;
+    $("obiVal").textContent = (obi >= 0 ? "+" : "") + obi.toFixed(2) + (obi > 0.1 ? " · bid-heavy" : obi < -0.1 ? " · ask-heavy" : " · balanced");
+    $("obiBuy").style.width = Math.max(0, obi * 100) + "%";
+    $("obiSell").style.width = Math.max(0, -obi * 100) + "%";
+    $("bidQty").textContent = "bid " + fmtInt(d.bid_qty);
+    $("askQty").textContent = "ask " + fmtInt(d.ask_qty);
+    $("spreadInfo").textContent = "spread " + (d.spread != null ? Number(d.spread).toFixed(2) : "—") + " (" + (d.spread_pct != null ? d.spread_pct.toFixed(3) : "—") + "%)";
+  }
+
+  function renderContext() {
+    var c = state.ctx || {};
+    // pivots / S/R
+    var p = c.pivots;
+    var lad = $("srLadder");
+    if (p && p.available) {
+      $("srAsOf").textContent = "· prior " + (p.as_of || "");
+      var rows = [["R3", p.r3, "rose"], ["R2", p.r2, "rose"], ["R1", p.r1, "rose"], ["P", p.p, "slate"], ["S1", p.s1, "emerald"], ["S2", p.s2, "emerald"], ["S3", p.s3, "emerald"]];
+      lad.innerHTML = rows.map(function (r) {
+        return '<div class="flex justify-between"><span class="text-' + r[2] + '-400/80">' + r[0] + '</span><span class="text-slate-200">' + rupee(r[1]) + '</span></div>';
+      }).join("");
+    } else { $("srLadder").innerHTML = '<span class="text-[11px] text-slate-600">S/R unavailable</span>'; }
+
+    // tradability
+    var t = c.trad;
+    if (t && t.verdict) {
+      var col = t.verdict === "blocked" ? "text-rose-400" : t.verdict === "high_risk" ? "text-orange-400" : t.verdict === "caution" ? "text-amber-300" : "text-emerald-300";
+      $("tradVerdict").className = "text-sm font-bold " + col;
+      $("tradVerdict").textContent = t.verdict.toUpperCase() + (t.intraday_ok === false ? " · NO intraday" : "");
+      $("tradReason").textContent = t.reason || t.caption || "";
+    } else { $("tradVerdict").textContent = "unavailable"; $("tradReason").textContent = ""; }
+
+    // news
+    var n = c.news;
+    if (n && n.available) {
+      var nc = n.sentiment === "positive" ? "text-emerald-300" : n.sentiment === "negative" ? "text-rose-300" : "text-slate-300";
+      $("newsVerdict").className = "text-sm font-bold " + nc;
+      $("newsVerdict").textContent = (n.sentiment || "neutral") + (n.verdict && n.verdict !== "neutral" ? " · " + n.verdict : "");
+      $("newsReason").textContent = n.reason || "";
+      $("newsHeadlines").innerHTML = (n.headlines || []).slice(0, 3).map(function (h) { return "<li>" + h.replace(/</g, "&lt;") + "</li>"; }).join("");
+    } else {
+      $("newsVerdict").className = "text-sm font-bold text-slate-500";
+      $("newsVerdict").textContent = "unavailable";
+      $("newsReason").textContent = (n && n.reason) || "News needs INDIANAPI_KEY / within budget.";
+      $("newsHeadlines").innerHTML = "";
+    }
+  }
+
+  // ---- transparent verdict: signed factors → lean ----
+  function computeVerdict(d) {
+    var q = d.quote || {}, c = state.ctx || {};
+    var factors = [], caveats = [], net = 0;
+    function add(name, score, why) { if (score !== 0) net += score; factors.push({ name: name, score: score, why: why }); }
+
+    // hard tradability override
+    var blocked = c.trad && (c.trad.verdict === "blocked" || c.trad.intraday_ok === false);
+
+    // 1. OBI
+    var obi = d.obi || 0;
+    if (d.quote && d.quote.depth_available) {
+      var s = obi > 0.4 ? 3 : obi > 0.15 ? 2 : obi < -0.4 ? -3 : obi < -0.15 ? -2 : 0;
+      add("Order-book imbalance", s, "OBI " + obi.toFixed(2) + (s > 0 ? " (bids stacked)" : s < 0 ? " (asks stacked)" : " (balanced)"));
+    } else { caveats.push("Depth/OBI unavailable (market closed) — verdict uses price + context only."); }
+
+    // 2. momentum vs prev close
+    var chgPct = (q.prev_close > 0) ? (q.last_price - q.prev_close) / q.prev_close * 100 : 0;
+    var m = chgPct > 1 ? 2 : chgPct > 0.2 ? 1 : chgPct < -1 ? -2 : chgPct < -0.2 ? -1 : 0;
+    add("Momentum vs prev close", m, pct(chgPct) + " on the day");
+
+    // 3. price vs central pivot + S/R proximity
+    var p = c.pivots;
+    if (p && p.available && q.last_price > 0) {
+      add("Price vs pivot (P)", q.last_price > p.p ? 1 : q.last_price < p.p ? -1 : 0, q.last_price > p.p ? "above P (bullish bias)" : "below P (bearish bias)");
+      var near = function (lvl) { return lvl > 0 && Math.abs(q.last_price - lvl) / q.last_price < 0.004; };
+      if (near(p.s1) || near(p.s2)) add("At support", 1, "hugging S1/S2 — bounce zone");
+      if (near(p.r1) || near(p.r2)) add("At resistance", -1, "hugging R1/R2 — rejection zone");
+    }
+
+    // 4. sentiment
+    var n = c.news;
+    if (n && n.available) {
+      var sc = n.sentiment === "positive" ? 1 : n.sentiment === "negative" ? -1 : 0;
+      add("News sentiment", sc, (n.sentiment || "neutral") + (n.verdict === "cautious" ? " (contradicts move)" : ""));
+      if (n.verdict === "cautious") caveats.push("News verdict is CAUTIOUS — headlines contradict the price move.");
+    } else { caveats.push("News sentiment unavailable."); }
+
+    // render
+    var label, col, border;
+    if (blocked) {
+      label = "DO NOT TRADE"; col = "text-rose-400"; border = "border-rose-700 bg-rose-950/20";
+      caveats.unshift("Tradability = " + (c.trad.verdict) + (c.trad.reason ? " — " + c.trad.reason : "") + ". MIS intraday is rejected/unsafe.");
+    } else if (!d.session_live && !(q.last_price > 0)) {
+      label = "NO LIVE DATA"; col = "text-slate-400"; border = "border-slate-700";
+    } else if (net >= 2) { label = "LEAN BUY"; col = "text-emerald-300"; border = "border-emerald-700 bg-emerald-950/20"; }
+    else if (net <= -2) { label = "LEAN SELL"; col = "text-rose-300"; border = "border-rose-700 bg-rose-950/20"; }
+    else { label = "STAND ASIDE"; col = "text-amber-300"; border = "border-amber-700/70 bg-amber-950/10"; }
+
+    $("verdictBox").className = "rounded-lg border-2 p-3 " + border;
+    $("verdictLabel").className = "text-base font-extrabold tracking-wide " + col;
+    $("verdictLabel").textContent = label;
+    $("verdictNet").textContent = "net lean " + (net >= 0 ? "+" : "") + net + "  ·  buy ≥ +2 · sell ≤ −2";
+    $("factorList").innerHTML = factors.map(function (f) {
+      var c2 = f.score > 0 ? "text-emerald-300" : f.score < 0 ? "text-rose-300" : "text-slate-500";
+      return '<div class="flex justify-between text-[11px]"><span class="text-slate-400">' + f.name + ' <span class="text-slate-600">· ' + f.why + '</span></span><span class="' + c2 + ' num font-semibold ml-2">' + (f.score > 0 ? "+" : "") + f.score + '</span></div>';
+    }).join("");
+    caveats.push("Advisory only — not an order. Re-check on your terminal before acting.");
+    $("caveatList").innerHTML = caveats.map(function (c3) { return "<div>• " + c3 + "</div>"; }).join("");
+  }
+
+  // ---- wire controls ----
+  $("analyzeBtn").onclick = function () { analyze($("symInput").value); };
+  $("symInput").addEventListener("keydown", function (e) { if (e.key === "Enter") analyze($("symInput").value); });
+  $("stopBtn").onclick = function () {
+    if (state.timer) { clearInterval(state.timer); state.timer = null; $("pollState").textContent = "paused"; $("stopBtn").classList.add("hidden"); }
+  };
+})();
+</script>
+</body>
+</html>

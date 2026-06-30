@@ -58,14 +58,14 @@
       <span id="modeBadge" class="px-2 py-0.5 rounded text-[10px] font-bold tracking-wider bg-slate-700 text-slate-300">—</span>
 
       <nav class="flex items-center gap-1 text-[12px]">
-        <a href="/" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Live signals</a>
+        <a href="/" class="px-2.5 py-1 rounded bg-slate-800 text-slate-100 font-semibold">Backtested</a>
         <a href="/intraday" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Intraday</a>
         <a href="/desk" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Desk</a>
         <a href="/journal" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Journal</a>
         <a href="/portfolio" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Portfolio</a>
         <a href="/add_stock" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">+ Add stock</a>
         <a href="/kite" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Kite</a>
-        <a href="/data" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Data</a>
+        <a href="/data" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Data</a><a href="/live_integration" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Live Integration</a><a href="/live_trade_plan" class="px-2.5 py-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/60">Trade Plan</a>
       </nav>
 
       <div class="flex-1"></div>
@@ -110,7 +110,7 @@
           <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Risk / Trade</span>
           <span id="riskVal" class="num text-xl font-bold text-amber-300">1%</span>
         </div>
-        <input id="riskRange" type="range" class="w-full mt-1" min="1" max="7" step="1" value="1" />
+        <input id="riskRange" type="range" class="w-full mt-1" min="1" max="7" step="0.25" value="1" />
         <div class="flex justify-between text-[9px] text-slate-600 num mt-1">
           <span>1%</span><span>7%</span>
         </div>
@@ -336,7 +336,7 @@
     // Config (mirrors src/config.rs)
     // ----------------------------------------------------------------
     var BUDGET_MIN = 50000, BUDGET_MAX = 7500000, BUDGET_STEP = 50000, BUDGET_DEFAULT = 500000;
-    var RISK_MIN = 1, RISK_MAX = 7; // percent integer for slider
+    var RISK_MIN = 1, RISK_MAX = 7; // percent for slider (1–7%, 0.25 steps; matches backend RISK_MAX_PCT)
 
     // ----------------------------------------------------------------
     // Safe accessors / formatters
@@ -427,7 +427,7 @@
     // ----------------------------------------------------------------
     var state = {
       budget: BUDGET_DEFAULT,
-      riskPctInt: RISK_MIN, // 1..7
+      riskPctInt: RISK_MIN, // 1..7 (0.25 steps)
     };
     var userEditing = false; // suppress server echo overwriting an in-flight drag
 
@@ -438,7 +438,7 @@
       return b;
     }
     function clampRiskInt(r) {
-      r = Math.round(num(r, RISK_MIN));
+      r = Math.round(num(r, RISK_MIN) * 4) / 4; // snap to 0.25%
       if (r < RISK_MIN) r = RISK_MIN;
       if (r > RISK_MAX) r = RISK_MAX;
       return r;
@@ -548,7 +548,7 @@
       if (settings && !userEditing) {
         var sb = clampBudget(num(settings.budget, state.budget));
         var srpFrac = num(settings.risk_pct, state.riskPctInt / 100);
-        var srpInt = clampRiskInt(Math.round(srpFrac * 100));
+        var srpInt = clampRiskInt(srpFrac * 100); // 0.25-step preserved
         state.budget = sb;
         state.riskPctInt = srpInt;
         renderControls();
