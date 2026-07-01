@@ -115,6 +115,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/sector_momentum", get(sector_momentum_handler))
         .route("/api/pivots", get(pivots_handler))
         .route("/api/live_quote", get(live_quote_handler))
+        .route("/api/exit_guard", get(exit_guard_handler))
         .route("/api/my_orders", get(my_orders_handler))
         .route("/api/news", get(news_handler))
         .route("/api/journal", get(journal_get_handler))
@@ -1562,6 +1563,63 @@ async fn live_quote_handler(
         }
         Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ExitGuardQuery {
+    symbol: String,
+    /// "BUY" | "SELL" (anything not "SELL" is treated as a long).
+    side: String,
+    entry: f64,
+    stop: f64,
+    #[serde(default)]
+    qty: i64,
+}
+
+/// `GET /api/exit_guard?symbol=&side=&entry=&stop=&qty=` — pre-trade Exit-Reachability
+/// check: can this protective stop actually be FILLED? Pulls the live circuit band
+/// (Kite quote), the tradability/MIS verdict (warm cache), and the name's daily
+/// turnover, then returns the guard verdict. Advisory / display-only — it never
+/// places, modifies, or cancels an order, and never touches Confidence or the edge map.
+async fn exit_guard_handler(State(state): State<AppState>, Query(q): Query<ExitGuardQuery>) -> Response {
+    let sym = q.symbol.trim().to_uppercase();
+    if !valid_nse_symbol(&sym) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid symbol"}))).into_response();
+    }
+    // Tradability + daily turnover from the warm cache (no recompute; None if the
+    // cache isn't warmed or the name is absent).
+    let (intraday_ok, turnover) = state
+        .tradability
+        .lookup()
+        .value
+        .and_then(|t| t.by_symbol.get(&sym).cloned())
+        .map(|t| (Some(t.intraday_ok), Some(t.median_turnover_inr)))
+        .unwrap_or((None, None));
+
+    // Live circuit band (best-effort): needs a valid token + a reachable Kite quote.
+    let (lower, upper) = match crate::kite_quote::read_token(&state.root) {
+        Ok((api_key, access_token, _)) => {
+            match crate::kite_quote::fetch_quote(&api_key, &access_token, &sym, 4).await {
+                Ok(quote) => (Some(quote.lower_circuit), Some(quote.upper_circuit)),
+                Err(_) => (None, None),
+            }
+        }
+        Err(_) => (None, None),
+    };
+
+    let notional = (q.qty.max(0) as f64) * q.entry;
+    let verdict = crate::exit_guard::assess_exit(
+        &q.side,
+        q.entry,
+        q.stop,
+        notional,
+        lower,
+        upper,
+        intraday_ok,
+        turnover,
+        crate::config::LIQUIDITY_PARTICIPATION_CAP * 100.0,
+    );
+    Json(verdict).into_response()
 }
 
 #[derive(serde::Deserialize)]

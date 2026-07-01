@@ -22,6 +22,7 @@ mod cpcv;
 mod data_quality;
 mod data_refresh;
 mod execution_staging;
+mod exit_guard;
 mod fundamentals;
 mod holdings_analytics;
 mod ingestion_engine;
