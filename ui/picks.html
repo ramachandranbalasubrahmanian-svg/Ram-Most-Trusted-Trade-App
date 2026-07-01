@@ -156,7 +156,9 @@
     var tfrom = digits($("tfrom").value) || "0";
     var tto = digits($("tto").value) || "0";
     $("err").textContent = "";
-    $("go").disabled = true; $("go").textContent = "Loading…";
+    $("go").disabled = true; $("go").textContent = "Scanning…";
+    $("buyBody").innerHTML = '<tr><td class="empty" colspan="6">Scanning the universe… first run for a new capital/risk can take ~1 min.</td></tr>';
+    $("sellBody").innerHTML = '<tr><td class="empty" colspan="6">…</td></tr>';
     var url = "/api/picks?capital=" + capital + "&risk=" + risk + "&target_from=" + tfrom + "&target_to=" + tto;
     fetch(url).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (d) {
@@ -178,7 +180,7 @@
   ["capital", "risk", "tfrom", "tto"].forEach(function (id) {
     $(id).addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
   });
-  load();
+  // Do NOT auto-load — the finder scan is heavy; only fetch when the user clicks.
 </script>
 </body>
 </html>
