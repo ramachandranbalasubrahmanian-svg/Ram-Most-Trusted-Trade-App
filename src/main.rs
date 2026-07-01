@@ -17,6 +17,7 @@ mod calibration;
 mod capital_planner;
 mod circuit_breaker;
 mod config;
+mod cost_floor;
 mod costs;
 mod cpcv;
 mod data_quality;
@@ -911,6 +912,13 @@ fn run_suggest(raw: &[String]) -> Result<()> {
                 "   win {:.1}% · PF {:.2} · exp {:+.2}R · n={} · Sharpe {:.2} · Calmar {:.2} · MC P(profit) {:.0}% · DSR {:.0}%",
                 c.win_rate, c.profit_factor, c.expectancy_r, c.n_trades, c.sharpe, c.calmar,
                 c.mc_prob_profit, c.dsr * 100.0
+            );
+            // Break-even-vs-edge gauge: does the net edge clear its own cost floor?
+            println!(
+                "   cost floor: +{:.2}R to break even · net edge {:+.2}R {}",
+                c.break_even_r,
+                c.expectancy_r,
+                if c.cost_stand_aside { "→ STAND ASIDE (edge < cost floor)" } else { "→ clears cost floor" }
             );
             // Honesty stats: slippage stress band + same-bar ambiguity share.
             let stress = if c.exp_3x_slip > 0.05 {

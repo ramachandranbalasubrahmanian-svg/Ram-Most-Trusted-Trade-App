@@ -523,6 +523,14 @@ pub struct SetupCard {
     /// Wilson win-floor + DSR). A shortlist, NOT a "sure shot"; never gates score.
     #[serde(default)]
     pub shortlist: bool,
+
+    /// Break-even-vs-edge gauge (display-only, see `cost_floor`): R paid in
+    /// round-trip cost to break even, and whether the net edge is smaller than
+    /// that floor (→ stand aside). Never gates Confidence/score/the edge map.
+    #[serde(default)]
+    pub break_even_r: f64,
+    #[serde(default)]
+    pub cost_stand_aside: bool,
 }
 
 /// The four page strategies, each rendered as a block.

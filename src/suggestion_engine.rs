@@ -641,6 +641,8 @@ trade only minimum size.",
         None
     };
 
+    let cost_floor = crate::cost_floor::assess(entry, sl, cs.expectancy, crate::costs::backtest_roundtrip_pct());
+
     SetupCard {
         symbol: symbol.to_string(),
         side,
@@ -708,6 +710,11 @@ trade only minimum size.",
             config::shortlist_min_prob(),
             config::SHORTLIST_DSR_MIN,
         ),
+
+        // Break-even-vs-edge gauge — display-only; reads entry/sl/net-expectancy
+        // + the representative round-trip cost, never feeds Confidence/the gate.
+        break_even_r: cost_floor.break_even_r,
+        cost_stand_aside: cost_floor.stand_aside,
     }
 }
 
@@ -1938,6 +1945,8 @@ mod tests {
             conviction_deltas: Vec::new(),
             selection_artifact: None,
             shortlist: false,
+            break_even_r: 0.0,
+            cost_stand_aside: false,
         }
     }
 
