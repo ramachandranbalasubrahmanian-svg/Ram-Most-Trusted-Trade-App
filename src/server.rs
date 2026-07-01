@@ -98,6 +98,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/desk", get(desk_handler))
         .route("/api/freeze", get(freeze_get_handler))
         .route("/api/signal_freeze", post(signal_freeze_handler))
+        .route("/api/session_governor", get(session_governor_handler))
         .route("/api/staging", get(staging_handler))
         .route("/api/swing", get(swing_handler))
         .route("/api/portfolio", get(portfolio_handler))
@@ -772,6 +773,40 @@ async fn freeze_get_handler(State(state): State<AppState>) -> Response {
     match fs {
         Some(f) => Json(f).into_response(),
         None => (StatusCode::INTERNAL_SERVER_ERROR, "freeze lock poisoned").into_response(),
+    }
+}
+
+/// `GET /api/session_governor` — the behavioral kill-switch read on today's session:
+/// trades taken, consecutive losses, realized P&L vs the daily loss cap, rolled into
+/// an open/caution/closed verdict. Advisory/display-only — it recommends "desk
+/// closed", never auto-cancels an order or feeds Confidence/the edge map. Uses the
+/// same CAPITAL_POOL basis as the daily-loss freeze for consistency.
+async fn session_governor_handler(State(state): State<AppState>) -> Response {
+    let journal = state.journal.clone();
+    let today = now_ist_string();
+    let g = tokio::task::spawn_blocking(move || {
+        let entries = {
+            let conn = journal.lock().map_err(|_| ()).ok()?;
+            crate::journal_sync::all_entries(&conn).ok()?
+        };
+        let limits = crate::session_governor::GovernorLimits {
+            max_trades: crate::config::MAX_TRADES_PER_DAY,
+            max_consecutive_losses: crate::config::MAX_CONSECUTIVE_LOSSES,
+            daily_loss_cap_pct: crate::config::DRAWDOWN_FREEZE_PCT,
+        };
+        Some(crate::session_governor::evaluate(
+            &entries,
+            crate::config::CAPITAL_POOL,
+            &today,
+            &limits,
+        ))
+    })
+    .await
+    .ok()
+    .flatten();
+    match g {
+        Some(x) => Json(x).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "session governor failed").into_response(),
     }
 }
 

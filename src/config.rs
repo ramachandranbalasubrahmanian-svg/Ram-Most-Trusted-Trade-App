@@ -218,6 +218,12 @@ impl RiskTier {
 /// triggers a system-wide Signal Freeze for the rest of the session.
 pub const DRAWDOWN_FREEZE_PCT: f64 = 0.02;
 
+/// Session governor (behavioral kill-switch) limits — advisory defaults, applied
+/// on top of the daily-loss freeze above. Over-trading, not one bad signal, is the
+/// empirical top cause of leveraged intraday ruin.
+pub const MAX_TRADES_PER_DAY: usize = 5;
+pub const MAX_CONSECUTIVE_LOSSES: usize = 3;
+
 /// ATR multiple for the SEBI-compliance limit buffer: `limit = LTP ± ATR×0.1`.
 pub const STAGING_LIMIT_ATR_MULT: f64 = 0.1;
 

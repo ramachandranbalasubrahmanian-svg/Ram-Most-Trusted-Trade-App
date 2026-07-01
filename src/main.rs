@@ -43,6 +43,7 @@ mod regime;
 mod risk_manager;
 mod sector_momentum;
 mod server;
+mod session_governor;
 mod stats;
 mod storage_kernel;
 mod strategy_engine;
