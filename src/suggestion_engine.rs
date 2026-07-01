@@ -1991,13 +1991,12 @@ mod tests {
         assert_eq!(c.side, "SELL", "anchor side drifted");
         assert_eq!(c.interval, "30 Minutes", "anchor interval drifted");
         approx(c.rr, 2.0, 1e-9, "rr");
-        // Re-baselined 2026-06-30 (evening): +1 trade (2604→2605) after that evening's
-        // corp-actions + adjusted-archive refresh (corp_actions 18:38, *_adj rebuilt
-        // 18:49–19:07, post the 17:33 2604 commit). The deep-dive reads the adjusted
-        // archives, so a split-adjustment shift added one VWAP-SELL signal. Pure data
-        // increment — all other stats stayed within tolerance and Confidence held at 59,
-        // so the edge is materially identical (no code change).
-        assert_eq!(c.n_trades, 2605, "anchor n_trades drifted (data refresh? re-baseline)");
+        // Re-baselined 2026-07-01: +1 trade (2605→2606) after the July-1 intraday
+        // download + edge-map rebuild (today's full 30min session added one VWAP-SELL
+        // signal). Pure data increment — win 51.4 / PF 1.18 / exp +0.07R / Sharpe 0.07
+        // and Confidence 59 all held, so the edge is materially identical (no code
+        // change). (Prior: 2604→2605 on the 2026-06-30 evening corp-actions refresh.)
+        assert_eq!(c.n_trades, 2606, "anchor n_trades drifted (data refresh? re-baseline)");
         assert_eq!(c.confidence, Some(59), "anchor confidence drifted");
         approx(c.win_rate, 51.4, 0.1, "win_rate");
         approx(c.profit_factor, 1.18, 0.01, "profit_factor");
