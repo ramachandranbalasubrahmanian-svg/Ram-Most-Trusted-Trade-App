@@ -146,6 +146,26 @@ impl SymbolResolver {
         self.sector_of.get(sym).cloned()
     }
 
+    /// Test-only constructor from `(ticker, company_name)` pairs, so sibling
+    /// modules (e.g. calibration) can exercise name→ticker resolution without a
+    /// parquet on disk.
+    #[cfg(test)]
+    pub(crate) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
+        let mut r = SymbolResolver {
+            by_norm_name: HashMap::new(),
+            valid_symbols: HashSet::new(),
+            sector_of: HashMap::new(),
+            tokens: Vec::new(),
+        };
+        for (sym, name) in pairs {
+            let s = sym.to_uppercase();
+            r.valid_symbols.insert(s.clone());
+            r.by_norm_name.insert(normalize_name(name), s.clone());
+            r.tokens.push((significant_tokens(name).into_iter().collect(), s));
+        }
+        r
+    }
+
     /// A SYMBOL → sector map (clone). Used by the Live Trade Plan's per-sector
     /// diversification cap. Empty when metadata is absent (cap then disabled).
     pub fn sector_map(&self) -> std::collections::HashMap<String, String> {

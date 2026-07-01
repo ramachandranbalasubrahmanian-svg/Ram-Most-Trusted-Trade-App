@@ -13,6 +13,7 @@
 use serde::Serialize;
 
 use crate::strategy_engine::EdgeIndex;
+use crate::symbol_resolver::SymbolResolver;
 use crate::types::JournalEntry;
 
 /// One predicted-win% bucket of the reliability curve.
@@ -45,14 +46,49 @@ pub struct Calibration {
 }
 
 /// Look up the backtested win% for a journal trade by (symbol, strategy, dir).
-fn predicted_win_pct(entry: &JournalEntry, edges: &EdgeIndex) -> Option<f64> {
-    let sym = entry.symbol.trim().to_uppercase();
+///
+/// Two robustness steps so real journals actually match the edge map:
+///  1. **Symbol resolution** — imported/broker rows store the full company name
+///     ("VIKRAN ENGINEERING LTD"), while the edge map keys on the NSE ticker
+///     ("VIKRAN"). Resolve name → ticker via the (display-only) `SymbolResolver`
+///     when one is supplied; otherwise fall back to the raw uppercased symbol.
+///  2. **Strategy fallback** — imported trades carry `strategy = "Imported"`, which
+///     matches no backtested strategy. When there is no exact strategy match, fall
+///     back to the strongest eligible edge for this (symbol, direction) by
+///     expectancy — i.e. "what the engine's best validated edge on this name+side
+///     predicts." Still honest: if the engine has NO edge in that direction (e.g.
+///     a long trade on a name with only short edges), it stays unmatched.
+fn predicted_win_pct(
+    entry: &JournalEntry,
+    edges: &EdgeIndex,
+    resolver: Option<&SymbolResolver>,
+) -> Option<f64> {
+    let raw = entry.symbol.trim();
+    let sym = match resolver {
+        // `resolve` passes a raw ticker straight through and maps a company name to
+        // its ticker; on no confident match it returns the uppercased raw name.
+        Some(r) => r.resolve(raw, None).symbol,
+        None => raw.to_uppercase(),
+    };
     let dir = entry.direction.trim().to_uppercase();
-    edges.get(&sym).and_then(|list| {
-        list.iter()
-            .find(|e| e.strategy == entry.strategy && e.direction.as_str() == dir)
-            .map(|e| e.win_pct)
-    })
+    let list = edges.get(&sym)?;
+    // 1) Exact (strategy, direction) match — unchanged behaviour for engine-logged trades.
+    if let Some(e) = list
+        .iter()
+        .find(|e| e.strategy == entry.strategy && e.direction.as_str() == dir)
+    {
+        return Some(e.win_pct);
+    }
+    // 2) Fallback for discretionary/imported trades with no strategy link: the
+    //    strongest eligible edge on this (symbol, direction).
+    list.iter()
+        .filter(|e| e.direction.as_str() == dir)
+        .max_by(|a, b| {
+            a.expectancy_r
+                .partial_cmp(&b.expectancy_r)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|e| e.win_pct)
 }
 
 fn bucket_label(predicted: f64) -> &'static str {
@@ -68,7 +104,15 @@ fn bucket_label(predicted: f64) -> &'static str {
 }
 
 /// Build the calibration scorecard from the journal + the live edge index. Pure.
-pub fn build(entries: &[JournalEntry], edges: &EdgeIndex) -> Calibration {
+///
+/// `resolver` (optional) maps imported company names → NSE tickers so the journal
+/// actually joins the edge map. Pass `None` to match on the raw uppercased symbol.
+/// Firewalled: reads only the edge index + name metadata; never writes to scoring.
+pub fn build(
+    entries: &[JournalEntry],
+    edges: &EdgeIndex,
+    resolver: Option<&SymbolResolver>,
+) -> Calibration {
     // Closed = has a realized pnl.
     let closed: Vec<&JournalEntry> = entries.iter().filter(|e| e.pnl.is_some()).collect();
     let n_closed = closed.len();
@@ -83,7 +127,7 @@ pub fn build(entries: &[JournalEntry], edges: &EdgeIndex) -> Calibration {
     // Match each closed trade to its predicted win% and realized outcome.
     let mut matched: Vec<(f64, bool)> = Vec::new(); // (predicted_pct, realized_win)
     for e in &closed {
-        if let Some(pred) = predicted_win_pct(e, edges) {
+        if let Some(pred) = predicted_win_pct(e, edges, resolver) {
             let win = e.pnl.unwrap_or(0.0) > 0.0;
             matched.push((pred, win));
         }
@@ -94,7 +138,7 @@ pub fn build(entries: &[JournalEntry], edges: &EdgeIndex) -> Calibration {
             available: false,
             n_closed,
             note: format!(
-                "{n_closed} closed trade(s), but none matched a current backtested edge (symbol/strategy not in the live edge map) — can't compare predicted vs realized yet."
+                "{n_closed} closed trade(s), but none has an eligible backtested edge in the traded direction — e.g. long trades on names the engine only validates short, or symbols absent from the map. Nothing to compare predicted vs realized against yet."
             ),
             ..Default::default()
         };
@@ -201,7 +245,7 @@ mod tests {
 
     #[test]
     fn empty_journal_is_unavailable() {
-        let c = build(&[], &edge_index());
+        let c = build(&[], &edge_index(), None);
         assert!(!c.available);
         assert!(c.note.contains("No closed trades"));
     }
@@ -209,7 +253,7 @@ mod tests {
     #[test]
     fn open_trades_are_ignored() {
         // pnl=None ⇒ not closed ⇒ no scorecard.
-        let c = build(&[entry("AAA", "vwap_cross", "BUY", None)], &edge_index());
+        let c = build(&[entry("AAA", "vwap_cross", "BUY", None)], &edge_index(), None);
         assert!(!c.available);
     }
 
@@ -222,7 +266,7 @@ mod tests {
             entry("AAA", "vwap_cross", "BUY", Some(20.0)),
             entry("AAA", "vwap_cross", "BUY", Some(-80.0)),
         ];
-        let c = build(&entries, &edge_index());
+        let c = build(&entries, &edge_index(), None);
         assert!(c.available);
         assert_eq!(c.n_matched, 4);
         assert!((c.predicted_win_pct - 70.0).abs() < 1e-9);
@@ -232,12 +276,64 @@ mod tests {
         assert_eq!(c.buckets[0].label, "65–75%");
     }
 
+    fn edge_index_multi() -> EdgeIndex {
+        // VIKRAN has two long edges (weaker vwap_cross, stronger gap_and_go) and a short.
+        let mut idx = EdgeIndex::new();
+        idx.insert(
+            "VIKRAN".to_string(),
+            vec![
+                EligibleEdge { strategy: "vwap_cross".into(), direction: Direction::Long, expectancy_r: 0.10, profit_factor: 1.3, win_pct: 60.0, n: 40, robustness: Robustness::default() },
+                EligibleEdge { strategy: "gap_and_go".into(), direction: Direction::Long, expectancy_r: 0.25, profit_factor: 1.5, win_pct: 66.0, n: 39, robustness: Robustness::default() },
+                EligibleEdge { strategy: "orb_15m".into(),   direction: Direction::Short, expectancy_r: 0.20, profit_factor: 1.4, win_pct: 58.0, n: 50, robustness: Robustness::default() },
+            ],
+        );
+        idx
+    }
+
+    #[test]
+    fn resolves_company_name_to_ticker_and_matches() {
+        // Journal stores the full company name; the resolver maps it to VIKRAN so
+        // the (best-eligible-long) edge is found even with a non-engine strategy.
+        let resolver = SymbolResolver::from_pairs(&[("VIKRAN", "Vikran Engineering Limited")]);
+        let e = entry("VIKRAN ENGINEERING LTD", "Imported", "BUY", Some(500.0));
+        let c = build(&[e], &edge_index_multi(), Some(&resolver));
+        assert!(c.available);
+        assert_eq!(c.n_matched, 1);
+        // Fallback picks the strongest long edge (gap_and_go, 66%), not the weaker one.
+        assert!((c.predicted_win_pct - 66.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn imported_strategy_falls_back_to_best_direction_edge() {
+        // No resolver needed (symbol already a ticker); strategy "Imported" must
+        // still match via the direction fallback to the best long edge.
+        let e = entry("VIKRAN", "Imported", "BUY", Some(10.0));
+        let c = build(&[e], &edge_index_multi(), None);
+        assert!(c.available);
+        assert_eq!(c.n_matched, 1);
+        assert!((c.predicted_win_pct - 66.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn long_trade_on_short_only_name_stays_unmatched() {
+        // Engine validates only the SHORT side of this name; a LONG trade has no
+        // eligible edge in its direction, so it must NOT be fabricated a prediction.
+        let mut idx = EdgeIndex::new();
+        idx.insert(
+            "MARSONS".to_string(),
+            vec![EligibleEdge { strategy: "orb_15m".into(), direction: Direction::Short, expectancy_r: 0.2, profit_factor: 1.4, win_pct: 58.0, n: 60, robustness: Robustness::default() }],
+        );
+        let c = build(&[entry("MARSONS", "Imported", "BUY", Some(-500.0))], &idx, None);
+        assert!(!c.available);
+        assert_eq!(c.n_matched, 0);
+    }
+
     #[test]
     fn unmatched_symbol_reports_honestly() {
         // A closed trade on a symbol not in the edge index ⇒ matched 0.
-        let c = build(&[entry("ZZZ", "vwap_cross", "BUY", Some(10.0))], &edge_index());
+        let c = build(&[entry("ZZZ", "vwap_cross", "BUY", Some(10.0))], &edge_index(), None);
         assert!(!c.available);
         assert_eq!(c.n_closed, 1);
-        assert!(c.note.contains("none matched"));
+        assert!(c.note.contains("none has an eligible"));
     }
 }

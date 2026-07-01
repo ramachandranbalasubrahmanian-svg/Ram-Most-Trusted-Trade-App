@@ -1706,12 +1706,19 @@ async fn journal_get_handler(State(state): State<AppState>) -> Response {
 async fn calibration_handler(State(state): State<AppState>) -> Response {
     let journal = state.journal.clone();
     let edges = state.edge_index.clone();
+    let root = state.root.clone();
     let cal = tokio::task::spawn_blocking(move || {
         let entries = {
             let conn = journal.lock().map_err(|_| ()).ok()?;
             crate::journal_sync::all_entries(&conn).ok()?
         };
-        Some(crate::calibration::build(&entries, &edges))
+        // Resolve imported company names → NSE tickers so the journal joins the
+        // edge map. Best-effort: a missing metadata parquet yields an empty
+        // resolver (raw-symbol fallback), never blocks the scorecard.
+        let resolver = crate::storage_kernel::open_conn()
+            .ok()
+            .map(|c| crate::symbol_resolver::SymbolResolver::load(&c, &root));
+        Some(crate::calibration::build(&entries, &edges, resolver.as_ref()))
     })
     .await
     .ok()
