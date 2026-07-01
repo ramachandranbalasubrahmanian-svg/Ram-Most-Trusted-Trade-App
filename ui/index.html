@@ -94,7 +94,9 @@
         <div class="flex items-center gap-2">
           <button id="budMinus" class="h-8 w-8 shrink-0 rounded-md border border-slate-700 bg-slate-800/60 text-slate-300 text-lg leading-none hover:bg-slate-700 active:scale-95 transition">−</button>
           <div class="flex-1 text-center">
-            <span id="budgetVal" class="num text-xl font-bold text-slate-100">₹5,00,000</span>
+            <input id="budgetVal" type="text" inputmode="numeric" title="Click to type your budget"
+                   class="num text-xl font-bold text-slate-100 bg-transparent text-center w-full rounded outline-none cursor-text hover:bg-slate-800/40 focus:bg-slate-800/60 focus:ring-1 focus:ring-sky-500/60"
+                   value="₹5,00,000" />
           </div>
           <button id="budPlus" class="h-8 w-8 shrink-0 rounded-md border border-slate-700 bg-slate-800/60 text-slate-300 text-lg leading-none hover:bg-slate-700 active:scale-95 transition">+</button>
         </div>
@@ -108,7 +110,9 @@
       <div class="lg:col-span-3 rounded-lg border border-slate-800 bg-[#0d1320] p-3">
         <div class="flex items-center justify-between mb-2">
           <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Risk / Trade</span>
-          <span id="riskVal" class="num text-xl font-bold text-amber-300">1%</span>
+          <input id="riskVal" type="text" inputmode="decimal" title="Click to type risk %"
+                 class="num text-xl font-bold text-amber-300 bg-transparent text-right w-16 rounded outline-none cursor-text hover:bg-slate-800/40 focus:bg-slate-800/60 focus:ring-1 focus:ring-amber-500/60"
+                 value="1%" />
         </div>
         <input id="riskRange" type="range" class="w-full mt-1" min="1" max="7" step="0.25" value="1" />
         <div class="flex justify-between text-[9px] text-slate-600 num mt-1">
@@ -445,9 +449,10 @@
     }
 
     function renderControls() {
-      els.budgetVal.textContent = rupee(state.budget);
+      // Don't overwrite an input the user is actively typing in.
+      if (document.activeElement !== els.budgetVal) els.budgetVal.value = rupee(state.budget);
       if (els.budgetRange.value !== String(state.budget)) els.budgetRange.value = state.budget;
-      els.riskVal.textContent = state.riskPctInt + "%";
+      if (document.activeElement !== els.riskVal) els.riskVal.value = state.riskPctInt + "%";
       if (els.riskRange.value !== String(state.riskPctInt)) els.riskRange.value = state.riskPctInt;
       els.riskAmt.textContent = rupee(state.budget * state.riskPctInt / 100);
       if (typeof runCalc === "function") runCalc(); // keep the edge calculator's ₹ figure in sync
@@ -893,7 +898,7 @@
     els.budgetRange.addEventListener("input", function () {
       userEditing = true;
       state.budget = clampBudget(els.budgetRange.value);
-      els.budgetVal.textContent = rupee(state.budget);
+      els.budgetVal.value = rupee(state.budget);
       els.riskAmt.textContent = rupee(state.budget * state.riskPctInt / 100);
     });
     els.budgetRange.addEventListener("change", function () {
@@ -904,12 +909,56 @@
     els.riskRange.addEventListener("input", function () {
       userEditing = true;
       state.riskPctInt = clampRiskInt(els.riskRange.value);
-      els.riskVal.textContent = state.riskPctInt + "%";
+      els.riskVal.value = state.riskPctInt + "%";
       els.riskAmt.textContent = rupee(state.budget * state.riskPctInt / 100);
     });
     els.riskRange.addEventListener("change", function () {
       userEditing = false;
       commitRisk(els.riskRange.value);
+    });
+
+    // --- Type directly into the Budget field (updates slider + risk amount live) ---
+    els.budgetVal.addEventListener("focus", function () {
+      userEditing = true;
+      els.budgetVal.value = String(state.budget); // raw number, easy to overwrite
+      els.budgetVal.select();
+    });
+    els.budgetVal.addEventListener("input", function () {
+      userEditing = true;
+      var raw = els.budgetVal.value.replace(/[^0-9]/g, "");
+      if (raw === "") return;
+      state.budget = clampBudget(parseInt(raw, 10));
+      if (els.budgetRange.value !== String(state.budget)) els.budgetRange.value = state.budget;
+      els.riskAmt.textContent = rupee(state.budget * state.riskPctInt / 100);
+    });
+    els.budgetVal.addEventListener("blur", function () {
+      userEditing = false;
+      commitBudget(state.budget); // clamps to step, re-formats to ₹, syncs server
+    });
+    els.budgetVal.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); els.budgetVal.blur(); }
+    });
+
+    // --- Type directly into the Risk % field ---
+    els.riskVal.addEventListener("focus", function () {
+      userEditing = true;
+      els.riskVal.value = String(state.riskPctInt);
+      els.riskVal.select();
+    });
+    els.riskVal.addEventListener("input", function () {
+      userEditing = true;
+      var raw = els.riskVal.value.replace(/[^0-9.]/g, "");
+      if (raw === "" || raw === ".") return;
+      state.riskPctInt = clampRiskInt(parseFloat(raw));
+      if (els.riskRange.value !== String(state.riskPctInt)) els.riskRange.value = state.riskPctInt;
+      els.riskAmt.textContent = rupee(state.budget * state.riskPctInt / 100);
+    });
+    els.riskVal.addEventListener("blur", function () {
+      userEditing = false;
+      commitRisk(state.riskPctInt); // clamps to [1,7]/0.25, re-formats to N%, syncs server
+    });
+    els.riskVal.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); els.riskVal.blur(); }
     });
 
     // ----------------------------------------------------------------
