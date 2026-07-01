@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RAM ISTP · Quick Picks</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0a0e14; color: #e2e8f0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+  a { color: #38bdf8; text-decoration: none; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid #1e293b; flex-wrap: wrap; }
+  header .title { font-weight: 700; font-size: 15px; letter-spacing: .3px; }
+  nav a { font-size: 12px; color: #94a3b8; margin-right: 12px; }
+  nav a:hover { color: #e2e8f0; }
+  main { max-width: 1040px; margin: 0 auto; padding: 20px; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: end; background: #0d1320; border: 1px solid #1e293b; border-radius: 10px; padding: 16px; }
+  .controls label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: #64748b; margin-bottom: 4px; }
+  .controls input { width: 100%; background: #0a0e14; border: 1px solid #334155; border-radius: 8px; color: #f1f5f9; padding: 8px 10px; font-size: 15px; font-weight: 600; outline: none; }
+  .controls input:focus { border-color: #38bdf8; }
+  .controls .target { display: flex; gap: 6px; align-items: center; }
+  .controls .target input { text-align: right; }
+  button { background: #0ea5e9; color: #04121e; border: 0; border-radius: 8px; padding: 9px 18px; font-weight: 700; font-size: 14px; cursor: pointer; }
+  button:hover { background: #38bdf8; }
+  button:disabled { opacity: .5; cursor: default; }
+  .banner { margin: 16px 0; padding: 12px 14px; border-radius: 8px; font-size: 13px; border: 1px solid; }
+  .banner.reasonable { background: #052e1a; border-color: #14532d; color: #86efac; }
+  .banner.aggressive { background: #2e2205; border-color: #713f12; color: #fcd34d; }
+  .banner.unrealistic { background: #2e0a0a; border-color: #7f1d1d; color: #fca5a5; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .col h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; margin: 0 0 8px; }
+  .col.buy h2 { color: #34d399; }
+  .col.sell h2 { color: #f87171; }
+  table { width: 100%; border-collapse: collapse; background: #0d1320; border: 1px solid #1e293b; border-radius: 10px; overflow: hidden; }
+  th, td { padding: 8px 9px; text-align: right; font-size: 13px; border-bottom: 1px solid #16202e; }
+  th { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; background: #0b111c; }
+  th:first-child, td:first-child { text-align: left; }
+  tr:last-child td { border-bottom: 0; }
+  .sym { font-weight: 700; color: #f1f5f9; }
+  .strat { font-size: 10px; color: #64748b; }
+  .flag { display: inline-block; margin-top: 2px; font-size: 9px; font-weight: 700; letter-spacing: .04em; color: #fbbf24; background: #2e2205; border: 1px solid #713f12; border-radius: 4px; padding: 1px 5px; }
+  .warnbar { margin: 12px 0; padding: 10px 12px; border-radius: 8px; font-size: 12px; background: #2e2205; border: 1px solid #713f12; color: #fcd34d; }
+  .win { font-weight: 800; }
+  .win.hi { color: #34d399; } .win.mid { color: #fcd34d; } .win.lo { color: #94a3b8; }
+  .empty { color: #64748b; font-size: 12px; padding: 14px; text-align: center; }
+  .caveat { margin-top: 20px; font-size: 11px; color: #64748b; line-height: 1.6; border-top: 1px solid #1e293b; padding-top: 12px; }
+  .sub { font-size: 11px; color: #64748b; margin-top: 4px; }
+  .err { color: #fca5a5; font-size: 13px; margin-top: 12px; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="title">RAM ISTP · Quick Picks</span>
+    <nav>
+      <a href="/">Backtested</a>
+      <a href="/intraday">Intraday</a>
+      <a href="/desk">Desk</a>
+      <a href="/live_trade_plan">Trade Plan</a>
+      <a href="/picks">Picks</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="controls">
+      <div>
+        <label>Capital (₹)</label>
+        <input id="capital" type="text" inputmode="numeric" value="5,00,000" />
+      </div>
+      <div>
+        <label>Risk / trade (%)</label>
+        <input id="risk" type="text" inputmode="decimal" value="2" />
+      </div>
+      <div>
+        <label>Target — grow from → to (₹)</label>
+        <div class="target">
+          <input id="tfrom" type="text" inputmode="numeric" placeholder="5,000" />
+          <span style="color:#64748b">→</span>
+          <input id="tto" type="text" inputmode="numeric" placeholder="2,00,000" />
+        </div>
+      </div>
+      <div>
+        <button id="go">Get picks</button>
+      </div>
+    </div>
+
+    <div id="targetBanner"></div>
+    <div id="tradWarn"></div>
+    <div id="err" class="err"></div>
+
+    <div class="grid">
+      <div class="col buy">
+        <h2>▲ Top 5 to BUY</h2>
+        <table>
+          <thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Target</th><th>Stop</th><th>Win</th></tr></thead>
+          <tbody id="buyBody"><tr><td class="empty" colspan="6">Enter capital + risk, then “Get picks”.</td></tr></tbody>
+        </table>
+      </div>
+      <div class="col sell">
+        <h2>▼ Top 5 to SELL</h2>
+        <table>
+          <thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Target</th><th>Stop</th><th>Win</th></tr></thead>
+          <tbody id="sellBody"><tr><td class="empty" colspan="6">—</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="caveat" class="caveat"></div>
+  </main>
+
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  function digits(s) { return (String(s).replace(/[^0-9.]/g, "")); }
+  function inr(n) { if (n == null || isNaN(n)) return "—"; return "₹" + Math.round(n).toLocaleString("en-IN"); }
+  function px(n) { if (n == null || isNaN(n)) return "—"; return "₹" + Number(n).toFixed(2); }
+  function fmtInput(el) { var v = digits(el.value); if (v === "") return; el.value = Number(v).toLocaleString("en-IN"); }
+
+  ["capital", "tfrom", "tto"].forEach(function (id) {
+    $(id).addEventListener("blur", function () { fmtInput(this); });
+  });
+
+  function winCell(w) {
+    var cls = w >= 6 ? "hi" : (w >= 5 ? "mid" : "lo");
+    return '<span class="win ' + cls + '">' + w + '/10</span>';
+  }
+
+  function rowHtml(p) {
+    var flag = p.tradability_note ? '<div class="flag">⚠ ' + p.tradability_note + '</div>' : '';
+    return '<tr>' +
+      '<td><div class="sym">' + p.symbol + '</div><div class="strat">' + p.strategy + ' · ' + p.interval + '</div>' + flag + '</td>' +
+      '<td class="num">' + p.qty + '</td>' +
+      '<td class="num">' + px(p.entry) + '</td>' +
+      '<td class="num" style="color:#34d399">' + px(p.target) + '</td>' +
+      '<td class="num" style="color:#f87171">' + px(p.stop_loss) + '</td>' +
+      '<td class="num">' + winCell(p.win_out_of_10) + '</td>' +
+      '</tr>';
+  }
+
+  function renderList(tbodyId, picks) {
+    var tb = $(tbodyId);
+    if (!picks || !picks.length) { tb.innerHTML = '<tr><td class="empty" colspan="6">No pick clears tradability + cost floor right now.</td></tr>'; return; }
+    tb.innerHTML = picks.map(rowHtml).join("");
+  }
+
+  function renderTarget(t) {
+    var b = $("targetBanner");
+    if (!t) { b.innerHTML = ""; return; }
+    b.className = "banner " + (t.realism || "aggressive");
+    b.innerHTML = "<b>Target " + inr(t.from) + " → " + inr(t.to) + " (" + t.multiple.toFixed(1) + "×) — " + t.realism.toUpperCase() + ".</b> " + t.note;
+  }
+
+  function load() {
+    var capital = digits($("capital").value) || "500000";
+    var risk = digits($("risk").value) || "2";
+    var tfrom = digits($("tfrom").value) || "0";
+    var tto = digits($("tto").value) || "0";
+    $("err").textContent = "";
+    $("go").disabled = true; $("go").textContent = "Loading…";
+    var url = "/api/picks?capital=" + capital + "&risk=" + risk + "&target_from=" + tfrom + "&target_to=" + tto;
+    fetch(url).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (d) {
+        renderTarget(d.target);
+        var tw = $("tradWarn");
+        if (d.tradability_verified === false) {
+          tw.className = "warnbar";
+          tw.textContent = "⚠ Tradability NOT verified (data still loading) — these picks were not screened for T2T / ASM / GSM or liquidity. Verify each name manually before trading.";
+        } else { tw.className = ""; tw.textContent = ""; }
+        renderList("buyBody", d.top_buy);
+        renderList("sellBody", d.top_sell);
+        $("caveat").textContent = "⚠ " + (d.caveat || "");
+      })
+      .catch(function (e) { $("err").textContent = "Couldn't load picks: " + e.message + " (is the finder warm? try again in a moment)"; })
+      .finally(function () { $("go").disabled = false; $("go").textContent = "Get picks"; });
+  }
+
+  $("go").addEventListener("click", load);
+  ["capital", "risk", "tfrom", "tto"].forEach(function (id) {
+    $(id).addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
+  });
+  load();
+</script>
+</body>
+</html>

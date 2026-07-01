@@ -96,6 +96,8 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/regime", get(regime_handler))
         // --- Trading Desk ---
         .route("/desk", get(desk_handler))
+        .route("/picks", get(picks_page_handler))
+        .route("/api/picks", get(picks_handler))
         .route("/api/freeze", get(freeze_get_handler))
         .route("/api/signal_freeze", post(signal_freeze_handler))
         .route("/api/session_governor", get(session_governor_handler))
@@ -893,6 +895,75 @@ fn parse_tier(s: &str) -> crate::config::RiskTier {
         "Aggressive" => crate::config::RiskTier::Aggressive,
         _ => crate::config::RiskTier::Moderate,
     }
+}
+
+/// `GET /picks` — the minimal "top-5 buy / top-5 sell" page.
+async fn picks_page_handler(State(state): State<AppState>) -> Response {
+    let path = state.static_dir.join("picks.html");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("could not read {}: {e}", path.display())).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PicksQuery {
+    capital: f64,
+    /// Risk per trade, in PERCENT (e.g. 2.0 = 2%).
+    risk: f64,
+    #[serde(default)]
+    target_from: f64,
+    #[serde(default)]
+    target_to: f64,
+}
+
+/// `GET /api/picks?capital=&risk=&target_from=&target_to=` — the smallest actionable
+/// answer: top 5 buy + top 5 sell for the owner's capital + risk%, each with qty /
+/// entry / target / stop / backtested win-as-X/10, plus an HONEST target-feasibility
+/// readout. Reuses the Capital-Fit Finder (best backtested strategy per name),
+/// excludes tradability-blocked names and sub-cost-floor edges. Signals only — never
+/// an order, never feeds Confidence/the edge map. Position size stays at risk%, never
+/// scaled up to chase the target.
+async fn picks_handler(State(state): State<AppState>, Query(q): Query<PicksQuery>) -> Response {
+    // Sanitise: serde happily parses "NaN"/"inf" into f64 — never let those through.
+    let fin = |v: f64, dflt: f64| if v.is_finite() { v } else { dflt };
+    let capital = fin(q.capital, 500_000.0).clamp(50_000.0, 7_500_000.0);
+    let risk_pct = (fin(q.risk, 2.0) / 100.0).clamp(0.0025, 0.07);
+    let target_from = fin(q.target_from, 0.0).max(0.0);
+    let target_to = fin(q.target_to, 0.0).clamp(0.0, 1.0e12);
+    let root = state.root.clone();
+
+    // Reuse the finder's warm (capital × risk)-keyed cache — same as staging.
+    let slot = state.finder.slot(CapRiskKey::new(capital, risk_pct));
+    let compute = {
+        let root = root.clone();
+        move || {
+            let symbols = crate::storage_kernel::discover_symbols(&root).unwrap_or_default();
+            Some(crate::suggestion_engine::find_capital_fit(&root, &symbols, capital, risk_pct))
+        }
+    };
+    let fit = match read_through(slot, "picks", compute, |r: &FinderResult| r.built_ist.clone()).await {
+        Some(f) => f,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, "picks finder failed").into_response(),
+    };
+
+    // Full per-symbol tradability (verdict + reason) so thin high_risk/caution names
+    // are inline-flagged, not silently listed. Empty on a cold cache → build() marks
+    // the result tradability_verified=false and the UI warns to verify manually.
+    let trad_of: std::collections::HashMap<String, crate::picks::TradInfo> = state
+        .tradability
+        .lookup()
+        .value
+        .map(|t| {
+            t.by_symbol
+                .iter()
+                .map(|(s, r)| (s.clone(), crate::picks::TradInfo { verdict: r.verdict.clone(), reason: r.reason.clone() }))
+                .collect()
+        })
+        .unwrap_or_default();
+    let cost_pct = crate::costs::backtest_roundtrip_pct();
+    let result = crate::picks::build(&fit.rows, capital, risk_pct, target_from, target_to, &trad_of, cost_pct);
+    Json(result).into_response()
 }
 
 /// `GET /api/staging?risk=Moderate` — Top 5 Long / Short staged Bracket Orders,
