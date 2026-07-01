@@ -224,6 +224,10 @@ pub const DRAWDOWN_FREEZE_PCT: f64 = 0.02;
 pub const MAX_TRADES_PER_DAY: usize = 5;
 pub const MAX_CONSECUTIVE_LOSSES: usize = 3;
 
+/// Style-validation universe ceiling: market cap below this (₹) counts as the
+/// "small/mid-cap" book the owner actually trades. ₹20,000 Cr (1 Cr = 1e7 ₹).
+pub const SMALLCAP_MCAP_MAX_INR: f64 = 20_000.0 * 1e7;
+
 /// ATR multiple for the SEBI-compliance limit buffer: `limit = LTP ± ATR×0.1`.
 pub const STAGING_LIMIT_ATR_MULT: f64 = 0.1;
 

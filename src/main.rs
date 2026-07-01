@@ -47,6 +47,7 @@ mod session_governor;
 mod stats;
 mod storage_kernel;
 mod strategy_engine;
+mod style_validation;
 mod suggestion_engine;
 mod swing_analyzer;
 mod symbol_resolver;

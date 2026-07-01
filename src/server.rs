@@ -99,6 +99,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/api/freeze", get(freeze_get_handler))
         .route("/api/signal_freeze", post(signal_freeze_handler))
         .route("/api/session_governor", get(session_governor_handler))
+        .route("/api/style_validation", get(style_validation_handler))
         .route("/api/staging", get(staging_handler))
         .route("/api/swing", get(swing_handler))
         .route("/api/portfolio", get(portfolio_handler))
@@ -807,6 +808,32 @@ async fn session_governor_handler(State(state): State<AppState>) -> Response {
     match g {
         Some(x) => Json(x).into_response(),
         None => (StatusCode::INTERNAL_SERVER_ERROR, "session governor failed").into_response(),
+    }
+}
+
+/// `GET /api/style_validation` — does the book the owner actually trades (LONG ×
+/// momentum/breakout family × small-cap universe) have a validated cost-net edge, or
+/// were the wins luck? Aggregates the live edge index through that lens. Display-only
+/// with a mandatory survivorship caveat; never a buy signal, never feeds the score.
+async fn style_validation_handler(State(state): State<AppState>) -> Response {
+    let edges = state.edge_index.clone();
+    let trad = state.tradability.lookup().value;
+    let report = tokio::task::spawn_blocking(move || {
+        let mcap_of: std::collections::HashMap<String, f64> = match trad {
+            Some(t) => t
+                .by_symbol
+                .iter()
+                .filter_map(|(s, r)| r.market_cap_inr.map(|m| (s.clone(), m)))
+                .collect(),
+            None => std::collections::HashMap::new(),
+        };
+        crate::style_validation::build(&edges, &mcap_of, crate::config::SMALLCAP_MCAP_MAX_INR)
+    })
+    .await
+    .ok();
+    match report {
+        Some(r) => Json(r).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "style validation failed").into_response(),
     }
 }
 
