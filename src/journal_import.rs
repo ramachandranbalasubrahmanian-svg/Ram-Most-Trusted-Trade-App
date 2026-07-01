@@ -443,9 +443,14 @@ pub fn to_journal_entry(t: &TradeRow, now_ist: &str) -> Result<JournalEntry, Str
             _ => return Err(format!("{}: no P&L and not enough price/qty to compute one", t.symbol)),
         },
     };
+    // Char-safe first-10 (YYYY-MM-DD) — a byte slice `&s[..10]` panics when a
+    // malformed date cell has a multibyte char straddling byte 10, which would
+    // discard the whole import batch instead of degrading (invariant #5). Matches
+    // the safe pattern already used in `dedup_key`.
+    let head10 = |s: &str| -> String { s.chars().take(10).collect() };
     let stamp = |d: &Option<String>| -> String {
         match d {
-            Some(s) if s.len() >= 10 => format!("{} 00:00:00", &s[..10]),
+            Some(s) if s.chars().count() >= 10 => format!("{} 00:00:00", head10(s)),
             Some(s) if !s.is_empty() => s.clone(),
             _ => now_ist.to_string(),
         }
@@ -462,8 +467,8 @@ pub fn to_journal_entry(t: &TradeRow, now_ist: &str) -> Result<JournalEntry, Str
                     s.replace('T', " ")
                 } else if s.len() >= 10 && s.contains('-') {
                     s.to_string()
-                } else if let Some(d) = t.date.as_ref().filter(|d| d.len() >= 10) {
-                    format!("{} {}", &d[..10], s)
+                } else if let Some(d) = t.date.as_ref().filter(|d| d.chars().count() >= 10) {
+                    format!("{} {}", head10(d), s)
                 } else {
                     s.to_string()
                 }
@@ -613,6 +618,19 @@ mod tests {
         let e = to_journal_entry(&rows[0], "now").unwrap();
         assert!((e.slippage.unwrap() - 0.50).abs() < 1e-9, "slippage={:?}", e.slippage);
         assert!((e.intended_price - 100.00).abs() < 1e-9);
+    }
+
+    #[test]
+    fn malformed_multibyte_date_does_not_panic() {
+        // A garbage date cell with a multibyte char straddling byte 10 used to panic
+        // the whole import (byte slice &s[..10]); it must now degrade gracefully.
+        let csv = "symbol,pnl,date,entry time\nSBIN,500,1234abcdeé,09:45\n".as_bytes();
+        let (rows, _) = parse_trades_csv(csv);
+        assert_eq!(rows.len(), 1);
+        // Must not panic; the entry is still produced (honest degradation).
+        let e = to_journal_entry(&rows[0], "2026-06-30 21:00:00").unwrap();
+        assert_eq!(e.pnl, Some(500.0));
+        assert!(e.entry_ist.is_some() && e.exit_ist.is_some());
     }
 
     #[test]

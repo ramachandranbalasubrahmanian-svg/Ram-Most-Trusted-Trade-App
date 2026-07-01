@@ -43,12 +43,15 @@ pub struct ExitVerdict {
 /// * `notional` — order value in ₹ (qty × entry), for the participation check.
 /// * `lower_circuit` / `upper_circuit` — today's band from a LIVE quote; `None` when
 ///   no live quote is available.
-/// * `intraday_ok` — tradability verdict (`Some(false)` ⇒ MIS may be rejected).
+/// * `tradability_verdict` — the engine's tradability verdict for this name:
+///   "blocked" (T2T / ASM / GSM ⇒ MIS may be rejected) | "high_risk" | "caution" |
+///   "ok"; `None` when unknown. `tradability_reason` is its one-line explanation.
 /// * `turnover_inr` — the name's median daily turnover in ₹; `None` if unknown.
 /// * `participation_cap_pct` — max exit as % of daily turnover before it's a caution.
 ///
 /// Verdict precedence (highest-consequence first): blocked → unreachable_stop →
-/// caution (participation) → unknown (no circuit data) → ok.
+/// caution (participation) → caution (elevated-risk name) → unknown (no circuit
+/// data) → ok. A name the engine flags high_risk/caution NEVER returns a clean "ok".
 #[allow(clippy::too_many_arguments)]
 pub fn assess_exit(
     side: &str,
@@ -57,7 +60,8 @@ pub fn assess_exit(
     notional: f64,
     lower_circuit: Option<f64>,
     upper_circuit: Option<f64>,
-    intraday_ok: Option<bool>,
+    tradability_verdict: Option<&str>,
+    tradability_reason: Option<&str>,
     turnover_inr: Option<f64>,
     participation_cap_pct: f64,
 ) -> ExitVerdict {
@@ -90,12 +94,14 @@ pub fn assess_exit(
         participation_pct,
     };
 
-    // 1) Hard block — intraday/MIS not allowed on this name.
-    if intraday_ok == Some(false) {
+    // 1) Hard block — intraday/MIS not allowed on this name (T2T / surveillance).
+    if tradability_verdict == Some("blocked") {
         return mk(
             "blocked",
             "danger",
-            "Intraday/MIS may be rejected (T2T / ASM / GSM surveillance) — verify on NSE before sizing; this may be delivery-only.".to_string(),
+            tradability_reason.map(str::to_string).unwrap_or_else(|| {
+                "Intraday/MIS may be rejected (T2T / ASM / GSM surveillance) — verify on NSE before sizing; this may be delivery-only.".to_string()
+            }),
         );
     }
 
@@ -126,6 +132,19 @@ pub fn assess_exit(
         }
     }
 
+    // 3b) Elevated-risk name — the engine flags it high_risk/caution (very thin
+    //     liquidity, micro-cap, low-priced) even though MIS is allowed. Never emit a
+    //     clean "ok" over such a name; surface the tradability reason.
+    if matches!(tradability_verdict, Some("high_risk") | Some("caution")) {
+        return mk(
+            "caution",
+            "warn",
+            tradability_reason.map(str::to_string).unwrap_or_else(|| {
+                "The engine flags this name as elevated-risk (thin liquidity / micro-cap / low-priced) — intraday exits can be unreliable; size down and verify depth.".to_string()
+            }),
+        );
+    }
+
     // 4) Unknown — no live circuit data, so reachability can't be confirmed.
     if stop_inside_band.is_none() {
         return mk(
@@ -150,7 +169,7 @@ mod tests {
     // A comfortable long: entry 100, stop 98, band at 90 (stop well inside), thin-free.
     #[test]
     fn long_stop_inside_band_is_ok() {
-        let v = assess_exit("BUY", 100.0, 98.0, 10_000.0, Some(90.0), Some(110.0), Some(true), Some(1_000_000.0), 1.0);
+        let v = assess_exit("BUY", 100.0, 98.0, 10_000.0, Some(90.0), Some(110.0), Some("ok"), None, Some(1_000_000.0), 1.0);
         assert_eq!(v.verdict, "ok");
         assert_eq!(v.stop_inside_band, Some(true));
         assert!(v.circuit_room_pct.is_some());
@@ -159,7 +178,7 @@ mod tests {
     #[test]
     fn long_stop_beyond_lower_circuit_is_unreachable() {
         // Stop 88 is BELOW the lower circuit 90 → if it falls to 90 it locks first.
-        let v = assess_exit("BUY", 100.0, 88.0, 10_000.0, Some(90.0), Some(110.0), Some(true), Some(1_000_000.0), 1.0);
+        let v = assess_exit("BUY", 100.0, 88.0, 10_000.0, Some(90.0), Some(110.0), Some("ok"), None, Some(1_000_000.0), 1.0);
         assert_eq!(v.verdict, "unreachable_stop");
         assert_eq!(v.severity, "danger");
         assert_eq!(v.stop_inside_band, Some(false));
@@ -168,7 +187,7 @@ mod tests {
     #[test]
     fn short_stop_beyond_upper_circuit_is_unreachable() {
         // Short: stop 112 is ABOVE the upper circuit 110 → unreachable on a lock.
-        let v = assess_exit("SELL", 100.0, 112.0, 10_000.0, Some(90.0), Some(110.0), Some(true), Some(1_000_000.0), 1.0);
+        let v = assess_exit("SELL", 100.0, 112.0, 10_000.0, Some(90.0), Some(110.0), Some("ok"), None, Some(1_000_000.0), 1.0);
         assert_eq!(v.verdict, "unreachable_stop");
         assert_eq!(v.stop_inside_band, Some(false));
     }
@@ -176,21 +195,31 @@ mod tests {
     #[test]
     fn blocked_takes_precedence_over_unreachable_stop() {
         // Not intraday-eligible AND an unreachable stop → block wins (most severe).
-        let v = assess_exit("BUY", 100.0, 88.0, 10_000.0, Some(90.0), Some(110.0), Some(false), Some(1_000_000.0), 1.0);
+        let v = assess_exit("BUY", 100.0, 88.0, 10_000.0, Some(90.0), Some(110.0), Some("blocked"), Some("T2T — delivery only"), Some(1_000_000.0), 1.0);
         assert_eq!(v.verdict, "blocked");
+        assert!(v.reason.contains("T2T"));
     }
 
     #[test]
     fn high_participation_is_a_caution() {
         // Exit ₹50k on a name doing ₹1L/day = 50% participation, cap 1%.
-        let v = assess_exit("BUY", 100.0, 98.0, 50_000.0, Some(90.0), Some(110.0), Some(true), Some(100_000.0), 1.0);
+        let v = assess_exit("BUY", 100.0, 98.0, 50_000.0, Some(90.0), Some(110.0), Some("ok"), None, Some(100_000.0), 1.0);
         assert_eq!(v.verdict, "caution");
         assert!((v.participation_pct.unwrap() - 50.0).abs() < 1e-9);
     }
 
     #[test]
+    fn high_risk_name_never_returns_clean_ok() {
+        // Stop inside band, tiny participation, live circuit present — but the engine
+        // flags the name high_risk (very thin liquidity). Must downgrade ok → caution.
+        let v = assess_exit("BUY", 100.0, 98.0, 5_000.0, Some(90.0), Some(110.0), Some("high_risk"), Some("Very thin liquidity — you may be unable to exit intraday."), Some(10_000_000.0), 1.0);
+        assert_eq!(v.verdict, "caution");
+        assert!(v.reason.contains("thin"));
+    }
+
+    #[test]
     fn unknown_when_no_live_circuit() {
-        let v = assess_exit("BUY", 100.0, 98.0, 10_000.0, None, None, Some(true), Some(1_000_000.0), 1.0);
+        let v = assess_exit("BUY", 100.0, 98.0, 10_000.0, None, None, Some("ok"), None, Some(1_000_000.0), 1.0);
         assert_eq!(v.verdict, "unknown");
         assert_eq!(v.stop_inside_band, None);
     }
@@ -198,7 +227,7 @@ mod tests {
     #[test]
     fn unreachable_beats_participation() {
         // Both an unreachable stop and heavy participation → the stop (danger) wins.
-        let v = assess_exit("BUY", 100.0, 88.0, 50_000.0, Some(90.0), Some(110.0), Some(true), Some(100_000.0), 1.0);
+        let v = assess_exit("BUY", 100.0, 88.0, 50_000.0, Some(90.0), Some(110.0), Some("ok"), None, Some(100_000.0), 1.0);
         assert_eq!(v.verdict, "unreachable_stop");
     }
 }

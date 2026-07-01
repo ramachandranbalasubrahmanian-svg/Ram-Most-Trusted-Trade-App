@@ -1586,15 +1586,17 @@ async fn exit_guard_handler(State(state): State<AppState>, Query(q): Query<ExitG
     if !valid_nse_symbol(&sym) {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid symbol"}))).into_response();
     }
-    // Tradability + daily turnover from the warm cache (no recompute; None if the
-    // cache isn't warmed or the name is absent).
-    let (intraday_ok, turnover) = state
+    // Tradability verdict + reason + daily turnover from the warm cache (no
+    // recompute; None if the cache isn't warmed or the name is absent). The full
+    // verdict (not just intraday_ok) matters: a high_risk/caution thin name is
+    // MIS-allowed yet must never earn a clean "ok" from the guard.
+    let (trad_verdict, trad_reason, turnover) = state
         .tradability
         .lookup()
         .value
         .and_then(|t| t.by_symbol.get(&sym).cloned())
-        .map(|t| (Some(t.intraday_ok), Some(t.median_turnover_inr)))
-        .unwrap_or((None, None));
+        .map(|t| (Some(t.verdict), Some(t.reason), Some(t.median_turnover_inr)))
+        .unwrap_or((None, None, None));
 
     // Live circuit band (best-effort): needs a valid token + a reachable Kite quote.
     let (lower, upper) = match crate::kite_quote::read_token(&state.root) {
@@ -1615,7 +1617,8 @@ async fn exit_guard_handler(State(state): State<AppState>, Query(q): Query<ExitG
         notional,
         lower,
         upper,
-        intraday_ok,
+        trad_verdict.as_deref(),
+        trad_reason.as_deref(),
         turnover,
         crate::config::LIQUIDITY_PARTICIPATION_CAP * 100.0,
     );
