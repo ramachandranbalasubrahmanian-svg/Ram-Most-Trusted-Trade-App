@@ -57,7 +57,7 @@ pub fn evaluate(
 ) -> GovernorState {
     let today10: String = today.chars().take(10).collect();
 
-    // Today's TRACKED (manually-accepted) trades, chronological by id.
+    // Today's TRACKED (manually-accepted) trades.
     let mut todays: Vec<&JournalEntry> = entries
         .iter()
         .filter(|e| SignalState::from_str(&e.state) == SignalState::ManuallyAccepted)
@@ -66,7 +66,12 @@ pub fn evaluate(
                 || date10(&e.exit_ist).as_deref() == Some(&today10)
         })
         .collect();
-    todays.sort_by_key(|e| e.id);
+    // Order by EXIT time (fall back to id) so the consecutive-loss streak reflects
+    // true close order — an imported tradebook can be inserted out of exit-order,
+    // and `id` is only insertion order, not chronology.
+    todays.sort_by(|a, b| {
+        (a.exit_ist.as_deref().unwrap_or(""), a.id).cmp(&(b.exit_ist.as_deref().unwrap_or(""), b.id))
+    });
 
     let trades_today = todays.len();
     let closed: Vec<&&JournalEntry> = todays.iter().filter(|e| e.pnl.is_some()).collect();
@@ -237,6 +242,28 @@ mod tests {
         let g = evaluate(&es, 1_000_000.0, "2026-07-01", &limits());
         assert_eq!(g.consecutive_losses, 0);
         assert_ne!(g.verdict, "closed");
+    }
+
+    #[test]
+    fn consecutive_losses_use_exit_time_not_id() {
+        // Imported out of order: ids don't match exit chronology. True order by exit
+        // is Win 10:00, Loss 11:00, Loss 12:00, Loss 13:00 → the day ends on a
+        // 3-loss streak. With the old id-sort the win (highest id) landed last and
+        // masked the streak (false "open"); by exit time it must read "closed".
+        let mk = |id: i64, exit_hh: &str, pnl: f64| {
+            let mut t = trade(id, "2026-07-01", Some(pnl));
+            t.exit_ist = Some(format!("2026-07-01 {exit_hh}:00:00"));
+            t
+        };
+        let es = vec![
+            mk(1, "11", -10.0),
+            mk(2, "12", -10.0),
+            mk(3, "13", -10.0),
+            mk(4, "10", 50.0), // won FIRST (10:00) but has the highest id
+        ];
+        let g = evaluate(&es, 1_000_000.0, "2026-07-01", &limits());
+        assert_eq!(g.consecutive_losses, 3);
+        assert_eq!(g.verdict, "closed");
     }
 
     #[test]

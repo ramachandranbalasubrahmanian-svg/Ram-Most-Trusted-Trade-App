@@ -119,12 +119,15 @@ pub fn build(edges: &EdgeIndex, mcap_of: &HashMap<String, f64>, smallcap_max_mca
         "NO validated long-momentum edge in the small-cap universe. The engine finds ZERO eligible long edges in this family (net of cost). Long small-cap/SME/IPO momentum is not a repeatable edge here — wins are regime/luck, not proof.".to_string()
     } else if coverage < 0.05 {
         format!(
-            "THIN, NAME-SPECIFIC edge only: {names_with_edge} of {smallcap_universe} small-caps ({:.1}%) carry an eligible long-momentum edge (median exp {median_expectancy_r:+.2}R). NOT a broad validated style — don't assume your NEXT pick has it; verify it's one of these names.",
+            "THIN, NAME-SPECIFIC edge only: {names_with_edge} of {smallcap_universe} small-caps ({:.1}%) carry an eligible long-momentum edge (median exp {median_expectancy_r:+.2}R). NOT a broad validated style — don't assume your NEXT pick has it; verify it's one of these names. Survivorship-optimistic: delisted blow-ups are absent.",
             coverage * 100.0
         )
     } else {
+        // Even at higher coverage this is name-specific survivor selection, not a
+        // style property — keep the wording non-directive and self-caveating (a UI
+        // may render `verdict` without the sibling `note`).
         format!(
-            "There IS a validated long-momentum edge in small-caps: {names_with_edge} of {smallcap_universe} names ({:.1}%), median exp {median_expectancy_r:+.2}R / PF {median_pf:.2}. Trade only names on this list, in this direction.",
+            "Name-specific long-momentum edge concentrated in {names_with_edge} of {smallcap_universe} survivors ({:.1}%), median exp {median_expectancy_r:+.2}R / PF {median_pf:.2}. NOT a broad style edge — it lives in these specific names; verify your pick is on this list before trading. Survivorship-optimistic: delisted blow-ups are absent.",
             coverage * 100.0
         )
     };
@@ -198,6 +201,10 @@ mod tests {
         assert!((r.median_expectancy_r - 0.20).abs() < 1e-9); // median of [0.10,0.20,0.30]
         assert_eq!(r.top[0].symbol, "SMALLA"); // strongest (0.30) first
         assert!(!r.top.iter().any(|e| e.symbol == "BIGCAP"));
+        // Even the affirmative branch must self-caveat (survivorship) and never
+        // assert a broad "validated style" or bare directive in the verdict itself.
+        assert!(r.verdict.contains("Survivorship"), "verdict lacks survivorship caveat: {}", r.verdict);
+        assert!(r.verdict.contains("NOT a broad"), "verdict over-claims: {}", r.verdict);
     }
 
     #[test]
