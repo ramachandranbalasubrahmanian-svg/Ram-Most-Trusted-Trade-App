@@ -12,7 +12,7 @@
 use crate::types::{JournalEntry, SignalState};
 
 /// A parsed trade row, before it becomes a `JournalEntry`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct TradeRow {
     pub symbol: String,
     /// Normalised "BUY" | "SELL".
@@ -25,6 +25,14 @@ pub struct TradeRow {
     /// Best-effort "YYYY-MM-DD".
     pub date: Option<String>,
     pub strategy: Option<String>,
+    /// Distinct entry/exit execution timestamps when the statement carries them
+    /// (raw string as parsed). Falls back to `date` for both when absent — which is
+    /// why an imported realized-P&L statement with no times shows entry == exit.
+    pub entry_time: Option<String>,
+    pub exit_time: Option<String>,
+    /// Intended / order (limit) price when present, so true slippage vs the fill can
+    /// be computed. Realized-P&L statements rarely carry it, so slippage stays None.
+    pub order_price: Option<f64>,
 }
 
 pub struct TradeImport {
@@ -122,15 +130,21 @@ struct ColMap {
     pnl: Option<usize>,
     date: Option<usize>,
     strategy: Option<usize>,
+    entry_time: Option<usize>,
+    exit_time: Option<usize>,
+    order_price: Option<usize>,
 }
 
 impl ColMap {
     /// How many trade-relevant columns this header resolved.
     fn resolved(&self) -> usize {
-        [self.sym, self.side, self.qty, self.entry, self.exit, self.pnl, self.date, self.strategy]
-            .iter()
-            .filter(|o| o.is_some())
-            .count()
+        [
+            self.sym, self.side, self.qty, self.entry, self.exit, self.pnl, self.date,
+            self.strategy, self.entry_time, self.exit_time, self.order_price,
+        ]
+        .iter()
+        .filter(|o| o.is_some())
+        .count()
     }
     /// A usable header has a symbol AND at least one outcome column (pnl, or both
     /// legs / enough to imply one).
@@ -154,21 +168,34 @@ fn header_map(rec: &csv::StringRecord) -> Option<ColMap> {
         }
         let is_pnl = n.contains("pnl") || n.contains("profit") || n.contains("realiz") || n.contains("realis")
             || n == "pl" || n == "pandl" || n == "netpl" || n == "netpnl";
-        let is_entry = !is_pnl
+        // Time columns must be classified BEFORE the price columns so "entry time" /
+        // "buy time" don't get mistaken for a buy PRICE.
+        let is_time = n.contains("time") && !n.contains("runtime");
+        let is_entry_time = is_time && (n.contains("entry") || n.contains("buy"));
+        let is_exit_time = is_time && (n.contains("exit") || n.contains("sell"));
+        let is_order_price = !is_pnl
+            && (n == "orderprice" || n == "limitprice" || n == "intendedprice"
+                || (n.contains("order") && n.contains("price")) || (n.contains("limit") && n.contains("price")));
+        let is_entry = !is_pnl && !is_time && !is_order_price
             && (n.contains("entry") || n == "buyprice" || n == "buyavg" || n == "avgbuy" || n == "avgbuyprice"
                 || n == "buyaverage" || n == "buyrate" || (n.contains("buy") && (n.contains("price") || n.contains("avg") || n.contains("rate"))));
-        let is_exit = !is_pnl
+        let is_exit = !is_pnl && !is_time && !is_order_price
             && (n.contains("exit") || n == "sellprice" || n == "sellavg" || n == "avgsell" || n == "avgsellprice"
                 || n == "sellaverage" || n == "sellrate" || (n.contains("sell") && (n.contains("price") || n.contains("avg") || n.contains("rate"))));
         let is_qty = n == "qty" || n.contains("quantity") || n == "shares" || n == "filledqty" || n == "tradedqty" || n == "qtytraded";
         let is_symbol = n.contains("symbol") || n == "tradingsymbol" || n == "scrip" || n == "scripname"
             || n == "stock" || n == "stockname" || n == "instrument" || n == "ticker" || n == "name";
-        let is_date = n.contains("date") || (n.contains("time") && !n.contains("runtime"));
+        let is_date = n.contains("date") || is_time;
         let is_strategy = n.contains("strateg") || n.contains("setup") || n.contains("remark") || n == "tag" || n.contains("note");
 
-        // Assign each role to the FIRST matching column only.
+        // Assign each role to the FIRST matching column only. Specific columns
+        // (order price, entry/exit time) are claimed before their generic cousins
+        // (price, date) so a richer statement maps its extra columns correctly.
         if is_symbol && cm.sym.is_none() { cm.sym = Some(i); continue; }
         if is_pnl && cm.pnl.is_none() { cm.pnl = Some(i); continue; }
+        if is_order_price && cm.order_price.is_none() { cm.order_price = Some(i); continue; }
+        if is_entry_time && cm.entry_time.is_none() { cm.entry_time = Some(i); continue; }
+        if is_exit_time && cm.exit_time.is_none() { cm.exit_time = Some(i); continue; }
         if is_entry && cm.entry.is_none() { cm.entry = Some(i); continue; }
         if is_exit && cm.exit.is_none() { cm.exit = Some(i); continue; }
         if is_qty && cm.qty.is_none() { cm.qty = Some(i); continue; }
@@ -353,13 +380,23 @@ fn parse_row(rec: &csv::StringRecord, cm: &ColMap, rownum: usize) -> Result<Trad
         let s = get(rec, cm.strategy);
         if s.is_empty() { None } else { Some(s.to_string()) }
     };
+    let opt_str = |idx: Option<usize>| {
+        let s = get(rec, idx);
+        if s.is_empty() { None } else { Some(s.to_string()) }
+    };
+    let entry_time = opt_str(cm.entry_time);
+    let exit_time = opt_str(cm.exit_time);
+    let order_price = parse_num(get(rec, cm.order_price)).filter(|p| *p > 0.0);
 
     if pnl.is_none() && !(entry_price.is_some() && exit_price.is_some()) {
         return Err(Some(format!(
             "row {rownum}: '{symbol}' has no P&L and not both buy+sell prices — skipped"
         )));
     }
-    Ok(TradeRow { symbol, direction, qty, entry_price, exit_price, pnl, date, strategy })
+    Ok(TradeRow {
+        symbol, direction, qty, entry_price, exit_price, pnl, date, strategy,
+        entry_time, exit_time, order_price,
+    })
 }
 
 fn parse_positional(rec: &csv::StringRecord, rownum: usize) -> Result<TradeRow, Option<String>> {
@@ -375,20 +412,20 @@ fn parse_positional(rec: &csv::StringRecord, rownum: usize) -> Result<TradeRow, 
         let entry = parse_num(cells[3]).filter(|p| *p > 0.0);
         let exit = parse_num(cells[4]).filter(|p| *p > 0.0);
         if entry.is_some() && exit.is_some() {
-            return Ok(TradeRow { symbol, direction: side, qty, entry_price: entry, exit_price: exit, pnl: None, date: None, strategy: None });
+            return Ok(TradeRow { symbol, direction: side, qty, entry_price: entry, exit_price: exit, pnl: None, ..Default::default() });
         }
     }
     // symbol, side, pnl
     if cells.len() >= 3 {
         if let Some(pnl) = parse_num(cells[2]) {
             let side = normalize_side(cells[1]);
-            return Ok(TradeRow { symbol, direction: side, qty: 0, entry_price: None, exit_price: None, pnl: Some(pnl), date: None, strategy: None });
+            return Ok(TradeRow { symbol, direction: side, qty: 0, pnl: Some(pnl), ..Default::default() });
         }
     }
     // symbol, pnl
     if cells.len() >= 2 {
         if let Some(pnl) = parse_num(cells[1]) {
-            return Ok(TradeRow { symbol, direction: "BUY".into(), qty: 0, entry_price: None, exit_price: None, pnl: Some(pnl), date: None, strategy: None });
+            return Ok(TradeRow { symbol, direction: "BUY".into(), qty: 0, pnl: Some(pnl), ..Default::default() });
         }
     }
     Err(Some(format!("row {rownum}: '{symbol}' — couldn't read a P&L or buy+sell prices; skipped")))
@@ -413,24 +450,52 @@ pub fn to_journal_entry(t: &TradeRow, now_ist: &str) -> Result<JournalEntry, Str
             _ => now_ist.to_string(),
         }
     };
-    let ts = stamp(&t.date);
+    let base_ts = stamp(&t.date);
+    // Prefer a real execution timestamp when the statement supplied one. A time-only
+    // value is prefixed with the trade date; a full datetime is used as-is. Falls
+    // back to the date-derived base stamp (why a timeless import shows entry == exit).
+    let resolve_ts = |time: &Option<String>| -> String {
+        match time {
+            Some(raw) if !raw.trim().is_empty() => {
+                let s = raw.trim();
+                if s.len() >= 16 && (s.contains(' ') || s.contains('T')) {
+                    s.replace('T', " ")
+                } else if s.len() >= 10 && s.contains('-') {
+                    s.to_string()
+                } else if let Some(d) = t.date.as_ref().filter(|d| d.len() >= 10) {
+                    format!("{} {}", &d[..10], s)
+                } else {
+                    s.to_string()
+                }
+            }
+            _ => base_ts.clone(),
+        }
+    };
+    let entry_ts = resolve_ts(&t.entry_time);
+    let exit_ts = resolve_ts(&t.exit_time);
+    // True slippage (fill − intended, direction-signed) only when the statement
+    // carried a distinct intended/order price alongside the executed fill.
+    let slippage = match (t.order_price, t.entry_price) {
+        (Some(intended), Some(fill)) => Some((fill - intended) * dir),
+        _ => None,
+    };
     Ok(JournalEntry {
         id: 0,
-        generated_ist: ts.clone(),
-        entry_ist: Some(ts.clone()),
-        exit_ist: Some(ts),
+        generated_ist: base_ts,
+        entry_ist: Some(entry_ts),
+        exit_ist: Some(exit_ts),
         instrument_token: 0,
         symbol: t.symbol.clone(),
         direction: t.direction.clone(),
         strategy: t.strategy.clone().unwrap_or_else(|| "Imported".to_string()),
         alpha_trigger: "imported trade".to_string(),
-        intended_price: t.entry_price.or(t.exit_price).unwrap_or(0.0),
+        intended_price: t.order_price.or(t.entry_price).or(t.exit_price).unwrap_or(0.0),
         actual_fill_price: t.entry_price,
         exit_price: t.exit_price,
         qty: t.qty,
         state: SignalState::ManuallyAccepted.as_str().to_string(),
         pnl: Some(pnl),
-        slippage: None,
+        slippage,
         sector: None,
     })
 }
@@ -472,7 +537,7 @@ mod tests {
     #[test]
     fn short_trade_pnl_is_direction_signed() {
         // Sold high, covered low → profit on a SELL.
-        let t = TradeRow { symbol: "SBIN".into(), direction: "SELL".into(), qty: 10, entry_price: Some(600.0), exit_price: Some(580.0), pnl: None, date: None, strategy: None };
+        let t = TradeRow { symbol: "SBIN".into(), direction: "SELL".into(), qty: 10, entry_price: Some(600.0), exit_price: Some(580.0), pnl: None, ..Default::default() };
         let e = to_journal_entry(&t, "2026-06-29 10:00:00").unwrap();
         // 10 * (580-600) * -1 = +200
         assert!((e.pnl.unwrap() - 200.0).abs() < 1e-9, "pnl={:?}", e.pnl);
@@ -514,10 +579,49 @@ mod tests {
 
     #[test]
     fn dedup_key_is_stable_for_same_trade() {
-        let t = TradeRow { symbol: "INFY".into(), direction: "BUY".into(), qty: 5, entry_price: None, exit_price: None, pnl: Some(250.0), date: Some("2026-06-28".into()), strategy: None };
+        let t = TradeRow { symbol: "INFY".into(), direction: "BUY".into(), qty: 5, pnl: Some(250.0), date: Some("2026-06-28".into()), ..Default::default() };
         let a = to_journal_entry(&t, "now").unwrap();
         let b = to_journal_entry(&t, "later").unwrap();
         assert_eq!(dedup_key(&a), dedup_key(&b));
+    }
+
+    #[test]
+    fn imports_distinct_entry_exit_times() {
+        // A statement carrying separate buy/sell execution times → distinct stamps.
+        let csv = b"symbol,side,qty,buy price,sell price,entry time,exit time\nTCS,BUY,3,3000,3100,2026-06-30 09:45:00,2026-06-30 14:10:00\n";
+        let (rows, w) = parse_trades_csv(csv);
+        assert_eq!(rows.len(), 1, "warnings: {w:?}");
+        assert_eq!(rows[0].entry_time.as_deref(), Some("2026-06-30 09:45:00"));
+        assert_eq!(rows[0].exit_time.as_deref(), Some("2026-06-30 14:10:00"));
+        // Buy/sell PRICE columns must NOT be stolen by the time detection.
+        assert_eq!(rows[0].entry_price, Some(3000.0));
+        assert_eq!(rows[0].exit_price, Some(3100.0));
+        let e = to_journal_entry(&rows[0], "2026-06-30 21:00:00").unwrap();
+        assert_eq!(e.entry_ist.as_deref(), Some("2026-06-30 09:45:00"));
+        assert_eq!(e.exit_ist.as_deref(), Some("2026-06-30 14:10:00"));
+        assert_ne!(e.entry_ist, e.exit_ist);
+    }
+
+    #[test]
+    fn imports_slippage_when_order_price_present() {
+        // Order (intended) 100.00 vs executed buy fill 100.50 on a BUY → +0.50 slip.
+        let csv = b"symbol,side,qty,order price,buy price,sell price\nWIPRO,BUY,10,100.00,100.50,105.00\n";
+        let (rows, w) = parse_trades_csv(csv);
+        assert_eq!(rows.len(), 1, "warnings: {w:?}");
+        assert_eq!(rows[0].order_price, Some(100.00));
+        assert_eq!(rows[0].entry_price, Some(100.50));
+        let e = to_journal_entry(&rows[0], "now").unwrap();
+        assert!((e.slippage.unwrap() - 0.50).abs() < 1e-9, "slippage={:?}", e.slippage);
+        assert!((e.intended_price - 100.00).abs() < 1e-9);
+    }
+
+    #[test]
+    fn timeless_import_keeps_entry_equal_exit() {
+        // No time columns → entry and exit stamps both fall back to the trade date.
+        let (rows, _) = parse_trades_csv(b"symbol,pnl,date\nSBIN,500,2026-06-30\n");
+        let e = to_journal_entry(&rows[0], "2026-06-30 21:00:00").unwrap();
+        assert_eq!(e.entry_ist, e.exit_ist);
+        assert!(e.slippage.is_none());
     }
 
     #[test]
