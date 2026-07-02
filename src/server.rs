@@ -576,22 +576,38 @@ where
         return Some(value);
     }
 
-    // Cold miss.
+    // Cold miss. We won the single-flight guard — but the guard is only released
+    // by `store`/`abort_refresh`, which run *after* the compute `.await`. If THIS
+    // request future is dropped mid-compute (client disconnect / fetch timeout —
+    // common when a cold universe scan runs slow under memory pressure), those
+    // never run and the guard leaks permanently: every later request for this slot
+    // then loses the race, waits out the full poll loop below (~90s), and never
+    // caches. Guard against that by owning compute+store on a DETACHED task that
+    // runs to completion regardless of whether this await is dropped. (There is no
+    // await between `try_begin_refresh()` and `tokio::spawn`, so the claim→spawn
+    // window itself is cancellation-safe.)
     if cache.try_begin_refresh() {
         let t0 = std::time::Instant::now();
+        let cache2 = cache.clone();
         let compute2 = compute.clone();
-        let computed = tokio::task::spawn_blocking(move || compute2()).await.ok().flatten();
-        match computed {
-            Some(val) => {
-                cache.store(val.clone(), built_ist_of(&val));
-                info!("api={label} cache=miss compute_ms={}", t0.elapsed().as_millis());
-                Some(val)
+        let handle = tokio::spawn(async move {
+            let computed =
+                tokio::task::spawn_blocking(move || compute2()).await.ok().flatten();
+            match computed {
+                Some(val) => {
+                    cache2.store(val.clone(), built_ist_of(&val));
+                    info!("api={label} cache=miss compute_ms={}", t0.elapsed().as_millis());
+                    Some(val)
+                }
+                None => {
+                    cache2.abort_refresh();
+                    None
+                }
             }
-            None => {
-                cache.abort_refresh();
-                None
-            }
-        }
+        });
+        // Awaiting the JoinHandle can be cancelled freely; the spawned task still
+        // finishes store/abort, so the guard is always released.
+        handle.await.ok().flatten()
     } else {
         // Someone else (startup warm or a concurrent request) owns the compute.
         // Wait for it rather than duplicating the ~minute-long scan.
@@ -2302,4 +2318,46 @@ fn now_ist_string() -> String {
         .with_timezone(&crate::config::IST)
         .format("%Y-%m-%d %H:%M:%S")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// Regression: a request cancelled mid-compute (client disconnect / fetch
+    /// timeout while a cold universe scan runs slow) must NOT leak the single-
+    /// flight guard. Before the fix, `store`/`abort_refresh` lived in the request
+    /// future; cancelling it left the slot's `refreshing` flag stuck `true`, so
+    /// every later request for that slot lost the race, waited out the full ~90s
+    /// poll loop, and never cached (a permanently degraded slot). The winner now
+    /// owns store/abort on a detached task, so the guard is always released and
+    /// the value is still cached even when the original request is gone.
+    #[tokio::test]
+    async fn read_through_cancelled_midflight_releases_guard_and_caches() {
+        let cache: Arc<Cached<u32>> = Arc::new(Cached::new(Duration::from_secs(60)));
+        // Compute is slow enough that we can cancel the request before it finishes.
+        let compute = || {
+            std::thread::sleep(Duration::from_millis(300));
+            Some(7u32)
+        };
+        // Start the cold-miss read-through, then cancel it (drop the future) long
+        // before the 300ms compute completes.
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(20),
+            read_through(cache.clone(), "test", compute, |_| "t".to_string()),
+        )
+        .await;
+        assert!(cancelled.is_err(), "the request should have been cancelled mid-compute");
+
+        // The detached winner keeps running: the value must still land and the
+        // guard must be released (both would fail on the pre-fix code).
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(cache.lookup().value, Some(7), "value cached despite cancellation");
+        assert!(
+            cache.try_begin_refresh(),
+            "single-flight guard released despite cancellation"
+        );
+    }
 }
