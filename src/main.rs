@@ -400,12 +400,23 @@ fn serve_pipeline(raw: &[String], source: IngestionSource) -> Result<()> {
     )));
     let journal_arc = Arc::new(std::sync::Mutex::new(journal_conn));
 
-    // Warm, stale-while-revalidate caches for the heavy universe scans. TTLs are
-    // chosen so a market-hours scheduler keeps them fresh without churning.
+    // Warm, stale-while-revalidate caches for the heavy universe scans.
+    //
+    // TTL rationale (W9): the scanner/swing/regime inputs are the ARCHIVE
+    // parquets, which are static all session — they only change at the ~16:00
+    // data refresh, which restarts this process (fresh caches via the startup
+    // warm). The old 120-300s TTLs made the desk scheduler recompute the full
+    // 1,768-symbol scan ~130×/session for byte-identical results (~35-40 min
+    // of compute + ~3 GB of parquet churn per pass on a swap-starved box).
+    // 8h ≈ "once per process lifetime" while still self-healing a long-lived
+    // process. The finder keeps a short TTL: its heavy half is date-keyed in
+    // FIT_UNIVERSE_CACHE (suggestion_engine::fit_universe), so a refresh only
+    // re-runs the cheap per-(capital,risk) sizing loop — and stays reactive to
+    // /add_stock onboarding (the version key tracks universe size).
     use std::time::Duration;
-    let scanner = Arc::new(cache::Cached::<types::ScanResult>::new(Duration::from_secs(180)));
-    let regime = Arc::new(cache::Cached::<types::RegimeInfo>::new(Duration::from_secs(120)));
-    let swing = Arc::new(cache::Cached::<types::SwingCatalog>::new(Duration::from_secs(300)));
+    let scanner = Arc::new(cache::Cached::<types::ScanResult>::new(Duration::from_secs(8 * 3600)));
+    let regime = Arc::new(cache::Cached::<types::RegimeInfo>::new(Duration::from_secs(8 * 3600)));
+    let swing = Arc::new(cache::Cached::<types::SwingCatalog>::new(Duration::from_secs(8 * 3600)));
     let finder = Arc::new(cache::KeyedCache::<types::FinderResult>::new(Duration::from_secs(180), 16));
     // Tradability is date-stable (daily turnover + series + caps) — a long TTL is fine.
     let tradability = Arc::new(cache::Cached::<tradability::TradabilityResult>::new(Duration::from_secs(3600)));

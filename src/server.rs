@@ -1557,7 +1557,15 @@ async fn onboard_symbol_handler(State(state): State<AppState>, Json(req): Json<O
     .await;
 
     match result {
-        Ok(Ok(r)) => Json(r).into_response(),
+        Ok(Ok(r)) => {
+            // The universe just changed out-of-band: mark the long-TTL scan
+            // caches stale (still served, refreshed in the background) so the
+            // new symbol appears without waiting out an 8h TTL or a restart.
+            state.scanner.mark_stale();
+            state.swing.mark_stale();
+            state.regime.mark_stale();
+            Json(r).into_response()
+        }
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("onboard task panicked: {e}")).into_response(),
     }

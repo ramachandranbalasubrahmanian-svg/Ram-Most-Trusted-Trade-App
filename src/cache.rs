@@ -30,6 +30,9 @@ struct Entry<T> {
     built_at: Instant,
     /// Human/UI timestamp, e.g. "2026-06-28 09:31:04" (IST). Display only.
     built_ist: String,
+    /// Out-of-band staleness (e.g. a symbol was onboarded): the value is still
+    /// served, but the next lookup reports stale and kicks a refresh.
+    stale_override: bool,
 }
 
 /// Result of a [`Cached::lookup`]: the current value (if any) and whether it is
@@ -63,9 +66,19 @@ impl<T: Clone> Cached<T> {
         match guard.as_ref() {
             Some(e) => Lookup {
                 value: Some(e.value.clone()),
-                stale: e.built_at.elapsed() >= self.ttl,
+                stale: e.stale_override || e.built_at.elapsed() >= self.ttl,
             },
             None => Lookup { value: None, stale: true },
+        }
+    }
+
+    /// Mark the cached value stale WITHOUT dropping it: it keeps being served
+    /// (stale-while-revalidate) while the next lookup kicks a background
+    /// refresh. For out-of-band data changes the TTL can't see — e.g. a symbol
+    /// onboarded via /add_stock while the long-TTL scanner cache is warm.
+    pub fn mark_stale(&self) {
+        if let Some(e) = self.inner.write().unwrap().as_mut() {
+            e.stale_override = true;
         }
     }
 
@@ -89,7 +102,12 @@ impl<T: Clone> Cached<T> {
     pub fn store(&self, value: T, built_ist: String) {
         {
             let mut guard = self.inner.write().unwrap();
-            *guard = Some(Entry { value, built_at: Instant::now(), built_ist });
+            *guard = Some(Entry {
+                value,
+                built_at: Instant::now(),
+                built_ist,
+                stale_override: false,
+            });
         }
         self.refreshing.store(false, Ordering::Release);
     }
@@ -209,6 +227,22 @@ mod tests {
         assert!(!c.try_begin_refresh(), "second caller must lose");
         c.abort_refresh();
         assert!(c.try_begin_refresh(), "slot reopens after abort");
+    }
+
+    #[test]
+    fn mark_stale_keeps_value_but_reports_stale() {
+        let c: Cached<u32> = Cached::new(Duration::from_secs(3600));
+        c.try_begin_refresh();
+        c.store(9, "t".into());
+        assert!(!c.lookup().stale, "fresh within a long TTL");
+        c.mark_stale();
+        let l = c.lookup();
+        assert_eq!(l.value, Some(9), "stale value still served (SWR)");
+        assert!(l.stale, "out-of-band staleness reported");
+        // A refresh clears the override.
+        c.try_begin_refresh();
+        c.store(10, "t2".into());
+        assert!(!c.lookup().stale);
     }
 
     #[test]
