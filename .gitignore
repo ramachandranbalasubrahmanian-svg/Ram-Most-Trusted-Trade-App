@@ -5,8 +5,11 @@ Cargo.lock.bak
 
 # Secrets / credentials — NEVER commit
 .env
+.env.*
+!.env.example
 *.token
 kite_token.json
+.kite_token.json
 nse_instruments_cache.json
 
 # Huge local data archive (~14GB) — never commit
