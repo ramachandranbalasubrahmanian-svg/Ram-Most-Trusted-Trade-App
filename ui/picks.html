@@ -44,6 +44,8 @@
   .warnbar { margin: 12px 0; padding: 10px 12px; border-radius: 8px; font-size: 12px; background: #2e2205; border: 1px solid #713f12; color: #fcd34d; }
   .win { font-weight: 800; }
   .win.hi { color: #34d399; } .win.mid { color: #fcd34d; } .win.lo { color: #94a3b8; }
+  .nsub { font-size: 9px; color: #64748b; margin-top: 1px; }
+  .nsub.lown { color: #fbbf24; }
   .empty { color: #64748b; font-size: 12px; padding: 14px; text-align: center; }
   .caveat { margin-top: 20px; font-size: 11px; color: #64748b; line-height: 1.6; border-top: 1px solid #1e293b; padding-top: 12px; }
   .sub { font-size: 11px; color: #64748b; margin-top: 4px; }
@@ -120,9 +122,16 @@
     $(id).addEventListener("blur", function () { fmtInput(this); });
   });
 
-  function winCell(w) {
+  // X/10 is the WILSON FLOOR of the backtested win% (the honest lower bound),
+  // not the raw average — the raw % and the sample size are shown under it.
+  // n < 30 gets an amber caution: too few trades to trust the estimate much.
+  function winCell(w, rawPct, n) {
     var cls = w >= 6 ? "hi" : (w >= 5 ? "mid" : "lo");
-    return '<span class="win ' + cls + '">' + w + '/10</span>';
+    var lowN = (n != null && n < 30);
+    var sub = '<div class="nsub' + (lowN ? ' lown' : '') + '">' +
+      (rawPct != null ? Number(rawPct).toFixed(0) + '% raw · ' : '') +
+      'n=' + (n != null ? n : '?') + (lowN ? ' ⚠ small sample' : '') + '</div>';
+    return '<span class="win ' + cls + '">' + w + '/10</span>' + sub;
   }
 
   function rowHtml(p) {
@@ -133,7 +142,7 @@
       '<td class="num">' + px(p.entry) + '</td>' +
       '<td class="num" style="color:#34d399">' + px(p.target) + '</td>' +
       '<td class="num" style="color:#f87171">' + px(p.stop_loss) + '</td>' +
-      '<td class="num">' + winCell(p.win_out_of_10) + '</td>' +
+      '<td class="num">' + winCell(p.win_out_of_10, p.win_pct, p.n_trades) + '</td>' +
       '</tr>';
   }
 

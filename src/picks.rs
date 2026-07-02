@@ -82,8 +82,17 @@ pub struct PicksResult {
     pub caveat: String,
 }
 
-fn win_10(win_rate: f64) -> u32 {
-    (win_rate / 10.0).round().clamp(0.0, 10.0) as u32
+/// "X/10" from the WILSON LOWER BOUND of the backtested win rate — the honest
+/// statistical floor, not the raw in-sample average. The raw % is a
+/// best-of-many-configs pick and systematically optimistic, especially on
+/// small n (65.9% over 59 trades used to round UP to 7/10; the floor says
+/// ~6/10). The raw win_pct is still shown alongside; this is the number the
+/// owner acts on, so it gets the conservative treatment (same wilson_lower
+/// the scanner's prob_floor already uses).
+fn win_10(win_rate_pct: f64, n: usize) -> u32 {
+    (crate::stats::wilson_lower(win_rate_pct / 100.0, n) * 10.0)
+        .round()
+        .clamp(0.0, 10.0) as u32
 }
 
 fn median(mut v: Vec<f64>) -> f64 {
@@ -135,7 +144,7 @@ fn top_side(
             target: r.target,
             stop_loss: r.sl,
             win_pct: r.win_rate,
-            win_out_of_10: win_10(r.win_rate),
+            win_out_of_10: win_10(r.win_rate, r.n_trades),
             n_trades: r.n_trades,
             net_profit: r.net_profit,
             net_loss: r.net_loss,
@@ -254,11 +263,18 @@ mod tests {
     }
 
     #[test]
-    fn win_pct_becomes_out_of_ten() {
+    fn win_pct_becomes_out_of_ten_via_wilson_floor() {
+        // n=80 (from row()): Wilson lower of 66% is ~55.1% → 6/10 (the raw
+        // rounding said 7/10 — the exact overstatement W4 removes); 51.4% →
+        // ~40.6% → 4/10. The raw win_pct stays available alongside.
         let rows = vec![row("A", "BUY", 66.0, 0.30, 100.0, 95.0), row("B", "BUY", 51.4, 0.30, 100.0, 95.0)];
         let r = build(&rows, 500_000.0, 0.02, 0.0, 0.0, &trad(&[("A", "ok"), ("B", "ok")]), 0.0013);
-        assert_eq!(r.top_buy[0].win_out_of_10, 7);
-        assert_eq!(r.top_buy[1].win_out_of_10, 5);
+        assert_eq!(r.top_buy[0].win_out_of_10, 6);
+        assert_eq!(r.top_buy[1].win_out_of_10, 4);
+        assert_eq!(r.top_buy[0].win_pct, 66.0, "raw % still reported");
+        // The floor tightens toward the raw value as n grows.
+        assert_eq!(super::win_10(66.0, 10_000), 7);
+        assert_eq!(super::win_10(66.0, 0), 0, "no trades → no claim");
     }
 
     #[test]
