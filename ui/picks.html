@@ -191,5 +191,46 @@
   });
   // Do NOT auto-load — the finder scan is heavy; only fetch when the user clicks.
 </script>
+
+<!-- Shared ops banners (W5 stale-data + W10 session governor). Display-only:
+     reads /api/data_session + /api/session_governor, never gates anything. -->
+<script>
+(function () {
+  function bar(id) {
+    var d = document.getElementById(id);
+    if (!d) { d = document.createElement("div"); d.id = id; document.body.insertBefore(d, document.body.firstChild); }
+    return d;
+  }
+  function pollOps() {
+    // Governor first so, when both fire, STOP sits above the stale banner.
+    fetch("/api/session_governor").then(function (r) { return r.json(); }).then(function (g) {
+      var d = bar("governorBanner");
+      if (!g || !g.verdict || g.verdict === "open") { d.textContent = ""; d.style.cssText = ""; return; }
+      var reasons = (g.reasons || []).join(" \u00b7 ");
+      if (g.verdict === "closed") {
+        d.style.cssText = "background:#7f1d1d;color:#fff;padding:10px 14px;font:800 13px system-ui;letter-spacing:.03em;";
+        d.textContent = "\u26d4 SESSION GOVERNOR: STOP TRADING \u2014 " + reasons + " (" + g.trades_today + " trades, " + g.consecutive_losses + " straight losses today)";
+      } else {
+        d.style.cssText = "background:#451a03;color:#fcd34d;border-bottom:1px solid #b45309;padding:8px 14px;font:700 12px system-ui;";
+        d.textContent = "\u26a0 GOVERNOR CAUTION \u2014 " + reasons;
+      }
+    }).catch(function () {});
+    fetch("/api/data_session").then(function (r) { return r.json(); }).then(function (j) {
+      var d = bar("dataSessionBanner");
+      if (j && j.stale) {
+        d.style.cssText = "background:#450a0a;color:#fecaca;border-bottom:1px solid #b91c1c;padding:8px 14px;font:600 12px system-ui;";
+        d.textContent = "\u26a0 STALE DATA \u2014 signals are from session " + (j.data_session || "unknown") +
+          " but the archive should hold " + j.expected_session +
+          ". The nightly refresh may not have run (morning /kite login?). Entries/sizes are a session old.";
+      } else if (j && j.data_session) {
+        d.style.cssText = "background:#0a1420;color:#64748b;border-bottom:1px solid #1e293b;padding:3px 14px;font:500 10px system-ui;";
+        d.textContent = "signals from session " + j.data_session;
+      } else { d.textContent = ""; d.style.cssText = ""; }
+    }).catch(function () {});
+  }
+  pollOps();
+  setInterval(pollOps, 60000);
+})();
+</script>
 </body>
 </html>

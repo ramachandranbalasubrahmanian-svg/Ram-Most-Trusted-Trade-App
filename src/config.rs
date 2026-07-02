@@ -34,6 +34,25 @@ pub fn session_open() -> NaiveTime {
 pub fn session_close() -> NaiveTime {
     NaiveTime::from_hms_opt(15, 30, 0).unwrap()
 }
+/// The most recent session date the ARCHIVE is EXPECTED to contain ("YYYY-MM-DD"
+/// IST): today once the post-close refresh should have landed (17:00 IST on a
+/// weekday — the sharded pipeline finishes well before that), otherwise the
+/// previous weekday. Weekday-based: an NSE holiday reads as "expected but
+/// absent", which the banner reports as stale and the scheduler's no-session
+/// notification explains — honest noise beats a silent stale book.
+pub fn expected_session_ist(now: chrono::DateTime<Tz>) -> String {
+    use chrono::Datelike;
+    let mut d = now.date_naive();
+    let refresh_landed = now.time() >= NaiveTime::from_hms_opt(17, 0, 0).unwrap();
+    if !(d.weekday().number_from_monday() <= 5 && refresh_landed) {
+        d = d.pred_opt().unwrap_or(d);
+    }
+    while d.weekday().number_from_monday() > 5 {
+        d = d.pred_opt().unwrap_or(d);
+    }
+    d.format("%Y-%m-%d").to_string()
+}
+
 /// Intraday (MIS) square-off ALERT time (15:15 IST). This system raises an
 /// alert here — it never auto-fires orders.
 pub fn squareoff_alert() -> NaiveTime {

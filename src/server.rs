@@ -89,6 +89,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
         .route("/live_trade_plan", get(live_trade_plan_handler))
         .route("/api/symbols", get(symbols_handler))
         .route("/api/edge_map_status", get(edge_map_status_handler))
+        .route("/api/data_session", get(data_session_handler))
         .route("/api/tradability", get(tradability_handler))
         .route("/api/suggest/{symbol}", get(suggest_handler))
         .route("/api/scanner", get(scanner_handler))
@@ -908,6 +909,31 @@ struct StagingResp {
     tradability_verified: bool,
 }
 
+/// `GET /api/data_session` — which SESSION the archive-backed signals are from
+/// vs the session the archive is EXPECTED to hold. Banners on `/`, `/picks` and
+/// `/live_trade_plan` poll this; `stale=true` means the nightly refresh did not
+/// land and the owner would otherwise trade a day-old book without knowing (W5).
+async fn data_session_handler(State(state): State<AppState>) -> Response {
+    let root = state.root.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let data_session = crate::storage_kernel::open_conn()
+            .ok()
+            .and_then(|conn| crate::storage_kernel::latest_session_date(&conn, &root));
+        let now = chrono::Utc::now().with_timezone(&crate::config::IST);
+        let expected = crate::config::expected_session_ist(now);
+        let stale = data_session.as_deref().map_or(true, |d| d < expected.as_str());
+        serde_json::json!({
+            "data_session": data_session,
+            "expected_session": expected,
+            "stale": stale,
+            "checked_ist": now.format("%Y-%m-%d %H:%M:%S").to_string(),
+        })
+    })
+    .await
+    .unwrap_or_else(|_| serde_json::json!({ "error": "data_session probe failed" }));
+    Json(out).into_response()
+}
+
 /// Derive a finder row's OWN bracket geometry (ATR multiples) from its absolute
 /// SL/target prices, so staging reproduces the exact backtested config the qty
 /// was sized for. The old code staged every row with the GLOBAL
@@ -1000,7 +1026,17 @@ async fn picks_handler(State(state): State<AppState>, Query(q): Query<PicksQuery
         })
         .unwrap_or_default();
     let cost_pct = crate::costs::backtest_roundtrip_pct();
-    let result = crate::picks::build(&fit.rows, capital, risk_pct, target_from, target_to, &trad_of, cost_pct);
+    let mut result = crate::picks::build(&fit.rows, capital, risk_pct, target_from, target_to, &trad_of, cost_pct);
+    // Stamp which SESSION these numbers came from (honesty: entries are last-bar
+    // closes of this session, not live quotes). Cheap single-file max probes.
+    result.data_session = tokio::task::spawn_blocking(move || {
+        crate::storage_kernel::open_conn()
+            .ok()
+            .and_then(|conn| crate::storage_kernel::latest_session_date(&conn, &root))
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
     Json(result).into_response()
 }
 

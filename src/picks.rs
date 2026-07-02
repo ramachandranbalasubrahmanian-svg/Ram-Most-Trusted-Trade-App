@@ -79,6 +79,10 @@ pub struct PicksResult {
     /// False when the tradability cache was empty (cold) — the UI must warn that
     /// T2T/ASM/GSM + liquidity were NOT checked and the trader must verify manually.
     pub tradability_verified: bool,
+    /// Which archive SESSION ("YYYY-MM-DD") the entries/stats came from — set by
+    /// the handler (build() is pure and has no storage access). Empty = unknown.
+    #[serde(default)]
+    pub data_session: String,
     pub caveat: String,
 }
 
@@ -221,6 +225,7 @@ pub fn build(
         top_sell,
         target,
         tradability_verified: !trad_of.is_empty(),
+        data_session: String::new(),
         caveat,
     }
 }

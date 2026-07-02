@@ -72,6 +72,33 @@ pub fn discover_symbols(root: &Path) -> Result<Vec<String>> {
     Ok(out.into_iter().collect())
 }
 
+/// Latest session date ("YYYY-MM-DD") present in the ARCHIVE — the max last-bar
+/// date across a few liquid bellwethers (any one having the session proves it
+/// arrived; taking the max is robust to a single suspended name). Powers the
+/// stale-data banner (`/api/data_session`). `None` only if every probe fails.
+pub fn latest_session_date(conn: &Connection, root: &Path) -> Option<String> {
+    const BELLWETHERS: [&str; 5] = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "SBIN"];
+    let mut best: Option<String> = None;
+    for sym in BELLWETHERS {
+        let path = config::parquet_path(root, sym, Timeframe::Minute);
+        if !path.exists() {
+            continue;
+        }
+        let sql = format!(
+            "SELECT CAST(max(date) AS DATE)::VARCHAR FROM read_parquet({})",
+            quote_path(&path)
+        );
+        if let Ok(mut stmt) = conn.prepare(&sql) {
+            if let Ok(Some(d)) = stmt.query_row([], |r| r.get::<_, Option<String>>(0)) {
+                if best.as_deref().map_or(true, |b| d.as_str() > b) {
+                    best = Some(d);
+                }
+            }
+        }
+    }
+    best
+}
+
 /// SYMBOL → average daily share VOLUME over the most recent `days` sessions, from
 /// `nse_daily_all.parquet`. Used by the Live Trade Plan's participation-rate
 /// (qty-vs-ADV) liquidity flag. Best-effort: returns an empty map if the file is
