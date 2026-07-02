@@ -905,6 +905,25 @@ struct StagingResp {
     risk_tier: String,
 }
 
+/// Derive a finder row's OWN bracket geometry (ATR multiples) from its absolute
+/// SL/target prices, so staging reproduces the exact backtested config the qty
+/// was sized for. The old code staged every row with the GLOBAL
+/// `SL_ATR_MULT`/`DEFAULT_RR` (1.5×ATR stop) while `find_capital_fit` sized qty
+/// for the row's own stop (0.75–1.25×ATR from `RR_CONFIGS`) — so the staged
+/// order could risk 1.2–2× the selected tier risk at 5× MIS leverage. Falls
+/// back to the globals only on degenerate inputs (finder rows guarantee
+/// entry > 0 and a positive stop distance, so this is a pure safety net).
+fn row_bracket_mults(entry: f64, sl: f64, target: f64, atr: f64) -> (f64, f64) {
+    if atr > 0.0 && entry > 0.0 {
+        let sl_mult = (entry - sl).abs() / atr;
+        let tp_mult = (target - entry).abs() / atr;
+        if sl_mult.is_finite() && sl_mult > 0.0 && tp_mult.is_finite() && tp_mult > 0.0 {
+            return (sl_mult, tp_mult);
+        }
+    }
+    (crate::config::SL_ATR_MULT, crate::config::DEFAULT_RR)
+}
+
 fn parse_tier(s: &str) -> crate::config::RiskTier {
     match s {
         "Conservative" => crate::config::RiskTier::Conservative,
@@ -1014,9 +1033,11 @@ async fn staging_handler(State(state): State<AppState>, Query(q): Query<StagingQ
         } else {
             crate::config::Direction::Short
         };
+        // Stage with the ROW's own bracket geometry — the config its qty was
+        // sized for — never the global defaults (see row_bracket_mults).
+        let (sl_mult, tp_mult) = row_bracket_mults(row.entry, row.sl, row.target, row.atr);
         let staged = crate::execution_staging::stage_signal(
-            &row.symbol, 0, dir, row.entry, row.atr, row.shares,
-            crate::config::SL_ATR_MULT, crate::config::DEFAULT_RR,
+            &row.symbol, 0, dir, row.entry, row.atr, row.shares, sl_mult, tp_mult,
         );
         if dir == crate::config::Direction::Long {
             if longs.len() < 5 { longs.push(staged); }
@@ -2325,6 +2346,41 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::time::Duration;
+
+    /// Regression (W2): staged desk brackets must risk what the row's qty was
+    /// SIZED for — the row's own backtested stop — not the global SL_ATR_MULT.
+    /// Pre-fix, a row sized for a 0.75×ATR stop was staged with a 1.5×ATR stop:
+    /// loss-at-stop = 2× the selected tier risk at the same qty.
+    #[test]
+    fn staged_bracket_risks_the_tier_risk_not_double() {
+        let (capital, risk_pct): (f64, f64) = (1_000_000.0, 0.01);
+        let (entry, atr): (f64, f64) = (1000.0, 10.0);
+        // A finder row backtested at sl_mult=0.75, rr=2.0 (from RR_CONFIGS).
+        let sl_dist = 0.75 * atr;
+        let (sl, target) = (entry - sl_dist, entry + 2.0 * sl_dist);
+        let shares: f64 = (capital * risk_pct / sl_dist).floor(); // find_capital_fit sizing
+        let (sl_mult, tp_mult) = row_bracket_mults(entry, sl, target, atr);
+        assert!((sl_mult - 0.75).abs() < 1e-9 && (tp_mult - 1.5).abs() < 1e-9);
+
+        let staged = crate::execution_staging::stage_signal(
+            "TEST", 0, crate::config::Direction::Long, entry, atr, shares as i64, sl_mult, tp_mult,
+        );
+        let loss_at_stop = (staged.limit_price - staged.stop_loss).abs() * shares;
+        let tier_risk = capital * risk_pct;
+        assert!(
+            (loss_at_stop - tier_risk).abs() <= sl_dist, // within one share's stop distance
+            "staged loss-at-stop {loss_at_stop:.0} != tier risk {tier_risk:.0}"
+        );
+        // And the OLD behavior (global 1.5×ATR stop) would have risked ~2×.
+        let old_loss = crate::config::SL_ATR_MULT * atr * shares;
+        assert!(old_loss > 1.9 * tier_risk, "old global-stop risk was {old_loss:.0}");
+
+        // Degenerate rows fall back to the globals, never NaN/zero brackets.
+        assert_eq!(
+            row_bracket_mults(0.0, 0.0, 0.0, 0.0),
+            (crate::config::SL_ATR_MULT, crate::config::DEFAULT_RR)
+        );
+    }
 
     /// Regression: a request cancelled mid-compute (client disconnect / fetch
     /// timeout while a cold universe scan runs slow) must NOT leak the single-
