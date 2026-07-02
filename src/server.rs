@@ -903,6 +903,9 @@ struct StagingResp {
     top_short: Vec<crate::types::StagedSignal>,
     capital: f64,
     risk_tier: String,
+    /// False when the warm tradability cache was cold — rows then carry an
+    /// "unverified" note instead of a real verdict (mirrors /api/picks).
+    tradability_verified: bool,
 }
 
 /// Derive a finder row's OWN bracket geometry (ATR multiples) from its absolute
@@ -1024,10 +1027,39 @@ async fn staging_handler(State(state): State<AppState>, Query(q): Query<StagingQ
         None => return (StatusCode::INTERNAL_SERVER_ERROR, "staging fit failed").into_response(),
     };
 
+    // Same exclusions the /picks card applies (picks::top_side): never stage a
+    // T2T/ASM/GSM-blocked name (its MIS order is rejected — or worse, can't be
+    // exited intraday), a non-positive-expectancy row, or an edge smaller than
+    // its own cost floor. Thin high_risk/caution names stay, but annotated.
+    let trad = state.tradability.lookup().value;
+    let tradability_verified = trad.is_some();
+    let trad_of: std::collections::HashMap<String, (String, String)> = trad
+        .map(|t| {
+            t.by_symbol
+                .iter()
+                .map(|(s, r)| (s.clone(), (r.verdict.clone(), r.reason.clone())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let cost_pct = crate::costs::backtest_roundtrip_pct();
+
     // Cheap synchronous transform: turn fit rows into staged bracket orders.
     let mut longs = Vec::new();
     let mut shorts = Vec::new();
     for row in fit.rows.iter() {
+        let (verdict, reason) = trad_of
+            .get(&row.symbol)
+            .map(|(v, r)| (v.as_str(), r.as_str()))
+            .unwrap_or(("unverified", ""));
+        if verdict == "blocked" {
+            continue;
+        }
+        if row.expectancy_r <= 0.0 || row.shares <= 0 {
+            continue;
+        }
+        if crate::cost_floor::assess(row.entry, row.sl, row.expectancy_r, cost_pct).stand_aside {
+            continue; // net edge smaller than its own round-trip cost drag
+        }
         let dir = if row.side == "BUY" {
             crate::config::Direction::Long
         } else {
@@ -1036,9 +1068,17 @@ async fn staging_handler(State(state): State<AppState>, Query(q): Query<StagingQ
         // Stage with the ROW's own bracket geometry — the config its qty was
         // sized for — never the global defaults (see row_bracket_mults).
         let (sl_mult, tp_mult) = row_bracket_mults(row.entry, row.sl, row.target, row.atr);
-        let staged = crate::execution_staging::stage_signal(
+        let mut staged = crate::execution_staging::stage_signal(
             &row.symbol, 0, dir, row.entry, row.atr, row.shares, sl_mult, tp_mult,
         );
+        staged.tradability_note = match verdict {
+            "high_risk" | "caution" => Some(reason.to_string()),
+            "unverified" => Some(
+                "tradability not verified — check T2T/ASM/GSM + liquidity before trading"
+                    .to_string(),
+            ),
+            _ => None,
+        };
         if dir == crate::config::Direction::Long {
             if longs.len() < 5 { longs.push(staged); }
         } else if shorts.len() < 5 {
@@ -1051,6 +1091,7 @@ async fn staging_handler(State(state): State<AppState>, Query(q): Query<StagingQ
         top_short: shorts,
         capital,
         risk_tier: tier.as_str().to_string(),
+        tradability_verified,
     })
     .into_response()
 }

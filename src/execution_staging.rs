@@ -101,6 +101,7 @@ pub fn stage_signal(
         notional: qty as f64 * bracket.limit_price,
         copy_text,
         bracket,
+        tradability_note: None, // callers annotate; staging itself never verifies
     }
 }
 

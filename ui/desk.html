@@ -700,6 +700,13 @@
         '<span class="ml-auto rounded bg-slate-800 px-1.5 py-0.5 text-[10px] num text-slate-300">' + intFmt(qty) + ' sh</span>' +
         '</div>';
 
+      // tradability caveat (thin high_risk/caution or unverified names) —
+      // blocked names never reach a card at all (filtered server-side).
+      var tnote = str(s.tradability_note, "");
+      if (tnote) {
+        html += '<div class="rounded border border-amber-800/60 bg-amber-950/30 px-1.5 py-1 text-[10px] text-amber-300">⚠ ' + esc(tnote) + '</div>';
+      }
+
       // price grid
       html += '<div class="grid grid-cols-4 gap-1.5 text-[10px]">' +
         '<div class="rounded border border-slate-800 bg-slate-900/40 px-1.5 py-1"><div class="text-[8px] uppercase tracking-wide text-slate-600">Limit</div><div class="num font-semibold text-slate-100">' + price(s.limit_price) + '</div></div>' +

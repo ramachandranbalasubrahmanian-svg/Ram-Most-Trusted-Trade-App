@@ -787,6 +787,11 @@ pub struct StagedSignal {
     pub bracket: BracketOrder,
     /// One-line copy/paste execution text.
     pub copy_text: String,
+    /// Inline tradability caveat (thin `high_risk`/`caution` names, or the
+    /// warm cache was cold and the name is unverified). `None` = clean ✓.
+    /// `blocked` names never reach a StagedSignal — the desk filters them out.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tradability_note: Option<String>,
 }
 
 /// Lifecycle state of a generated signal in the manual journal.
