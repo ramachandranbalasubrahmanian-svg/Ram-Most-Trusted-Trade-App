@@ -1,9 +1,11 @@
 //! Simple picks — top-5 buy / top-5 sell for a capital + risk%, plus an HONEST
 //! target-feasibility readout. FIREWALLED, PURE, display-only.
 //!
-//! Re-presents the Capital-Fit Finder's ranked, cost-net, gate-passed edges as the
-//! smallest actionable card the owner asked for: side, qty, entry, target, stop, and
-//! the backtested win rate as "X/10". The finder already picks the best backtested
+//! Re-presents the Capital-Fit Finder's ranked, cost-net edges — DSR-gated since
+//! 2026-07-02 (fit_symbol deflates each candidate's Sharpe against its full
+//! 120-config trial set, same gate as the scanner/deep-dive) — as the smallest
+//! actionable card the owner asked for: side, qty, entry, target, stop, and the
+//! backtested win rate as "X/10". The finder already picks the best backtested
 //! strategy per name (ranked by Confidence × deployability); here we split by side,
 //! dedupe to one row per stock, drop names that are `blocked` (T2T/ASM/GSM) or whose
 //! net edge sits inside its own cost floor, and INLINE-FLAG thin `high_risk`/`caution`

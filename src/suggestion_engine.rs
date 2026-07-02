@@ -1399,9 +1399,17 @@ struct FitBest {
 
 /// Light search: the single best setup (either side) for one symbol by
 /// Confidence (>=50), with the ATR / sl_mult / direction needed for sizing.
+///
+/// Two passes, mirroring [`scan_symbol`]: collect every config's Sharpe as the
+/// multiple-testing trial set, THEN deflate each candidate through the same DSR
+/// gate the deep-dive uses. The old code scored candidates with the neutral
+/// `dsr = 1.0`, so the finder/picks path could rank a best-of-120-configs
+/// selection artifact that its own deep-dive would cap at "Low confidence" —
+/// the exact bug already fixed in the scanner, never ported here.
 fn fit_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> Option<FitBest> {
     const LIGHT_TFS: [Timeframe; 3] = [Timeframe::Min15, Timeframe::Min30, Timeframe::Min60];
-    let mut best: Option<FitBest> = None;
+    let mut cands: Vec<ConfigStat> = Vec::new();
+    let mut trial_sharpes: Vec<f64> = Vec::new();
     for &tf in LIGHT_TFS.iter() {
         let path = config::parquet_path(root, symbol, tf);
         if !path.exists() {
@@ -1433,40 +1441,52 @@ fn fit_symbol(conn: &duckdb::Connection, root: &Path, symbol: &str) -> Option<Fi
                     if trades.is_empty() {
                         continue;
                     }
-                    let mut cs = build_config_stat(
+                    let cs = build_config_stat(
                         strat, tf, dir, sl_mult, rr, &trades, total_bars, last_close, atr,
                     );
+                    // Every config feeds the DSR trial set, even sub-min-n ones
+                    // (matches scan_symbol / the deep-dive's reliability pre-pass).
+                    trial_sharpes.push(cs.sharpe);
                     if cs.n < PROVISIONAL_MIN {
                         continue;
                     }
-                    ensure_confidence(&mut cs);
-                    let Some(conf) = cs.confidence else { continue };
-                    if conf < 50 {
-                        continue;
-                    }
-                    let better = match &best {
-                        None => true,
-                        Some(b) => (conf, cs.expectancy) > (b.confidence, b.expectancy),
-                    };
-                    if better {
-                        best = Some(FitBest {
-                            symbol: symbol.to_string(),
-                            strat,
-                            tf,
-                            dir,
-                            sl_mult,
-                            rr,
-                            confidence: conf,
-                            expectancy: cs.expectancy,
-                            win_rate: cs.win_rate,
-                            profit_factor: cs.profit_factor,
-                            n: cs.n,
-                            entry: last_close,
-                            atr,
-                        });
-                    }
+                    cands.push(cs);
                 }
             }
+        }
+    }
+
+    // Second pass: deflate against the full trial set, then score through the
+    // same build_confidence gate as everywhere else. `cs.entry`/`cs.atr` carry
+    // the candidate's own timeframe's last-bar context.
+    let mut best: Option<FitBest> = None;
+    for mut cs in cands {
+        cs.dsr = deflated_sharpe(cs.sharpe, cs.n, &trial_sharpes);
+        ensure_confidence(&mut cs);
+        let Some(conf) = cs.confidence else { continue };
+        if conf < 50 {
+            continue;
+        }
+        let better = match &best {
+            None => true,
+            Some(b) => (conf, cs.expectancy) > (b.confidence, b.expectancy),
+        };
+        if better {
+            best = Some(FitBest {
+                symbol: symbol.to_string(),
+                strat: cs.strat,
+                tf: cs.tf,
+                dir: cs.dir,
+                sl_mult: cs.sl_mult,
+                rr: cs.rr,
+                confidence: conf,
+                expectancy: cs.expectancy,
+                win_rate: cs.win_rate,
+                profit_factor: cs.profit_factor,
+                n: cs.n,
+                entry: cs.entry,
+                atr: cs.atr,
+            });
         }
     }
     best
@@ -2000,17 +2020,19 @@ mod tests {
         assert_eq!(c.side, "SELL", "anchor side drifted");
         assert_eq!(c.interval, "30 Minutes", "anchor interval drifted");
         approx(c.rr, 2.0, 1e-9, "rr");
-        // Re-baselined 2026-07-01: +1 trade (2605→2606) after the July-1 intraday
-        // download + edge-map rebuild (today's full 30min session added one VWAP-SELL
-        // signal). Pure data increment — win 51.4 / PF 1.18 / exp +0.07R / Sharpe 0.07
-        // and Confidence 59 all held, so the edge is materially identical (no code
-        // change). (Prior: 2604→2605 on the 2026-06-30 evening corp-actions refresh.)
-        assert_eq!(c.n_trades, 2606, "anchor n_trades drifted (data refresh? re-baseline)");
+        // Re-baselined 2026-07-02: +1 trade (2606→2607) after the July-2 intraday
+        // download + edge-map rebuild — the same pure-data-increment pattern as the
+        // two prior re-baselines (2604→2605 on 2026-06-30, 2605→2606 on 2026-07-01).
+        // Verified on clean HEAD before any code change this session: win 51.4 /
+        // PF 1.18 / exp +0.07R / Sharpe 0.07 / Confidence 59 all held.
+        assert_eq!(c.n_trades, 2607, "anchor n_trades drifted (data refresh? re-baseline)");
         assert_eq!(c.confidence, Some(59), "anchor confidence drifted");
         approx(c.win_rate, 51.4, 0.1, "win_rate");
         approx(c.profit_factor, 1.18, 0.01, "profit_factor");
         approx(c.expectancy_r, 0.07, 0.01, "expectancy_r");
         approx(c.sharpe, 0.07, 0.01, "sharpe");
-        approx(c.t_stat, 3.475, 0.01, "t_stat"); // re-baselined with n=2604 (was 3.46 at n=2603)
+        // t grows ~sqrt(n) while the edge persists: 3.46 @ n=2603 → 3.475 @ 2604 → 3.487 @ 2607
+        // (verified bit-identical on clean HEAD — pure data increment, no code effect).
+        approx(c.t_stat, 3.487, 0.01, "t_stat");
     }
 }
